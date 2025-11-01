@@ -52,7 +52,7 @@ npm install -g ./virtual-volumes-cli-0.1.0.tgz
 
 Guarda `.env.example`.
 
-- `VOLUME_DATA_DIR`: root persistente dei volumi virtuali.
+- `VOLUME_DATA_DIR`: root persistente dei volumi virtuali. Di default usa la directory corrente da cui lanci il comando.
 - `VOLUME_LOG_DIR`: directory dei log.
 - `VOLUME_DEFAULT_QUOTA_BYTES`: quota logica di default per i nuovi volumi.
 - `VOLUME_LOG_LEVEL`: `fatal|error|warn|info|debug|trace|silent`.

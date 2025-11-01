@@ -1,4 +1,3 @@
-import os from 'node:os';
 import path from 'node:path';
 
 import { config as loadDotEnv } from 'dotenv';
@@ -54,12 +53,7 @@ export interface AppConfig {
 }
 
 const getDefaultDataDir = (): string => {
-  const appDataDirectory = process.env.APPDATA;
-  if (appDataDirectory) {
-    return path.join(appDataDirectory, 'virtual-volumes');
-  }
-
-  return path.join(os.homedir(), '.virtual-volumes');
+  return process.cwd();
 };
 
 export const loadAppConfig = (
