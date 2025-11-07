@@ -4,5 +4,6 @@ coverage
 .env
 .env.local
 .virtual-volumes
+volumes
 *.tgz
 *.log
