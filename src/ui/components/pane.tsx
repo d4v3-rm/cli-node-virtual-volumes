@@ -15,16 +15,11 @@ export const Pane = ({
   children,
   footer,
 }: PaneProps): ReactNode => (
-  <Box
-    borderStyle="round"
-    borderColor={active ? 'cyanBright' : 'gray'}
-    flexDirection="column"
-    paddingX={1}
-    paddingY={1}
-    width="100%"
-  >
-    <Text color={active ? 'cyanBright' : 'gray'}>
-      {active ? '[active]' : '[pane]'} {title}
+  <Box flexDirection="column" paddingX={1} paddingY={1} width="100%">
+    <Text color={active ? 'black' : 'white'} backgroundColor={active ? 'cyan' : 'gray'}>
+      {' '}
+      {title}
+      {' '}
     </Text>
     <Box marginTop={1} flexDirection="column">
       {children}
