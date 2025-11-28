@@ -21,7 +21,7 @@ export const createAppLogger = (config: AppConfig): Logger => {
   ];
 
   if (config.logToStdout) {
-    streams.push({ stream: process.stdout });
+    streams.push({ stream: process.stderr });
   }
 
   return pino(
