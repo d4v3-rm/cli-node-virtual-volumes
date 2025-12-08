@@ -1,6 +1,6 @@
 # Virtual Volumes CLI
 
-Virtual filesystem custom, persistente e utilizzabile solo tramite Node.js, con interfaccia TUI in terminale.
+Virtual filesystem custom, persistente e utilizzabile solo tramite Node.js, con interfaccia TUI in terminale basata su `neo-blessed`.
 
 ## Cosa fa
 
@@ -8,6 +8,8 @@ Virtual filesystem custom, persistente e utilizzabile solo tramite Node.js, con 
 - Gestisce cartelle e file in uno storage custom non montato a livello OS.
 - Importa file e directory dalla macchina host, anche in batch.
 - Permette navigazione, preview, move/rename e delete direttamente da terminale.
+- Usa una shell CLI keyboard-first con frecce, shortcut e modali dedicati piu' stabili dei render React-style.
+- Include icone testuali leggere, browser host fullscreen per l'import e selezione multipla con checkbox.
 - Espone anche una API Node.js per usare i volumi da codice.
 - Scrive log dettagliati su filesystem con configurazione via `.env`.
 
@@ -15,7 +17,7 @@ Virtual filesystem custom, persistente e utilizzabile solo tramite Node.js, con 
 
 - Node.js 20+
 - TypeScript
-- Ink per la TUI
+- `neo-blessed` + `blessed` per la TUI
 - Vitest per i test
 - Pino per il logging
 - Zod + dotenv per configurazione e validazione env
@@ -56,7 +58,7 @@ Guarda `.env.example`.
 - `VOLUME_LOG_DIR`: directory dei log.
 - `VOLUME_DEFAULT_QUOTA_BYTES`: quota logica di default per i nuovi volumi.
 - `VOLUME_LOG_LEVEL`: `fatal|error|warn|info|debug|trace|silent`.
-- `VOLUME_LOG_TO_STDOUT`: se `true`, duplica i log anche su stdout.
+- `VOLUME_LOG_TO_STDOUT`: se `true`, duplica i log anche sul terminale oltre che su file. Nella TUI fullscreen e' sconsigliato perche' puo' sporcare il render.
 - `VOLUME_PREVIEW_BYTES`: bytes letti per la preview dei file.
 
 ## Controlli TUI
@@ -64,9 +66,10 @@ Guarda `.env.example`.
 Dashboard:
 
 - `Up/Down`: cambia selezione
-- `Enter`: apri il volume selezionato
+- `PageUp/PageDown`: salta di pagina
+- `Home/End`: primo o ultimo volume
+- `Right`, `Enter` o `O`: apri il volume selezionato
 - `N`: crea volume
-- `O`: apri volume
 - `R`: refresh
 - `X`: elimina volume
 - `?`: help
@@ -75,15 +78,28 @@ Dashboard:
 Explorer:
 
 - `Up/Down`: cambia selezione
-- `Enter`: entra in cartella o preview file
-- `Backspace`: directory padre
+- `PageUp/PageDown`: salta di pagina
+- `Home/End`: primo o ultimo elemento
+- `Right` o `Enter`: entra in cartella o preview file
+- `Backspace`, `Left` o `B`: directory padre o dashboard
 - `C`: crea cartella
-- `I`: importa path host
+- `I`: apre il browser del filesystem host
 - `M`: move/rename
 - `D`: delete
 - `P`: preview
-- `B` o `Q`: ritorna alla dashboard
 - `?`: help
+
+Import host modal:
+
+- `Up/Down`: cambia selezione
+- `Right`: entra nella cartella o drive selezionato
+- `Left`: torna alla cartella padre
+- `Space`: attiva o disattiva la checkbox su file e cartelle
+- `Enter` o `I`: importa tutti gli elementi selezionati
+- `A`: seleziona o deseleziona gli elementi visibili
+- `Esc` o `Q`: chiude la modale
+
+Le modali di input e conferma usano `Enter`, `Esc`, `Left/Right`, `Y/N` a seconda del contesto. Durante import lunghi la status bar mostra progress incrementale per ridurre la sensazione di freeze, e il browser host evita di dover digitare i percorsi a mano.
 
 ## API Node.js
 
@@ -112,4 +128,4 @@ npm run lint
 npm run typecheck
 ```
 
-La suite copre il motore del filesystem virtuale, import batch, guardie sui move, delete ricorsivo e uno smoke test della TUI.
+La suite copre il motore del filesystem virtuale, cleanup dei blob, snapshot coerenti tra runtime diversi, import batch, progress degli import, parsing env e la logica di navigazione della TUI.
