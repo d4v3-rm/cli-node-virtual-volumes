@@ -81,6 +81,24 @@ export interface ImportProgress {
   currentHostPath: string;
   phase: 'file' | 'directory';
   summary: ImportSummary;
+  currentBytes: number;
+  currentTotalBytes: number | null;
+}
+
+export interface ExportSummary {
+  filesExported: number;
+  directoriesExported: number;
+  bytesExported: number;
+  conflictsResolved: number;
+}
+
+export interface ExportProgress {
+  currentVirtualPath: string;
+  destinationHostPath: string;
+  phase: 'file' | 'directory';
+  summary: ExportSummary;
+  currentBytes: number;
+  currentTotalBytes: number | null;
 }
 
 export interface FilePreview {
@@ -101,6 +119,12 @@ export interface ImportHostPathsInput {
   destinationPath: string;
   hostPaths: string[];
   onProgress?: (progress: ImportProgress) => Promise<void> | void;
+}
+
+export interface ExportVolumeEntryInput {
+  sourcePath: string;
+  destinationHostDirectory: string;
+  onProgress?: (progress: ExportProgress) => Promise<void> | void;
 }
 
 export interface MoveEntryInput {

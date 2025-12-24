@@ -7,9 +7,11 @@ Virtual filesystem custom, persistente e utilizzabile solo tramite Node.js, con 
 - Crea volumi virtuali con quota logica configurabile.
 - Gestisce cartelle e file in uno storage custom non montato a livello OS.
 - Importa file e directory dalla macchina host, anche in batch.
+- Esporta file e cartelle dal volume virtuale verso la macchina host.
 - Permette navigazione, preview, move/rename e delete direttamente da terminale.
 - Usa una shell CLI keyboard-first con frecce, shortcut e modali dedicati piu' stabili dei render React-style.
 - Include icone testuali leggere, browser host fullscreen per l'import e selezione multipla con checkbox.
+- Mostra progress incrementale in status bar durante import ed export di file grossi.
 - Espone anche una API Node.js per usare i volumi da codice.
 - Scrive log dettagliati su filesystem con configurazione via `.env`.
 
@@ -47,7 +49,7 @@ npm pack
 Poi puoi installare il tarball in globale:
 
 ```bash
-npm install -g ./virtual-volumes-cli-0.1.0.tgz
+npm install -g ./virtual-volumes-cli-0.2.0.tgz
 ```
 
 ## Variabili ambiente
@@ -84,6 +86,7 @@ Explorer:
 - `Backspace`, `Left` o `B`: directory padre o dashboard
 - `C`: crea cartella
 - `I`: apre il browser del filesystem host
+- `E`: apre il browser host per scegliere dove esportare l'elemento selezionato
 - `M`: move/rename
 - `D`: delete
 - `P`: preview
@@ -99,7 +102,15 @@ Import host modal:
 - `A`: seleziona o deseleziona gli elementi visibili
 - `Esc` o `Q`: chiude la modale
 
-Le modali di input e conferma usano `Enter`, `Esc`, `Left/Right`, `Y/N` a seconda del contesto. Durante import lunghi la status bar mostra progress incrementale per ridurre la sensazione di freeze, e il browser host evita di dover digitare i percorsi a mano.
+Export host modal:
+
+- `Up/Down`: cambia selezione
+- `Right`: entra nella cartella o drive selezionato
+- `Left`: torna alla cartella padre
+- `Enter` o `E`: esporta l'elemento selezionato nella cartella host corrente
+- `Esc` o `Q`: chiude la modale
+
+Le modali di input e conferma usano `Enter`, `Esc`, `Left/Right`, `Y/N` a seconda del contesto. Durante import ed export lunghi la status bar mostra progress incrementale, anche per file grossi, e il browser host evita di dover digitare i percorsi a mano.
 
 ## API Node.js
 
@@ -128,4 +139,4 @@ npm run lint
 npm run typecheck
 ```
 
-La suite copre il motore del filesystem virtuale, cleanup dei blob, snapshot coerenti tra runtime diversi, import batch, progress degli import, parsing env e la logica di navigazione della TUI.
+La suite copre il motore del filesystem virtuale, cleanup dei blob, snapshot coerenti tra runtime diversi, import batch, export verso host, progress di import/export, parsing env e la logica di navigazione della TUI.
