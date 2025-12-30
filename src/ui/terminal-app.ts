@@ -28,6 +28,11 @@ import {
   getPageOffset,
   getVisibleWindow,
 } from './navigation.js';
+import {
+  createActivityBar,
+  createProgressBar,
+  formatElapsedTime,
+} from './status.js';
 
 type ScreenMode = 'dashboard' | 'explorer';
 type ToastTone = 'success' | 'error' | 'info';
@@ -36,6 +41,7 @@ type OverlayMode = 'help' | 'preview' | 'confirm' | 'input' | 'hostBrowser' | nu
 interface ToastState {
   tone: ToastTone;
   message: string;
+  detail?: string;
 }
 
 interface LayoutPositionSpec {
@@ -154,6 +160,14 @@ export class TerminalApp {
 
   private busyLabel: string | null = 'Loading volumes';
 
+  private busyDetail: string | null = 'Initializing terminal shell.';
+
+  private busyProgressCurrent: number | null = null;
+
+  private busyProgressTotal: number | null = null;
+
+  private busyStartedAt = Date.now();
+
   private toast: ToastState | null = null;
 
   private overlayMode: OverlayMode = null;
@@ -190,7 +204,7 @@ export class TerminalApp {
       top: 3,
       left: 0,
       width: '62%',
-      bottom: 2,
+      bottom: 4,
       label: ' Navigation ',
     });
 
@@ -229,7 +243,7 @@ export class TerminalApp {
       top: 3,
       left: '62%',
       width: '38%',
-      bottom: 11,
+      bottom: 13,
       label: ' Inspector ',
     });
 
@@ -258,14 +272,14 @@ export class TerminalApp {
 
     this.shortcutsBox = createPanel(this.screen, {
       height: 9,
-      bottom: 2,
+      bottom: 4,
       left: '62%',
       width: '38%',
       label: ' Keyboard ',
     });
 
     this.statusBox = createPanel(this.screen, {
-      height: 2,
+      height: 4,
       bottom: 0,
       left: 0,
       width: '100%',
@@ -738,32 +752,138 @@ export class TerminalApp {
   }
 
   private renderStatus(): void {
+    const availableWidth = this.getContentWidth(this.statusBox);
+
     if (this.busyLabel) {
+      this.statusBox.setLabel(' Status  Running ');
       this.statusBox.setContent(
-        this.fitSingleLine(
-          `${SPINNER_FRAMES[this.spinnerIndex]} ${this.busyLabel}    Logs ${this.runtime.config.logDir}`,
-          this.getContentWidth(this.statusBox),
-        ),
+        this.renderBusyStatusLines(availableWidth).join('\n'),
       );
       return;
     }
 
     if (this.toast) {
+      this.statusBox.setLabel(` Status  ${this.toast.tone.toUpperCase()} `);
       this.statusBox.setContent(
-        this.fitSingleLine(
-          `[${this.toast.tone.toUpperCase()}] ${this.toast.message}    Logs ${this.runtime.config.logDir}`,
-          this.getContentWidth(this.statusBox),
-        ),
+        this.renderToastStatusLines(availableWidth).join('\n'),
       );
       return;
     }
 
+    this.statusBox.setLabel(' Status  Ready ');
     this.statusBox.setContent(
-      this.fitSingleLine(
-        `Stable keyboard shell active. Use arrows for movement and shortcuts for actions.    Logs ${this.runtime.config.logDir}`,
-        this.getContentWidth(this.statusBox),
-      ),
+      this.renderIdleStatusLines(availableWidth).join('\n'),
     );
+  }
+
+  private renderBusyStatusLines(availableWidth: number): [string, string] {
+    const elapsedLabel = formatElapsedTime(Date.now() - this.busyStartedAt);
+    const titleLine = this.fitSingleLine(
+      `${SPINNER_FRAMES[this.spinnerIndex]} ${this.busyLabel}  ${elapsedLabel}`,
+      availableWidth,
+    );
+    const detailLabel = this.busyDetail ?? this.getStatusContextLine(false);
+
+    if (this.busyProgressTotal !== null && this.busyProgressTotal > 0) {
+      const progressBarWidth = Math.max(10, Math.min(24, Math.floor(availableWidth * 0.24)));
+      const progressBar = createProgressBar(
+        this.busyProgressCurrent ?? 0,
+        this.busyProgressTotal,
+        progressBarWidth,
+      );
+      const percentage = Math.min(
+        100,
+        Math.max(
+          0,
+          Math.floor(((this.busyProgressCurrent ?? 0) / this.busyProgressTotal) * 100),
+        ),
+      );
+
+      return [
+        titleLine,
+        this.fitSingleLine(
+          `${progressBar} ${String(percentage).padStart(3, ' ')}%  ${formatBytes(this.busyProgressCurrent ?? 0)} / ${formatBytes(this.busyProgressTotal)}  ${detailLabel}`,
+          availableWidth,
+        ),
+      ];
+    }
+
+    const activityBarWidth = Math.max(10, Math.min(24, Math.floor(availableWidth * 0.24)));
+    const activityBar = createActivityBar(this.spinnerIndex, activityBarWidth);
+
+    return [
+      titleLine,
+      this.fitSingleLine(
+        `${activityBar} ${detailLabel}`,
+        availableWidth,
+      ),
+    ];
+  }
+
+  private renderToastStatusLines(availableWidth: number): [string, string] {
+    const titleLine = this.fitSingleLine(
+      `[${this.toast?.tone.toUpperCase()}] ${this.toast?.message ?? ''}`,
+      availableWidth,
+    );
+    const detailLine = this.fitSingleLine(
+      this.toast?.detail ?? this.getStatusContextLine(true),
+      availableWidth,
+    );
+
+    return [titleLine, detailLine];
+  }
+
+  private renderIdleStatusLines(availableWidth: number): [string, string] {
+    const headline =
+      this.mode === 'dashboard'
+        ? `Ready. Dashboard active with ${this.volumes.length} volumes available.`
+        : `Ready. Explorer active in ${this.currentSnapshot?.currentPath ?? '/'}.`;
+
+    return [
+      this.fitSingleLine(headline, availableWidth),
+      this.fitSingleLine(this.getStatusContextLine(true), availableWidth),
+    ];
+  }
+
+  private getStatusContextLine(includeLogs: boolean): string {
+    const baseContext =
+      this.mode === 'dashboard'
+        ? this.getDashboardStatusContext()
+        : this.getExplorerStatusContext();
+
+    if (!includeLogs) {
+      return baseContext;
+    }
+
+    return `${baseContext}  Logs ${this.runtime.config.logDir}`;
+  }
+
+  private getDashboardStatusContext(): string {
+    const selectedVolume = this.volumes[this.selectedVolumeIndex] ?? null;
+
+    if (!selectedVolume) {
+      return 'Press N to create your first volume. Use arrows to navigate when volumes are available.';
+    }
+
+    return `Selected volume ${selectedVolume.name}  Quota ${formatBytes(selectedVolume.quotaBytes)}  Used ${formatBytes(selectedVolume.logicalUsedBytes)}`;
+  }
+
+  private getExplorerStatusContext(): string {
+    if (!this.currentSnapshot) {
+      return 'Open a volume to browse files and folders.';
+    }
+
+    const selectedEntry = this.getSelectedEntry();
+    if (!selectedEntry) {
+      return `Volume ${this.currentSnapshot.volume.name}  Path ${this.currentSnapshot.currentPath}  Directory empty.`;
+    }
+
+    const selectionDetail =
+      selectedEntry.kind === 'file'
+        ? `Selected file ${selectedEntry.name}  ${formatBytes(selectedEntry.size)}`
+        : `Selected folder ${selectedEntry.name}`;
+
+    return `Volume ${this.currentSnapshot.volume.name}  Path ${this.currentSnapshot.currentPath}  ${selectionDetail}`;
   }
 
   private async moveSelection(direction: -1 | 1): Promise<void> {
@@ -1078,9 +1198,14 @@ export class TerminalApp {
         hostPaths,
         destinationPath,
         onProgress: (progress) => {
-          this.updateBusyLabel(this.formatImportProgress(progress));
+          this.updateBusyState({
+            detail: this.formatImportProgress(progress),
+            currentValue: progress.currentBytes,
+            totalValue: progress.currentTotalBytes,
+          });
         },
       }),
+      `Destination ${destinationPath}  ${hostPaths.length} host items queued.`,
     );
 
     if (!summary) {
@@ -1090,6 +1215,7 @@ export class TerminalApp {
     this.notify(
       'success',
       `Imported ${summary.filesImported} files and ${summary.directoriesImported} directories.`,
+      `Destination ${destinationPath}  ${formatBytes(summary.bytesImported)} transferred  Conflicts ${summary.conflictsResolved}`,
     );
     await this.openVolume(this.currentVolumeId, destinationPath);
   }
@@ -1115,9 +1241,14 @@ export class TerminalApp {
         sourcePath: selectedEntry.path,
         destinationHostDirectory,
         onProgress: (progress) => {
-          this.updateBusyLabel(this.formatExportProgress(progress));
+          this.updateBusyState({
+            detail: this.formatExportProgress(progress),
+            currentValue: progress.currentBytes,
+            totalValue: progress.currentTotalBytes,
+          });
         },
       }),
+      `Source ${selectedEntry.path}  Destination ${destinationHostDirectory}`,
     );
 
     if (!summary) {
@@ -1127,6 +1258,7 @@ export class TerminalApp {
     this.notify(
       'success',
       `Exported ${summary.filesExported} files and ${summary.directoriesExported} directories.`,
+      `Destination ${destinationHostDirectory}  ${formatBytes(summary.bytesExported)} transferred  Conflicts ${summary.conflictsResolved}`,
     );
     this.render();
   }
@@ -2517,22 +2649,22 @@ export class TerminalApp {
   private async runTask<T>(
     label: string,
     operation: () => Promise<T>,
+    detail?: string,
   ): Promise<T | null> {
-    this.busyLabel = label;
-    this.lastBusyRefreshAt = 0;
+    this.startBusyState(label, detail);
     this.render();
     await this.flushUiFrame();
 
     try {
-      return await operation();
+      const result = await operation();
+      this.finishBusyState();
+      return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unexpected error.';
       this.runtime.logger.error({ error, label }, 'Terminal operation failed.');
-      this.notify('error', message);
+      this.finishBusyState();
+      this.notify('error', message, `Operation failed: ${label}. ${this.getStatusContextLine(true)}`);
       return null;
-    } finally {
-      this.busyLabel = null;
-      this.render();
     }
   }
 
@@ -2542,12 +2674,16 @@ export class TerminalApp {
     });
   }
 
-  private notify(tone: ToastTone, message: string): void {
+  private notify(tone: ToastTone, message: string, detail?: string): void {
     if (this.destroyed) {
       return;
     }
 
-    this.toast = { tone, message };
+    this.toast = {
+      tone,
+      message,
+      detail,
+    };
 
     if (this.toastTimeout) {
       clearTimeout(this.toastTimeout);
@@ -2561,12 +2697,49 @@ export class TerminalApp {
     this.render();
   }
 
-  private updateBusyLabel(nextLabel: string): void {
+  private startBusyState(label: string, detail?: string): void {
+    this.busyLabel = label;
+    this.busyDetail = detail ?? this.getStatusContextLine(false);
+    this.busyProgressCurrent = null;
+    this.busyProgressTotal = null;
+    this.busyStartedAt = Date.now();
+    this.lastBusyRefreshAt = 0;
+  }
+
+  private finishBusyState(): void {
+    this.busyLabel = null;
+    this.busyDetail = null;
+    this.busyProgressCurrent = null;
+    this.busyProgressTotal = null;
+    this.lastBusyRefreshAt = 0;
+    this.render();
+  }
+
+  private updateBusyState(options: {
+    label?: string;
+    detail?: string;
+    currentValue?: number | null;
+    totalValue?: number | null;
+  }): void {
     if (this.destroyed || !this.busyLabel) {
       return;
     }
 
-    this.busyLabel = nextLabel;
+    if (options.label !== undefined) {
+      this.busyLabel = options.label;
+    }
+
+    if (options.detail !== undefined) {
+      this.busyDetail = options.detail;
+    }
+
+    if (options.currentValue !== undefined) {
+      this.busyProgressCurrent = options.currentValue;
+    }
+
+    if (options.totalValue !== undefined) {
+      this.busyProgressTotal = options.totalValue;
+    }
 
     const now = Date.now();
     if (now - this.lastBusyRefreshAt < 80) {
@@ -2581,35 +2754,15 @@ export class TerminalApp {
   private formatImportProgress(progress: ImportProgress): string {
     const currentTarget = path.basename(progress.currentHostPath) || progress.currentHostPath;
     const phaseLabel = progress.phase === 'directory' ? 'dir' : 'file';
-    const transferDetail = this.formatTransferDetail(
-      progress.currentBytes,
-      progress.currentTotalBytes,
-    );
 
-    return `Importing ${progress.summary.filesImported} files / ${progress.summary.directoriesImported} dirs / ${formatBytes(progress.summary.bytesImported)}  Current ${phaseLabel}: ${currentTarget}${transferDetail}`;
+    return `Current ${phaseLabel}: ${currentTarget}  Imported ${progress.summary.filesImported} files / ${progress.summary.directoriesImported} dirs / ${formatBytes(progress.summary.bytesImported)}`;
   }
 
   private formatExportProgress(progress: ExportProgress): string {
     const currentTarget = path.basename(progress.currentVirtualPath) || progress.currentVirtualPath;
     const phaseLabel = progress.phase === 'directory' ? 'dir' : 'file';
-    const transferDetail = this.formatTransferDetail(
-      progress.currentBytes,
-      progress.currentTotalBytes,
-    );
 
-    return `Exporting ${progress.summary.filesExported} files / ${progress.summary.directoriesExported} dirs / ${formatBytes(progress.summary.bytesExported)}  Current ${phaseLabel}: ${currentTarget}${transferDetail}`;
-  }
-
-  private formatTransferDetail(
-    currentBytes: number,
-    currentTotalBytes: number | null,
-  ): string {
-    if (currentTotalBytes === null || currentTotalBytes <= 0) {
-      return '';
-    }
-
-    const percentage = Math.min(100, Math.max(0, Math.floor((currentBytes / currentTotalBytes) * 100)));
-    return `  ${percentage}% ${formatBytes(currentBytes)} / ${formatBytes(currentTotalBytes)}`;
+    return `Current ${phaseLabel}: ${currentTarget}  Exported ${progress.summary.filesExported} files / ${progress.summary.directoriesExported} dirs / ${formatBytes(progress.summary.bytesExported)}`;
   }
 
   private focusShell(): void {

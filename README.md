@@ -11,7 +11,7 @@ Virtual filesystem custom, persistente e utilizzabile solo tramite Node.js, con 
 - Permette navigazione, preview, move/rename e delete direttamente da terminale.
 - Usa una shell CLI keyboard-first con frecce, shortcut e modali dedicati piu' stabili dei render React-style.
 - Include icone testuali leggere, browser host fullscreen per l'import e selezione multipla con checkbox.
-- Mostra progress incrementale in status bar durante import ed export di file grossi.
+- Mostra una status bar a due righe con progress bar, esito operazioni, contesto e hint durante import, export e altri task lunghi.
 - Espone anche una API Node.js per usare i volumi da codice.
 - Scrive log dettagliati su filesystem con configurazione via `.env`.
 
@@ -110,7 +110,7 @@ Export host modal:
 - `Enter` o `E`: esporta l'elemento selezionato nella cartella host corrente
 - `Esc` o `Q`: chiude la modale
 
-Le modali di input e conferma usano `Enter`, `Esc`, `Left/Right`, `Y/N` a seconda del contesto. Durante import ed export lunghi la status bar mostra progress incrementale, anche per file grossi, e il browser host evita di dover digitare i percorsi a mano.
+Le modali di input e conferma usano `Enter`, `Esc`, `Left/Right`, `Y/N` a seconda del contesto. Durante import ed export lunghi la status bar mostra progress bar reali, esito dell'operazione e contesto corrente, mentre il browser host evita di dover digitare i percorsi a mano.
 
 ## API Node.js
 
