@@ -1,142 +1,404 @@
-# Virtual Volumes CLI
+# 📦 Virtual Volumes CLI
 
-Virtual filesystem custom, persistente e utilizzabile solo tramite Node.js, con interfaccia TUI in terminale basata su `neo-blessed`.
+<p align="center">
+  <strong>Custom virtual volumes for Node.js, with a keyboard-first terminal file manager.</strong>
+</p>
 
-## Cosa fa
+<p align="center">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.2.0-0ea5e9.svg" />
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-22c55e.svg" />
+  <img alt="Node" src="https://img.shields.io/badge/node-%3E%3D20-111827.svg" />
+  <img alt="TypeScript" src="https://img.shields.io/badge/typescript-5.x-3178c6.svg" />
+  <img alt="Interface" src="https://img.shields.io/badge/interface-terminal-000000.svg" />
+</p>
 
-- Crea volumi virtuali con quota logica configurabile.
-- Gestisce cartelle e file in uno storage custom non montato a livello OS.
-- Importa file e directory dalla macchina host, anche in batch.
-- Esporta file e cartelle dal volume virtuale verso la macchina host.
-- Permette navigazione, preview, move/rename e delete direttamente da terminale.
-- Usa una shell CLI keyboard-first con frecce, shortcut e modali dedicati piu' stabili dei render React-style.
-- Include icone testuali leggere, browser host fullscreen per l'import e selezione multipla con checkbox.
-- Mostra una status bar a due righe con progress bar, esito operazioni, contesto e hint durante import, export e altri task lunghi.
-- Espone anche una API Node.js per usare i volumi da codice.
-- Scrive log dettagliati su filesystem con configurazione via `.env`.
+<p align="center">
+  <img alt="Tags" src="https://img.shields.io/badge/tags-nodejs%2Ctypescript%2Ccli%2Ctui%2Cfilesystem%2Cvirtual--volume-111827.svg" />
+</p>
 
-## Stack
+> `virtual-volumes-cli` e' un file system virtuale custom, persistente e Node-only, progettato per creare volumi logici separati dalla macchina host e gestirli da una TUI ricca, veloce e orientata alle scorciatoie da tastiera.
 
-- Node.js 20+
-- TypeScript
-- `neo-blessed` + `blessed` per la TUI
-- Vitest per i test
-- Pino per il logging
-- Zod + dotenv per configurazione e validazione env
-- tsup per build e packaging npm
+## ✨ Perche' esiste
 
-## Avvio locale
+Questo progetto nasce per offrire un ambiente di storage virtuale che:
+
+- non monta dischi reali a livello OS
+- non espone un file system nativo accessibile da altri programmi
+- vive all'interno di un runtime Node.js
+- permette import/export da e verso la macchina host
+- offre una UX da terminale curata, con navigator, modali e progress feedback reali
+
+In pratica ottieni volumi virtuali persistenti, con spazio logico configurabile, navigabili come un piccolo file manager in terminale.
+
+## 🧭 Indice
+
+1. [Panoramica](#-panoramica)
+2. [Funzionalita'](#-funzionalita)
+3. [Architettura](#-architettura)
+4. [Installazione](#-installazione)
+5. [Avvio rapido](#-avvio-rapido)
+6. [Configurazione](#-configurazione)
+7. [Controlli TUI](#-controlli-tui)
+8. [Import ed export](#-import-ed-export)
+9. [API Node.js](#-api-nodejs)
+10. [Sviluppo](#-sviluppo)
+11. [Packaging e release](#-packaging-e-release)
+12. [Troubleshooting](#-troubleshooting)
+13. [Roadmap](#-roadmap)
+14. [Licenza](#-licenza)
+
+## 🚀 Panoramica
+
+| Area | Cosa offre |
+| --- | --- |
+| Storage virtuale | Volumi persistenti con struttura file/cartelle custom |
+| UX terminale | TUI keyboard-first con frecce, modali, status e progress |
+| Integrazione host | Import massivo da host e export verso host |
+| Runtime Node-only | Utilizzabile via CLI e via API JavaScript/TypeScript |
+| Enterprise quality | Configurazione validata, logging su file, test automatici, packaging npm |
+
+## 🧩 Funzionalita'
+
+### Core storage
+
+- Creazione e rimozione di volumi virtuali.
+- Quota logica configurabile per ogni volume.
+- Gestione di cartelle e file in un file system virtuale custom.
+- Supporto a move, rename, delete e navigazione gerarchica.
+- Preview rapida dei file di testo.
+- Persistenza dei contenuti e dei metadata.
+
+### Terminal experience
+
+- Dashboard dei volumi.
+- Explorer del contenuto del volume.
+- Browser del file system host per import ed export.
+- Modali dedicate per input, conferma e selezione.
+- Inspector contestuale.
+- Sidebar con shortcut leggibili e verticali.
+- Barra di stato con spinner, progress bar, esito operazioni e contesto.
+
+### Operazioni host ↔ volume
+
+- Import di singoli file.
+- Import di cartelle complete.
+- Import massivo con selezione multipla via checkbox.
+- Export di file dal volume alla macchina host.
+- Export ricorsivo di directory.
+- Feedback di avanzamento durante transfer lunghi.
+
+### Tooling
+
+- Configurazione via `.env`.
+- Logging strutturato su file.
+- Build TypeScript con `tsup`.
+- Test con `vitest`.
+- Linting con `eslint`.
+- Packaging installabile globalmente con npm.
+
+## 🏗️ Architettura
+
+Il progetto e' organizzato per responsabilita', con separazione chiara tra dominio, application layer, storage e UI:
+
+```text
+src/
+  application/   -> orchestration dei casi d'uso
+  config/        -> env, defaults e validazione config
+  domain/        -> tipi, DTO e primitive del virtual filesystem
+  logging/       -> logger Pino e gestione output
+  storage/       -> repository, blob store e persistenza
+  ui/            -> terminal shell, browser host, status helpers
+  utils/         -> helper generici
+```
+
+### Componenti principali
+
+| Modulo | Ruolo |
+| --- | --- |
+| `VolumeService` | Regola i flussi applicativi di volumi, file, import ed export |
+| `VolumeRepository` | Gestisce metadata e stato dei volumi |
+| `BlobStore` | Conserva il contenuto reale dei file virtuali |
+| `TerminalApp` | Costruisce la TUI e orchestra la UX runtime |
+| `env` config | Traduce `.env`, flag CLI e default applicativi |
+| `logger` | Registra eventi, errori e trace su file system |
+
+## 📥 Installazione
+
+### Requisiti
+
+- Node.js `>= 20`
+- npm
+- terminale con supporto TUI
+
+### Installazione locale
 
 ```bash
 npm install
-npm run dev
 ```
 
-## Build
-
-```bash
-npm run build
-```
-
-Il binario generato e' `dist/index.js` ed e' esposto come comando globale `virtual-volumes`.
-
-## Tarball npm
+### Installazione globale da tarball
 
 ```bash
 npm pack
-```
-
-Poi puoi installare il tarball in globale:
-
-```bash
 npm install -g ./virtual-volumes-cli-0.2.0.tgz
 ```
 
-## Variabili ambiente
+Dopo l'installazione globale il comando disponibile e':
 
-Guarda `.env.example`.
+```bash
+virtual-volumes
+```
 
-- `VOLUME_DATA_DIR`: root persistente dei volumi virtuali. Di default usa la directory corrente da cui lanci il comando.
-- `VOLUME_LOG_DIR`: directory dei log.
-- `VOLUME_DEFAULT_QUOTA_BYTES`: quota logica di default per i nuovi volumi.
-- `VOLUME_LOG_LEVEL`: `fatal|error|warn|info|debug|trace|silent`.
-- `VOLUME_LOG_TO_STDOUT`: se `true`, duplica i log anche sul terminale oltre che su file. Nella TUI fullscreen e' sconsigliato perche' puo' sporcare il render.
-- `VOLUME_PREVIEW_BYTES`: bytes letti per la preview dei file.
+## ⚡ Avvio rapido
 
-## Controlli TUI
+### Modalita' sviluppo
 
-Dashboard:
+```bash
+npm run dev
+```
 
-- `Up/Down`: cambia selezione
-- `PageUp/PageDown`: salta di pagina
-- `Home/End`: primo o ultimo volume
-- `Right`, `Enter` o `O`: apri il volume selezionato
-- `N`: crea volume
-- `R`: refresh
-- `X`: elimina volume
-- `?`: help
-- `Q`: esci
+### Build di produzione
 
-Explorer:
+```bash
+npm run build
+npm start
+```
 
-- `Up/Down`: cambia selezione
-- `PageUp/PageDown`: salta di pagina
-- `Home/End`: primo o ultimo elemento
-- `Right` o `Enter`: entra in cartella o preview file
-- `Backspace`, `Left` o `B`: directory padre o dashboard
-- `C`: crea cartella
-- `I`: apre il browser del filesystem host
-- `E`: apre il browser host per scegliere dove esportare l'elemento selezionato
-- `M`: move/rename
-- `D`: delete
-- `P`: preview
-- `?`: help
+### Flusso base
 
-Import host modal:
+1. Avvia la TUI.
+2. Crea un volume.
+3. Entra nel volume con `Enter` o `Right`.
+4. Importa file/cartelle dal file system host.
+5. Naviga con le frecce.
+6. Esporta verso host quando serve.
 
-- `Up/Down`: cambia selezione
-- `Right`: entra nella cartella o drive selezionato
-- `Left`: torna alla cartella padre
-- `Space`: attiva o disattiva la checkbox su file e cartelle
-- `Enter` o `I`: importa tutti gli elementi selezionati
-- `A`: seleziona o deseleziona gli elementi visibili
-- `Esc` o `Q`: chiude la modale
+## ⚙️ Configurazione
 
-Export host modal:
+Il progetto legge la configurazione da `.env`, flag CLI e default interni. E' disponibile un template in [.env.example](./.env.example).
 
-- `Up/Down`: cambia selezione
-- `Right`: entra nella cartella o drive selezionato
-- `Left`: torna alla cartella padre
-- `Enter` o `E`: esporta l'elemento selezionato nella cartella host corrente
-- `Esc` o `Q`: chiude la modale
+### Variabili principali
 
-Le modali di input e conferma usano `Enter`, `Esc`, `Left/Right`, `Y/N` a seconda del contesto. Durante import ed export lunghi la status bar mostra progress bar reali, esito dell'operazione e contesto corrente, mentre il browser host evita di dover digitare i percorsi a mano.
+| Variabile | Descrizione |
+| --- | --- |
+| `VOLUME_DATA_DIR` | Root persistente dei volumi virtuali |
+| `VOLUME_LOG_DIR` | Directory dei log runtime |
+| `VOLUME_DEFAULT_QUOTA_BYTES` | Quota di default per i nuovi volumi |
+| `VOLUME_LOG_LEVEL` | Livello log: `fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent` |
+| `VOLUME_LOG_TO_STDOUT` | Duplica i log anche sul terminale |
+| `VOLUME_PREVIEW_BYTES` | Dimensione massima preview file |
 
-## API Node.js
+### Note operative
+
+- Di default i volumi vengono salvati nella directory corrente da cui lanci il programma, a meno che tu non sovrascriva il path via config.
+- I log sono pensati per stare su file; l'output su terminale e' utile in debug, ma puo' interferire con la TUI fullscreen.
+
+## ⌨️ Controlli TUI
+
+La UI e' pensata per essere usata quasi completamente da tastiera.
+
+### Dashboard
+
+| Tasto | Azione |
+| --- | --- |
+| `Up / Down` | Cambia selezione |
+| `PageUp / PageDown` | Scorre velocemente |
+| `Home / End` | Primo / ultimo volume |
+| `Right`, `Enter`, `O` | Apre il volume selezionato |
+| `N` | Crea un nuovo volume |
+| `X` | Elimina il volume selezionato |
+| `R` | Refresh |
+| `?` | Help |
+| `Q` | Esce |
+
+### Explorer
+
+| Tasto | Azione |
+| --- | --- |
+| `Up / Down` | Cambia selezione |
+| `PageUp / PageDown` | Scorre di pagina |
+| `Home / End` | Primo / ultimo elemento |
+| `Right`, `Enter` | Entra in cartella o apre preview file |
+| `Left`, `Backspace`, `B` | Torna indietro |
+| `C` | Crea cartella |
+| `I` | Apre il browser host per l'import |
+| `E` | Apre il browser host per l'export |
+| `M` | Move / rename |
+| `D` | Delete |
+| `P` | Preview |
+| `R` | Refresh |
+| `?` | Help |
+
+### Browser host per import
+
+| Tasto | Azione |
+| --- | --- |
+| `Up / Down` | Cambia selezione |
+| `Right` | Entra in cartella o drive |
+| `Left` | Risale alla cartella padre |
+| `Space` | Seleziona o deseleziona checkbox |
+| `A` | Seleziona o deseleziona gli elementi visibili |
+| `Enter`, `I` | Conferma l'import |
+| `Esc`, `Q` | Chiude la modale |
+
+### Browser host per export
+
+| Tasto | Azione |
+| --- | --- |
+| `Up / Down` | Cambia selezione |
+| `Right` | Entra in cartella o drive |
+| `Left` | Risale alla cartella padre |
+| `Enter`, `E` | Esporta nella cartella corrente |
+| `Esc`, `Q` | Chiude la modale |
+
+## 🔄 Import ed export
+
+### Import
+
+L'import non richiede di digitare manualmente un path host:
+
+- apri la modale import con `I`
+- navighi il file system host con le frecce
+- selezioni piu' file o directory con `Space`
+- confermi con `Enter` o `I`
+
+Durante l'operazione la status area mostra:
+
+- operazione attiva
+- spinner
+- progress bar
+- messaggio contestuale
+- esito finale `SUCCESS` o `ERROR`
+
+### Export
+
+L'export funziona in modo speculare:
+
+- selezioni il file o la cartella nel volume virtuale
+- premi `E`
+- scegli la destinazione host
+- confermi l'operazione
+
+L'export supporta sia file singoli sia directory ricorsive.
+
+## 🧠 API Node.js
+
+Oltre alla TUI, il progetto espone una API utilizzabile da codice:
 
 ```ts
 import { createRuntime } from 'virtual-volumes-cli';
 
 const runtime = await createRuntime({
   dataDir: 'C:/virtual-volumes/data',
-  logLevel: 'info',
+  logLevel: 'info'
 });
 
 const volume = await runtime.volumeService.createVolume({
-  name: 'Secure Docs',
+  name: 'Secure Docs'
 });
 
-await runtime.volumeService.writeTextFile(volume.id, '/hello.txt', 'ciao');
+await runtime.volumeService.writeTextFile(
+  volume.id,
+  '/hello.txt',
+  'ciao dal filesystem virtuale'
+);
+
 const preview = await runtime.volumeService.previewFile(volume.id, '/hello.txt');
+
 console.log(preview.content);
 ```
 
-## Test
+## 🛠️ Sviluppo
+
+### Script disponibili
+
+| Script | Descrizione |
+| --- | --- |
+| `npm run dev` | Avvia la CLI in sviluppo |
+| `npm run build` | Compila il progetto |
+| `npm run start` | Esegue la build compilata |
+| `npm run lint` | Esegue ESLint |
+| `npm run typecheck` | Esegue TypeScript in modalita' no emit |
+| `npm run test` | Esegue i test con coverage |
+| `npm run verify` | Esegue verifiche complete |
+| `npm run pack:local` | Genera il tarball npm locale |
+
+### Qualita'
+
+La codebase punta a una struttura pulita e mantenibile:
+
+- TypeScript tipizzato end-to-end
+- moduli separati per responsabilita'
+- test su casi core e regressioni
+- tooling npm allineato al packaging reale
+
+## 📦 Packaging e release
+
+Il pacchetto e' pensato per essere distribuito via npm o come tarball:
 
 ```bash
-npm test
-npm run lint
-npm run typecheck
+npm run pack:local
 ```
 
-La suite copre il motore del filesystem virtuale, cleanup dei blob, snapshot coerenti tra runtime diversi, import batch, export verso host, progress di import/export, parsing env e la logica di navigazione della TUI.
+Output atteso:
+
+- file `.tgz` del pacchetto
+- build `dist/`
+- metadata completi per installazione globale
+
+Le release locali possono essere accompagnate da:
+
+- `CHANGELOG.md`
+- commit in stile Conventional Commits
+- workflow GitHub Actions per build e publish artefatti
+
+## 🧪 Test e verifica
+
+```bash
+npm run lint
+npm run typecheck
+npm run test
+npm run verify
+```
+
+La suite copre:
+
+- virtual filesystem core
+- import massivo e export
+- progress callback
+- parsing env
+- logica di navigazione TUI
+- regressioni su modali e workflow principali
+
+## 🩺 Troubleshooting
+
+### La TUI si sporca o lampeggia
+
+- evita `VOLUME_LOG_TO_STDOUT=true` durante l'uso fullscreen
+- usa un terminale con supporto completo alle escape sequence
+- verifica di essere su Node.js 20 o superiore
+
+### Import/export lenti
+
+- file molto grandi mostrano progress avanzato, ma possono comunque richiedere tempo
+- verifica la velocita' del disco host e la dimensione dei transfer
+
+### Non trovi i volumi
+
+- controlla `VOLUME_DATA_DIR`
+- se non impostato, usa la directory corrente da cui hai lanciato il comando
+
+## 🗺️ Roadmap
+
+- miglioramento continuo della shell TUI
+- ulteriore riduzione dei crash e delle condizioni di freeze
+- affinamento delle release automation
+- evoluzione del backend di persistenza per scenari ancora piu' grandi
+
+## 👤 Autore
+
+Creato e mantenuto da **Salvatore Scarano**.
+
+## 📄 Licenza
+
+Questo progetto e' distribuito con licenza [MIT](./LICENSE).
