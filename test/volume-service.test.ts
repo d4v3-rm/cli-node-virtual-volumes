@@ -9,7 +9,7 @@ import { createRuntime } from '../src/bootstrap/create-runtime.js';
 const sandboxes: string[] = [];
 
 const createIsolatedRuntime = async () => {
-  const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-volumes-'));
+  const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cli-node-virtual-volumes-'));
   sandboxes.push(sandboxRoot);
 
   return createRuntime({

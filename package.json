@@ -1,5 +1,5 @@
 {
-  "name": "virtual-volumes-cli",
+  "name": "cli-node-virtual-volumes",
   "version": "0.2.0",
   "description": "Node.js virtual volumes with a custom filesystem and a rich terminal UI.",
   "type": "module",

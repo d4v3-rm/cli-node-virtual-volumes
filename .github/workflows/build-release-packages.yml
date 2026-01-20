@@ -52,7 +52,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: virtual-volumes-package
+          name: cli-node-virtual-volumes-package
           path: |
             dist/package/*.tgz
             dist/package/SHA256SUMS.txt
@@ -79,7 +79,7 @@ jobs:
       - name: Download package artifact
         uses: actions/download-artifact@v4
         with:
-          name: virtual-volumes-package
+          name: cli-node-virtual-volumes-package
           path: dist
 
       - name: Prepare source archive
@@ -94,7 +94,7 @@ jobs:
         run: |
           VERSION=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")
           RELEASE_TAG="v${VERSION}"
-          RELEASE_NAME="Virtual Volumes CLI v${VERSION}"
+          RELEASE_NAME="CLI Node Virtual Volumes v${VERSION}"
           PRERELEASE="false"
 
           echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
