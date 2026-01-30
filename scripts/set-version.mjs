@@ -24,6 +24,22 @@ const runGitCapture = (args) =>
     stdio: ['ignore', 'pipe', 'pipe']
   }).trim();
 
+const runGit = (args) =>
+  execFileSync('git', args, {
+    cwd: rootDir,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe']
+  }).trim();
+
+const hasStagedChanges = () => {
+  try {
+    runGit(['diff', '--cached', '--quiet', '--exit-code']);
+    return false;
+  } catch (error) {
+    return Boolean(error && typeof error === 'object' && 'status' in error && error.status === 1);
+  }
+};
+
 const getLatestVersionTag = () => {
   try {
     const output = runGitCapture(['tag', '--list', 'v[0-9]*.[0-9]*.[0-9]*', '--sort=-v:refname']);
@@ -142,3 +158,13 @@ const updatedChangelog = changelog.startsWith('# Changelog')
 await writeFile(changelogPath, updatedChangelog);
 
 process.stdout.write(`[set:version] ${currentVersion} -> ${nextVersion}\n`);
+
+runGit(['add', '--', 'package.json', 'package-lock.json', 'README.md', 'CHANGELOG.md']);
+
+if (!hasStagedChanges()) {
+  process.stdout.write('[set:version] no managed file changed, skipping auto-commit\n');
+  process.exit(0);
+}
+
+runGit(['commit', '-m', `build(release): v${nextVersion}`]);
+process.stdout.write(`[set:version] committed build(release): v${nextVersion}\n`);
