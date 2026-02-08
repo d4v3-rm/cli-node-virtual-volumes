@@ -1,13 +1,10 @@
 import React, {
   startTransition,
-  useDeferredValue,
   useEffect,
   useEffectEvent,
   useState,
 } from 'react';
 
-import BigText from 'ink-big-text';
-import Gradient from 'ink-gradient';
 import { Box, Text, useApp, useInput } from 'ink';
 import Spinner from 'ink-spinner';
 import TextInput from 'ink-text-input';
@@ -26,29 +23,7 @@ import { getParentVirtualPath } from '../utils/virtual-paths.js';
 import { Pane } from './components/pane.js';
 
 type Screen = 'dashboard' | 'explorer';
-type DashboardFocus = 'volumes' | 'actions';
-type ExplorerFocus = 'entries' | 'actions';
 type ToastTone = 'success' | 'error' | 'info';
-
-type DashboardActionId =
-  | 'open'
-  | 'create'
-  | 'refresh'
-  | 'delete'
-  | 'help'
-  | 'quit';
-
-type ExplorerActionId =
-  | 'open'
-  | 'up'
-  | 'create-folder'
-  | 'import'
-  | 'move'
-  | 'delete'
-  | 'preview'
-  | 'refresh'
-  | 'dashboard'
-  | 'help';
 
 type OverlayState =
   | { kind: 'create-volume' }
@@ -69,98 +44,6 @@ interface ToastState {
   tone: ToastTone;
   message: string;
 }
-
-interface ActionDefinition<TAction extends string> {
-  id: TAction;
-  label: string;
-  description: string;
-}
-
-const DASHBOARD_ACTIONS: ActionDefinition<DashboardActionId>[] = [
-  {
-    id: 'open',
-    label: 'Open volume',
-    description: 'Open the highlighted virtual volume.',
-  },
-  {
-    id: 'create',
-    label: 'Create volume',
-    description: 'Provision a new virtual space with its own quota.',
-  },
-  {
-    id: 'refresh',
-    label: 'Refresh',
-    description: 'Reload manifests from disk.',
-  },
-  {
-    id: 'delete',
-    label: 'Delete volume',
-    description: 'Remove the highlighted volume and its data.',
-  },
-  {
-    id: 'help',
-    label: 'Help',
-    description: 'Show controls and workflow hints.',
-  },
-  {
-    id: 'quit',
-    label: 'Quit',
-    description: 'Exit the terminal UI.',
-  },
-];
-
-const EXPLORER_ACTIONS: ActionDefinition<ExplorerActionId>[] = [
-  {
-    id: 'open',
-    label: 'Open / preview',
-    description: 'Enter a directory or preview a file.',
-  },
-  {
-    id: 'up',
-    label: 'Go up',
-    description: 'Move to the parent directory.',
-  },
-  {
-    id: 'create-folder',
-    label: 'Create folder',
-    description: 'Add a new directory in the current path.',
-  },
-  {
-    id: 'import',
-    label: 'Import host paths',
-    description: 'Import one or many files/folders from the host machine.',
-  },
-  {
-    id: 'move',
-    label: 'Move / rename',
-    description: 'Move the highlighted entry or rename it.',
-  },
-  {
-    id: 'delete',
-    label: 'Delete',
-    description: 'Delete the highlighted entry recursively.',
-  },
-  {
-    id: 'preview',
-    label: 'Preview file',
-    description: 'Read a text preview of the highlighted file.',
-  },
-  {
-    id: 'refresh',
-    label: 'Refresh',
-    description: 'Reload the current directory snapshot.',
-  },
-  {
-    id: 'dashboard',
-    label: 'Dashboard',
-    description: 'Return to the volume dashboard.',
-  },
-  {
-    id: 'help',
-    label: 'Help',
-    description: 'Show controls and workflow hints.',
-  },
-];
 
 const clampIndex = (index: number, length: number): number => {
   if (length <= 0) {
@@ -584,11 +467,11 @@ const HelpOverlay = ({ onClose }: { onClose: () => void }): React.JSX.Element =>
   return (
     <Pane title="Help" active footer="Enter, Q or Esc closes this help panel.">
       <Text>Dashboard keys:</Text>
-      <Text color="gray">Tab switches pane, Up/Down moves selection, Enter executes.</Text>
+      <Text color="gray">Up/Down moves selection, Enter opens the selected volume.</Text>
       <Text color="gray">Shortcuts: O open, N create, R refresh, X delete, Q quit.</Text>
       <Box marginTop={1} />
       <Text>Explorer keys:</Text>
-      <Text color="gray">Tab switches pane, Enter opens, Backspace goes up.</Text>
+      <Text color="gray">Up/Down moves selection, Enter opens, Backspace goes up.</Text>
       <Text color="gray">
         Shortcuts: C create folder, I import, M move, D delete, P preview, B
         dashboard, R refresh.
@@ -601,22 +484,18 @@ export const App = ({ runtime }: { runtime: AppRuntime }): React.JSX.Element => 
   const { exit } = useApp();
 
   const [screen, setScreen] = useState<Screen>('dashboard');
-  const [dashboardFocus, setDashboardFocus] = useState<DashboardFocus>('volumes');
-  const [explorerFocus, setExplorerFocus] = useState<ExplorerFocus>('entries');
   const [volumes, setVolumes] = useState<VolumeManifest[]>([]);
   const [selectedVolumeIndex, setSelectedVolumeIndex] = useState(0);
-  const [selectedDashboardActionIndex, setSelectedDashboardActionIndex] = useState(0);
   const [currentVolumeId, setCurrentVolumeId] = useState<string | null>(null);
   const [currentSnapshot, setCurrentSnapshot] = useState<ExplorerSnapshot | null>(null);
   const [selectedEntryIndex, setSelectedEntryIndex] = useState(0);
-  const [selectedExplorerActionIndex, setSelectedExplorerActionIndex] = useState(0);
   const [overlay, setOverlay] = useState<OverlayState | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [busyLabel, setBusyLabel] = useState<string | null>('Loading volumes');
 
-  const deferredEntries = useDeferredValue(currentSnapshot?.entries ?? []);
+  const currentEntries = currentSnapshot?.entries ?? [];
   const selectedVolume = volumes[selectedVolumeIndex] ?? null;
-  const selectedEntry = deferredEntries[selectedEntryIndex] ?? null;
+  const selectedEntry = currentEntries[selectedEntryIndex] ?? null;
   const busy = busyLabel !== null;
 
   useEffect(() => {
@@ -678,7 +557,6 @@ export const App = ({ runtime }: { runtime: AppRuntime }): React.JSX.Element => 
       setCurrentVolumeId(volumeId);
       setCurrentSnapshot(snapshot);
       setScreen('explorer');
-      setExplorerFocus('entries');
       setSelectedEntryIndex(0);
     });
   });
@@ -706,113 +584,89 @@ export const App = ({ runtime }: { runtime: AppRuntime }): React.JSX.Element => 
     }
   };
 
-  const handleDashboardAction = async (actionId: DashboardActionId): Promise<void> => {
-    switch (actionId) {
-      case 'open':
-        if (selectedVolume) {
-          await openVolume(selectedVolume.id);
-        } else {
-          notify('info', 'Create a volume first.');
-        }
-        break;
-      case 'create':
-        setOverlay({ kind: 'create-volume' });
-        break;
-      case 'refresh':
-        await loadVolumes();
-        break;
-      case 'delete':
-        if (selectedVolume) {
-          setOverlay({
-            kind: 'delete-volume',
-            volumeId: selectedVolume.id,
-            volumeName: selectedVolume.name,
-          });
-        } else {
-          notify('info', 'No volume selected.');
-        }
-        break;
-      case 'help':
-        setOverlay({ kind: 'help' });
-        break;
-      case 'quit':
-        exit();
-        break;
+  const openSelectedVolume = async (): Promise<void> => {
+    if (!selectedVolume) {
+      notify('info', 'Create a volume first.');
+      return;
     }
+
+    await openVolume(selectedVolume.id);
   };
 
-  const handleExplorerAction = async (actionId: ExplorerActionId): Promise<void> => {
+  const queueDeleteSelectedVolume = (): void => {
+    if (!selectedVolume) {
+      notify('info', 'No volume selected.');
+      return;
+    }
+
+    setOverlay({
+      kind: 'delete-volume',
+      volumeId: selectedVolume.id,
+      volumeName: selectedVolume.name,
+    });
+  };
+
+  const goToDashboard = async (): Promise<void> => {
+    setScreen('dashboard');
+    setCurrentVolumeId(null);
+    setCurrentSnapshot(null);
+    await loadVolumes();
+  };
+
+  const openSelectedEntry = async (): Promise<void> => {
+    if (!currentVolumeId) {
+      return;
+    }
+
+    if (!selectedEntry) {
+      notify('info', 'Select an entry first.');
+      return;
+    }
+
+    if (selectedEntry.kind === 'directory') {
+      await openVolume(currentVolumeId, selectedEntry.path);
+      return;
+    }
+
+    await previewSelectedEntry();
+  };
+
+  const goUpDirectory = async (): Promise<void> => {
     if (!currentVolumeId || !currentSnapshot) {
       return;
     }
 
-    switch (actionId) {
-      case 'open':
-        if (!selectedEntry) {
-          notify('info', 'Select an entry first.');
-          return;
-        }
+    await openVolume(
+      currentVolumeId,
+      getParentVirtualPath(currentSnapshot.currentPath),
+    );
+  };
 
-        if (selectedEntry.kind === 'directory') {
-          await openVolume(currentVolumeId, selectedEntry.path);
-          return;
-        }
-
-        await previewSelectedEntry();
-        return;
-      case 'up':
-        await openVolume(
-          currentVolumeId,
-          getParentVirtualPath(currentSnapshot.currentPath),
-        );
-        return;
-      case 'create-folder':
-        setOverlay({ kind: 'create-folder' });
-        return;
-      case 'import':
-        setOverlay({ kind: 'import', destinationPath: currentSnapshot.currentPath });
-        return;
-      case 'move':
-        if (!selectedEntry) {
-          notify('info', 'Select an entry first.');
-          return;
-        }
-
-        setOverlay({
-          kind: 'move',
-          sourcePath: selectedEntry.path,
-          initialDestinationPath: currentSnapshot.currentPath,
-          initialName: selectedEntry.name,
-        });
-        return;
-      case 'delete':
-        if (!selectedEntry) {
-          notify('info', 'Select an entry first.');
-          return;
-        }
-
-        setOverlay({
-          kind: 'delete-entry',
-          targetPath: selectedEntry.path,
-          label: selectedEntry.name,
-        });
-        return;
-      case 'preview':
-        await previewSelectedEntry();
-        return;
-      case 'refresh':
-        await openVolume(currentVolumeId, currentSnapshot.currentPath);
-        return;
-      case 'dashboard':
-        setScreen('dashboard');
-        setCurrentVolumeId(null);
-        setCurrentSnapshot(null);
-        await loadVolumes();
-        return;
-      case 'help':
-        setOverlay({ kind: 'help' });
-        return;
+  const queueMoveSelectedEntry = (): void => {
+    if (!selectedEntry || !currentSnapshot) {
+      notify('info', 'Select an entry first.');
+      return;
     }
+
+    setOverlay({
+      kind: 'move',
+      sourcePath: selectedEntry.path,
+      initialDestinationPath: currentSnapshot.currentPath,
+      initialName: selectedEntry.name,
+    });
+  };
+
+  const queueDeleteSelectedEntry = (): void => {
+    if (!selectedEntry) {
+      notify('info', 'Select an entry first.');
+      return;
+    }
+
+    setOverlay({
+      kind: 'delete-entry',
+      targetPath: selectedEntry.path,
+      label: selectedEntry.name,
+    });
   };
 
   const performCreateVolume = async (payload: {
@@ -961,24 +815,14 @@ export const App = ({ runtime }: { runtime: AppRuntime }): React.JSX.Element => 
         return;
       }
 
-      if (input.toLowerCase() === 'q') {
-        if (screen === 'dashboard') {
-          exit();
-        }
-
-        return;
-      }
-
       if (screen === 'dashboard') {
-        if (key.tab || key.leftArrow || key.rightArrow) {
-          setDashboardFocus((current) =>
-            current === 'volumes' ? 'actions' : 'volumes',
-          );
+        if (input.toLowerCase() === '?') {
+          setOverlay({ kind: 'help' });
           return;
         }
 
-        if (input.toLowerCase() === '?') {
-          setOverlay({ kind: 'help' });
+        if (input.toLowerCase() === 'q') {
+          exit();
           return;
         }
 
@@ -987,8 +831,8 @@ export const App = ({ runtime }: { runtime: AppRuntime }): React.JSX.Element => 
           return;
         }
 
-        if (input.toLowerCase() === 'o' && selectedVolume) {
-          void openVolume(selectedVolume.id);
+        if (input.toLowerCase() === 'o' || key.return) {
+          void openSelectedVolume();
           return;
         }
 
@@ -997,72 +841,40 @@ export const App = ({ runtime }: { runtime: AppRuntime }): React.JSX.Element => 
           return;
         }
 
-        if (input.toLowerCase() === 'x' && selectedVolume) {
-          setOverlay({
-            kind: 'delete-volume',
-            volumeId: selectedVolume.id,
-            volumeName: selectedVolume.name,
-          });
-          return;
-        }
-
-        if (dashboardFocus === 'volumes') {
-          if (key.upArrow) {
-            setSelectedVolumeIndex((current) =>
-              clampIndex(current - 1, volumes.length),
-            );
-            return;
-          }
-
-          if (key.downArrow) {
-            setSelectedVolumeIndex((current) =>
-              clampIndex(current + 1, volumes.length),
-            );
-            return;
-          }
-
-          if (key.return && selectedVolume) {
-            void openVolume(selectedVolume.id);
-          }
-
+        if (input.toLowerCase() === 'x') {
+          queueDeleteSelectedVolume();
           return;
         }
 
         if (key.upArrow) {
-          setSelectedDashboardActionIndex((current) =>
-            clampIndex(current - 1, DASHBOARD_ACTIONS.length),
+          setSelectedVolumeIndex((current) =>
+            clampIndex(current - 1, volumes.length),
           );
           return;
         }
 
         if (key.downArrow) {
-          setSelectedDashboardActionIndex((current) =>
-            clampIndex(current + 1, DASHBOARD_ACTIONS.length),
+          setSelectedVolumeIndex((current) =>
+            clampIndex(current + 1, volumes.length),
           );
           return;
         }
 
-        if (key.return) {
-          void handleDashboardAction(
-            DASHBOARD_ACTIONS[selectedDashboardActionIndex]?.id ?? 'open',
-          );
-        }
-
-        return;
-      }
-
-      if (key.tab || key.leftArrow || key.rightArrow) {
-        setExplorerFocus((current) => (current === 'entries' ? 'actions' : 'entries'));
-        return;
-      }
-
-      if (key.backspace || key.delete) {
-        void handleExplorerAction('up');
         return;
       }
 
       if (input.toLowerCase() === '?') {
         setOverlay({ kind: 'help' });
+        return;
+      }
+
+      if (input.toLowerCase() === 'q' || input.toLowerCase() === 'b') {
+        void goToDashboard();
+        return;
+      }
+
+      if (key.backspace) {
+        void goUpDirectory();
         return;
       }
 
@@ -1076,83 +888,45 @@ export const App = ({ runtime }: { runtime: AppRuntime }): React.JSX.Element => 
         return;
       }
 
-      if (input.toLowerCase() === 'm' && selectedEntry && currentSnapshot) {
-        setOverlay({
-          kind: 'move',
-          sourcePath: selectedEntry.path,
-          initialDestinationPath: currentSnapshot.currentPath,
-          initialName: selectedEntry.name,
-        });
+      if (input.toLowerCase() === 'm') {
+        queueMoveSelectedEntry();
         return;
       }
 
-      if (input.toLowerCase() === 'd' && selectedEntry) {
-        setOverlay({
-          kind: 'delete-entry',
-          targetPath: selectedEntry.path,
-          label: selectedEntry.name,
-        });
+      if (input.toLowerCase() === 'd') {
+        queueDeleteSelectedEntry();
         return;
       }
 
       if (input.toLowerCase() === 'p') {
-        void handleExplorerAction('preview');
-        return;
-      }
-
-      if (input.toLowerCase() === 'b') {
-        setScreen('dashboard');
-        setCurrentVolumeId(null);
-        setCurrentSnapshot(null);
-        void loadVolumes();
+        void previewSelectedEntry();
         return;
       }
 
       if (input.toLowerCase() === 'r') {
-        void handleExplorerAction('refresh');
-        return;
-      }
-
-      if (explorerFocus === 'entries') {
-        if (key.upArrow) {
-          setSelectedEntryIndex((current) =>
-            clampIndex(current - 1, deferredEntries.length),
-          );
-          return;
+        if (currentVolumeId && currentSnapshot) {
+          void openVolume(currentVolumeId, currentSnapshot.currentPath);
         }
-
-        if (key.downArrow) {
-          setSelectedEntryIndex((current) =>
-            clampIndex(current + 1, deferredEntries.length),
-          );
-          return;
-        }
-
-        if (key.return) {
-          void handleExplorerAction('open');
-        }
-
         return;
       }
 
       if (key.upArrow) {
-        setSelectedExplorerActionIndex((current) =>
-          clampIndex(current - 1, EXPLORER_ACTIONS.length),
+        setSelectedEntryIndex((current) =>
+          clampIndex(current - 1, currentEntries.length),
         );
         return;
       }
 
       if (key.downArrow) {
-        setSelectedExplorerActionIndex((current) =>
-          clampIndex(current + 1, EXPLORER_ACTIONS.length),
+        setSelectedEntryIndex((current) =>
+          clampIndex(current + 1, currentEntries.length),
         );
         return;
       }
 
       if (key.return) {
-        void handleExplorerAction(
-          EXPLORER_ACTIONS[selectedExplorerActionIndex]?.id ?? 'open',
-        );
+        void openSelectedEntry();
+        return;
       }
     },
     { isActive: overlay === null && !busy },
@@ -1229,19 +1003,20 @@ export const App = ({ runtime }: { runtime: AppRuntime }): React.JSX.Element => 
     }
   };
 
+  const renderShortcutRow = (items: string[]): React.JSX.Element => (
+    <Box flexWrap="wrap">
+      {items.map((item) => (
+        <Box key={item} marginRight={2}>
+          <Text color="gray">{item}</Text>
+        </Box>
+      ))}
+    </Box>
+  );
+
   const renderDashboard = (): React.JSX.Element => (
     <Box flexDirection="column">
-      {(process.stdout.columns ?? 120) >= 90 ? (
-        <Gradient name="atlas">
-          <BigText text="Volumes" />
-        </Gradient>
-      ) : (
-        <Text color="cyanBright">Virtual Volumes</Text>
-      )}
-      <Text color="gray">
-        Node-only custom filesystem, host import, logical quotas and detailed file
-        logging.
-      </Text>
+      <Text color="cyanBright">Virtual Volumes</Text>
+      <Text color="gray">Keyboard-first virtual filesystem manager for Node.js.</Text>
       <Box marginTop={1}>
         <Text color="cyan">
           Data dir:
@@ -1258,11 +1033,7 @@ export const App = ({ runtime }: { runtime: AppRuntime }): React.JSX.Element => 
       </Box>
       <Box marginTop={1}>
         <Box flexGrow={3} marginRight={1}>
-          <Pane
-            title="Volumes"
-            active={dashboardFocus === 'volumes'}
-            footer="Up/Down selects. Enter opens. O opens. N creates."
-          >
+          <Pane title="Volumes" active footer="Up/Down selects. Enter opens.">
             {volumes.length === 0 ? (
               <Text color="gray">
                 No virtual volumes yet. Use Create Volume to start.
@@ -1273,7 +1044,7 @@ export const App = ({ runtime }: { runtime: AppRuntime }): React.JSX.Element => 
                   {renderSelectableRow(
                     `${volume.name}  ${formatBytes(volume.logicalUsedBytes)} / ${formatBytes(volume.quotaBytes)}`,
                     truncate(volume.description || 'No description.', 72),
-                    dashboardFocus === 'volumes' && index === selectedVolumeIndex,
+                    index === selectedVolumeIndex,
                   )}
                 </React.Fragment>
               ))
@@ -1281,11 +1052,7 @@ export const App = ({ runtime }: { runtime: AppRuntime }): React.JSX.Element => 
           </Pane>
         </Box>
         <Box flexGrow={2}>
-          <Pane
-            title="Inspector & Actions"
-            active={dashboardFocus === 'actions'}
-            footer="Tab switches pane. Enter runs selected action."
-          >
+          <Pane title="Inspector" active footer="Actions are direct keyboard shortcuts.">
             {selectedVolume ? (
               <Box flexDirection="column" marginBottom={1}>
                 <Text color="cyanBright">{selectedVolume.name}</Text>
@@ -1306,17 +1073,17 @@ export const App = ({ runtime }: { runtime: AppRuntime }): React.JSX.Element => 
             ) : (
               <Text color="gray">No volume selected.</Text>
             )}
-
-            {DASHBOARD_ACTIONS.map((action, index) => (
-              <React.Fragment key={action.id}>
-                {renderSelectableRow(
-                  action.label,
-                  action.description,
-                  dashboardFocus === 'actions' &&
-                    index === selectedDashboardActionIndex,
-                )}
-              </React.Fragment>
-            ))}
+            <Box marginTop={1} flexDirection="column">
+              <Text color="white">Shortcuts</Text>
+              {renderShortcutRow([
+                'Enter/O open',
+                'N create',
+                'X delete',
+                'R refresh',
+                '? help',
+                'Q quit',
+              ])}
+            </Box>
           </Pane>
         </Box>
       </Box>
@@ -1398,20 +1165,16 @@ export const App = ({ runtime }: { runtime: AppRuntime }): React.JSX.Element => 
         </Text>
         <Box marginTop={1}>
           <Box flexGrow={3} marginRight={1}>
-            <Pane
-              title="Entries"
-              active={explorerFocus === 'entries'}
-              footer="Up/Down select. Enter opens. Backspace goes up."
-            >
-              {deferredEntries.length === 0 ? (
+            <Pane title="Entries" active footer="Up/Down select. Enter opens. Backspace goes up.">
+              {currentEntries.length === 0 ? (
                 <Text color="gray">This directory is empty.</Text>
               ) : (
-                deferredEntries.map((entry, index) => (
+                currentEntries.map((entry, index) => (
                   <React.Fragment key={entry.id}>
                     {renderSelectableRow(
                       `${entry.kind === 'directory' ? '[DIR]' : '[FILE]'} ${truncate(entry.name, 48)}`,
                       `${truncate(entry.path, 60)}  ${entry.kind === 'file' ? formatBytes(entry.size) : 'directory'}  ${formatDateTime(entry.updatedAt)}`,
-                      explorerFocus === 'entries' && index === selectedEntryIndex,
+                      index === selectedEntryIndex,
                     )}
                   </React.Fragment>
                 ))
@@ -1419,23 +1182,22 @@ export const App = ({ runtime }: { runtime: AppRuntime }): React.JSX.Element => 
             </Pane>
           </Box>
           <Box flexGrow={2}>
-            <Pane
-              title="Inspector & Actions"
-              active={explorerFocus === 'actions'}
-              footer="Tab switches pane. C creates, I imports, M moves, D deletes."
-            >
+            <Pane title="Inspector" active footer="Everything here runs via shortcut.">
               {renderEntryInspector(currentSnapshot, selectedEntry)}
               <Box marginTop={1} flexDirection="column">
-                {EXPLORER_ACTIONS.map((action, index) => (
-                  <React.Fragment key={action.id}>
-                    {renderSelectableRow(
-                      action.label,
-                      action.description,
-                      explorerFocus === 'actions' &&
-                        index === selectedExplorerActionIndex,
-                    )}
-                  </React.Fragment>
-                ))}
+                <Text color="white">Shortcuts</Text>
+                {renderShortcutRow([
+                  'Enter open',
+                  'Backspace up',
+                  'C folder',
+                  'I import',
+                  'M move',
+                  'D delete',
+                  'P preview',
+                  'R refresh',
+                  'B/Q dashboard',
+                  '? help',
+                ])}
               </Box>
             </Pane>
           </Box>
@@ -1465,7 +1227,7 @@ export const App = ({ runtime }: { runtime: AppRuntime }): React.JSX.Element => 
             <Text color={getToastColor(toast.tone)}>{toast.message}</Text>
           ) : (
             <Text color="gray">
-              Tab switches pane. Help is always available with ?.
+              Keyboard-first mode enabled. Help is always available with ?.
             </Text>
           )}
           <Text color="gray">

@@ -63,18 +63,17 @@ Guarda `.env.example`.
 
 Dashboard:
 
-- `Tab`: cambia pannello
 - `Up/Down`: cambia selezione
-- `Enter`: apri/esegui
+- `Enter`: apri il volume selezionato
 - `N`: crea volume
 - `O`: apri volume
 - `R`: refresh
 - `X`: elimina volume
 - `?`: help
+- `Q`: esci
 
 Explorer:
 
-- `Tab`: cambia pannello
 - `Up/Down`: cambia selezione
 - `Enter`: entra in cartella o preview file
 - `Backspace`: directory padre
@@ -83,7 +82,8 @@ Explorer:
 - `M`: move/rename
 - `D`: delete
 - `P`: preview
-- `B`: ritorna alla dashboard
+- `B` o `Q`: ritorna alla dashboard
+- `?`: help
 
 ## API Node.js
 
