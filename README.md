@@ -85,6 +85,13 @@ Explorer:
 - `B` o `Q`: ritorna alla dashboard
 - `?`: help
 
+Modali e form:
+
+- `Up/Down`: cambia campo o scorre contenuti quando disponibile
+- `Left/Right`: modifica il testo o cambia scelta nelle conferme
+- `Enter`: conferma
+- `Esc`: chiude/annulla
+
 ## API Node.js
 
 ```ts

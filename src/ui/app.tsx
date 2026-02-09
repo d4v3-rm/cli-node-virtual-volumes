@@ -53,6 +53,20 @@ const clampIndex = (index: number, length: number): number => {
   return Math.max(0, Math.min(index, length - 1));
 };
 
+const cycleSelection = <T extends string>(
+  values: readonly T[],
+  current: T,
+  direction: 1 | -1,
+): T => {
+  const currentIndex = values.indexOf(current);
+  if (currentIndex === -1) {
+    return values[0] ?? current;
+  }
+
+  const nextIndex = (currentIndex + direction + values.length) % values.length;
+  return values[nextIndex] ?? current;
+};
+
 const getErrorMessage = (error: unknown): string => {
   if (isVolumeError(error)) {
     return error.message;
@@ -103,6 +117,38 @@ const FormField = ({ label, active, children }: FormFieldProps): React.JSX.Eleme
   </Box>
 );
 
+const CHOICE_BUTTON_WIDTH = 18;
+
+const ChoiceButton = ({
+  label,
+  active,
+}: {
+  label: string;
+  active: boolean;
+}): React.JSX.Element => (
+  <Box marginRight={1} minWidth={CHOICE_BUTTON_WIDTH}>
+    <Text color={active ? 'black' : 'white'} backgroundColor={active ? 'cyan' : undefined}>
+      {active ? ` ${label} ` : `  ${label}  `}
+    </Text>
+  </Box>
+);
+
+const ScrollableTextBlock = ({
+  lines,
+  offset,
+  maxLines,
+}: {
+  lines: string[];
+  offset: number;
+  maxLines: number;
+}): React.JSX.Element => (
+  <Box flexDirection="column">
+    {lines.slice(offset, offset + maxLines).map((line, index) => (
+      <Text key={`${offset}-${index}-${line.slice(0, 16)}`}>{line}</Text>
+    ))}
+  </Box>
+);
+
 interface CreateVolumeOverlayProps {
   defaultQuotaBytes: number;
   onCancel: () => void;
@@ -118,12 +164,12 @@ const CreateVolumeOverlay = ({
   onCancel,
   onSubmit,
 }: CreateVolumeOverlayProps): React.JSX.Element => {
+  const fieldOrder = ['name', 'quotaBytes', 'description'] as const;
   const [name, setName] = useState('');
   const [quotaBytes, setQuotaBytes] = useState(String(defaultQuotaBytes));
   const [description, setDescription] = useState('');
-  const [activeField, setActiveField] = useState<'name' | 'quotaBytes' | 'description'>(
-    'name',
-  );
+  const [activeField, setActiveField] =
+    useState<(typeof fieldOrder)[number]>('name');
 
   useInput((input, key) => {
     if (key.escape) {
@@ -131,30 +177,15 @@ const CreateVolumeOverlay = ({
       return;
     }
 
-    if (key.tab) {
-      setActiveField((current) => {
-        if (key.shift) {
-          if (current === 'description') {
-            return 'quotaBytes';
-          }
+    if (key.upArrow) {
+      setActiveField((current) => cycleSelection(fieldOrder, current, -1));
+      return;
+    }
 
-          if (current === 'quotaBytes') {
-            return 'name';
-          }
-
-          return 'description';
-        }
-
-        if (current === 'name') {
-          return 'quotaBytes';
-        }
-
-        if (current === 'quotaBytes') {
-          return 'description';
-        }
-
-        return 'name';
-      });
+    if (key.downArrow || key.tab) {
+      setActiveField((current) =>
+        cycleSelection(fieldOrder, current, key.shift ? -1 : 1),
+      );
     }
   });
 
@@ -178,7 +209,7 @@ const CreateVolumeOverlay = ({
     <Pane
       title="Create Volume"
       active
-      footer="Tab switches field. Enter advances. Esc cancels."
+      footer="Up/Down switch field. Left/Right edit text. Enter advances. Esc cancels."
     >
       <Text color="gray">
         Define name, logical quota and an optional description for the new volume.
@@ -263,11 +294,11 @@ const ImportOverlay = ({
   onCancel,
   onSubmit,
 }: ImportOverlayProps): React.JSX.Element => {
+  const fieldOrder = ['hostPaths', 'destinationPath'] as const;
   const [hostPathsInput, setHostPathsInput] = useState('');
   const [targetPath, setTargetPath] = useState(destinationPath);
-  const [activeField, setActiveField] = useState<'hostPaths' | 'destinationPath'>(
-    'hostPaths',
-  );
+  const [activeField, setActiveField] =
+    useState<(typeof fieldOrder)[number]>('hostPaths');
 
   useInput((input, key) => {
     if (key.escape) {
@@ -275,9 +306,14 @@ const ImportOverlay = ({
       return;
     }
 
-    if (key.tab) {
+    if (key.upArrow) {
+      setActiveField((current) => cycleSelection(fieldOrder, current, -1));
+      return;
+    }
+
+    if (key.downArrow || key.tab) {
       setActiveField((current) =>
-        current === 'hostPaths' ? 'destinationPath' : 'hostPaths',
+        cycleSelection(fieldOrder, current, key.shift ? -1 : 1),
       );
     }
   });
@@ -286,7 +322,7 @@ const ImportOverlay = ({
     <Pane
       title="Import Host Paths"
       active
-      footer="Paste files or folders separated by ';' or newline. Esc cancels."
+      footer="Up/Down switch field. Left/Right edit text. Enter advances. Esc cancels."
     >
       <Text color="gray">
         Example:
@@ -334,11 +370,11 @@ const MoveOverlay = ({
   onCancel,
   onSubmit,
 }: MoveOverlayProps): React.JSX.Element => {
+  const fieldOrder = ['destinationPath', 'newName'] as const;
   const [destinationPath, setDestinationPath] = useState(initialDestinationPath);
   const [newName, setNewName] = useState(initialName);
-  const [activeField, setActiveField] = useState<'destinationPath' | 'newName'>(
-    'destinationPath',
-  );
+  const [activeField, setActiveField] =
+    useState<(typeof fieldOrder)[number]>('destinationPath');
 
   useInput((input, key) => {
     if (key.escape) {
@@ -346,9 +382,14 @@ const MoveOverlay = ({
       return;
     }
 
-    if (key.tab) {
+    if (key.upArrow) {
+      setActiveField((current) => cycleSelection(fieldOrder, current, -1));
+      return;
+    }
+
+    if (key.downArrow || key.tab) {
       setActiveField((current) =>
-        current === 'destinationPath' ? 'newName' : 'destinationPath',
+        cycleSelection(fieldOrder, current, key.shift ? -1 : 1),
       );
     }
   });
@@ -357,7 +398,7 @@ const MoveOverlay = ({
     <Pane
       title="Move / Rename"
       active
-      footer="Tab switches field. Enter submits from the last field. Esc cancels."
+      footer="Up/Down switch field. Left/Right edit text. Enter advances. Esc cancels."
     >
       <Text color="gray">Source: {sourcePath}</Text>
       <Box marginTop={1} flexDirection="column">
@@ -399,14 +440,30 @@ const ConfirmOverlay = ({
   onCancel,
   onConfirm,
 }: ConfirmOverlayProps): React.JSX.Element => {
+  const [selectedAction, setSelectedAction] = useState<'confirm' | 'cancel'>('confirm');
+
   useInput((input, key) => {
     if (key.escape || input.toLowerCase() === 'n') {
       onCancel();
       return;
     }
 
+    if (key.leftArrow || key.upArrow) {
+      setSelectedAction('cancel');
+      return;
+    }
+
+    if (key.rightArrow || key.downArrow) {
+      setSelectedAction('confirm');
+      return;
+    }
+
     if (input.toLowerCase() === 'y' || key.return) {
-      onConfirm();
+      if (selectedAction === 'confirm') {
+        onConfirm();
+      } else {
+        onCancel();
+      }
     }
   });
 
@@ -414,9 +471,13 @@ const ConfirmOverlay = ({
     <Pane
       title={title}
       active
-      footer={`Press Y or Enter to ${confirmLabel.toLowerCase()}. N or Esc cancels.`}
+      footer={`Left/Right choose. Enter confirms. Y/N still work. Esc cancels.`}
     >
       <Text>{body}</Text>
+      <Box marginTop={1}>
+        <ChoiceButton label={confirmLabel} active={selectedAction === 'confirm'} />
+        <ChoiceButton label="Cancel" active={selectedAction === 'cancel'} />
+      </Box>
     </Pane>
   );
 };
@@ -430,9 +491,25 @@ const PreviewOverlay = ({
   preview,
   onClose,
 }: PreviewOverlayProps): React.JSX.Element => {
+  const lines = preview.content.split('\n');
+  const maxLines = 12;
+  const [offset, setOffset] = useState(0);
+
   useInput((input, key) => {
     if (key.escape || key.return || input.toLowerCase() === 'q') {
       onClose();
+      return;
+    }
+
+    if (key.upArrow) {
+      setOffset((current) => clampIndex(current - 1, lines.length));
+      return;
+    }
+
+    if (key.downArrow) {
+      setOffset((current) =>
+        clampIndex(current + 1, Math.max(1, lines.length - maxLines + 1)),
+      );
     }
   });
 
@@ -440,7 +517,7 @@ const PreviewOverlay = ({
     <Pane
       title="File Preview"
       active
-      footer="Enter, Q or Esc closes the preview."
+      footer="Up/Down scroll preview. Enter, Q or Esc closes it."
     >
       <Text color="gray">
         {preview.path}
@@ -450,32 +527,57 @@ const PreviewOverlay = ({
         {preview.kind.toUpperCase()}
         {preview.truncated ? '  TRUNCATED' : ''}
       </Text>
-      <Box marginTop={1}>
-        <Text>{preview.content}</Text>
+      <Box marginTop={1} flexDirection="column">
+        <ScrollableTextBlock lines={lines} offset={offset} maxLines={maxLines} />
+        {lines.length > maxLines ? (
+          <Text color="gray">
+            lines {offset + 1}-{Math.min(offset + maxLines, lines.length)} of {lines.length}
+          </Text>
+        ) : null}
       </Box>
     </Pane>
   );
 };
 
 const HelpOverlay = ({ onClose }: { onClose: () => void }): React.JSX.Element => {
+  const helpLines = [
+    'Dashboard keys:',
+    'Up/Down moves selection, Enter opens the selected volume.',
+    'Shortcuts: O open, N create, R refresh, X delete, Q quit.',
+    '',
+    'Explorer keys:',
+    'Up/Down moves selection, Enter opens, Backspace goes up.',
+    'Shortcuts: C create folder, I import, M move, D delete, P preview, B dashboard, R refresh.',
+    '',
+    'Modal keys:',
+    'Up/Down switches fields inside forms.',
+    'Left/Right edits text or chooses confirm/cancel when available.',
+    'Enter confirms, Esc closes the current modal.',
+  ];
+  const maxLines = 10;
+  const [offset, setOffset] = useState(0);
+
   useInput((input, key) => {
     if (key.escape || key.return || input.toLowerCase() === 'q') {
       onClose();
+      return;
+    }
+
+    if (key.upArrow) {
+      setOffset((current) => clampIndex(current - 1, helpLines.length));
+      return;
+    }
+
+    if (key.downArrow) {
+      setOffset((current) =>
+        clampIndex(current + 1, Math.max(1, helpLines.length - maxLines + 1)),
+      );
     }
   });
 
   return (
-    <Pane title="Help" active footer="Enter, Q or Esc closes this help panel.">
-      <Text>Dashboard keys:</Text>
-      <Text color="gray">Up/Down moves selection, Enter opens the selected volume.</Text>
-      <Text color="gray">Shortcuts: O open, N create, R refresh, X delete, Q quit.</Text>
-      <Box marginTop={1} />
-      <Text>Explorer keys:</Text>
-      <Text color="gray">Up/Down moves selection, Enter opens, Backspace goes up.</Text>
-      <Text color="gray">
-        Shortcuts: C create folder, I import, M move, D delete, P preview, B
-        dashboard, R refresh.
-      </Text>
+    <Pane title="Help" active footer="Up/Down scroll help. Enter, Q or Esc closes.">
+      <ScrollableTextBlock lines={helpLines} offset={offset} maxLines={maxLines} />
     </Pane>
   );
 };
