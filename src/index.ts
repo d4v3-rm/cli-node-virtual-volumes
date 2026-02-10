@@ -1,9 +1,7 @@
 import { Command } from 'commander';
-import React from 'react';
-import { render } from 'ink';
 
 import { createRuntime } from './bootstrap/create-runtime.js';
-import { App } from './ui/app.js';
+import { TerminalApp } from './ui/terminal-app.js';
 
 const main = async (): Promise<void> => {
   const program = new Command()
@@ -11,15 +9,10 @@ const main = async (): Promise<void> => {
     .description('Node-only virtual volumes with a rich terminal UI.')
     .option('--data-dir <path>', 'Override the application data directory')
     .option('--log-dir <path>', 'Override the log output directory')
-    .option(
-      '--log-level <level>',
-      'Override the log level',
-      'info',
-    )
+    .option('--log-level <level>', 'Override the log level')
     .option(
       '--stdout-logs',
-      'Mirror logs to stdout as well as the filesystem log file',
-      false,
+      'Mirror logs to the terminal stream (not recommended while the fullscreen UI is active)',
     );
 
   await program.parseAsync(process.argv);
@@ -30,16 +23,18 @@ const main = async (): Promise<void> => {
     logLevel?: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
     stdoutLogs?: boolean;
   }>();
+  const logLevelSource = program.getOptionValueSource('logLevel');
+  const stdoutLogsSource = program.getOptionValueSource('stdoutLogs');
 
   const runtime = await createRuntime({
     dataDir: options.dataDir,
     logDir: options.logDir,
-    logLevel: options.logLevel,
-    logToStdout: options.stdoutLogs,
+    logLevel: logLevelSource === 'cli' ? options.logLevel : undefined,
+    logToStdout: stdoutLogsSource === 'cli' ? options.stdoutLogs : undefined,
   });
 
-  const app = render(<App runtime={runtime} />);
-  await app.waitUntilExit();
+  const app = new TerminalApp(runtime);
+  await app.start();
 };
 
 void main().catch((error: unknown) => {

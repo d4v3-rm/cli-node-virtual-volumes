@@ -58,8 +58,16 @@ export interface ExplorerSnapshot {
   currentPath: string;
   breadcrumbs: string[];
   entries: DirectoryListingItem[];
+  totalEntries: number;
+  windowOffset: number;
+  windowSize: number;
   usageBytes: number;
   remainingBytes: number;
+}
+
+export interface ExplorerSnapshotOptions {
+  offset?: number;
+  limit?: number;
 }
 
 export interface ImportSummary {
@@ -67,6 +75,12 @@ export interface ImportSummary {
   directoriesImported: number;
   bytesImported: number;
   conflictsResolved: number;
+}
+
+export interface ImportProgress {
+  currentHostPath: string;
+  phase: 'file' | 'directory';
+  summary: ImportSummary;
 }
 
 export interface FilePreview {
@@ -86,6 +100,7 @@ export interface CreateVolumeInput {
 export interface ImportHostPathsInput {
   destinationPath: string;
   hostPaths: string[];
+  onProgress?: (progress: ImportProgress) => Promise<void> | void;
 }
 
 export interface MoveEntryInput {

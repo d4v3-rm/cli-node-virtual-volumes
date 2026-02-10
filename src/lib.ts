@@ -8,6 +8,8 @@ export type {
   CreateVolumeInput,
   DirectoryListingItem,
   ExplorerSnapshot,
+  ExplorerSnapshotOptions,
+  ImportProgress,
   FilePreview,
   ImportHostPathsInput,
   ImportSummary,

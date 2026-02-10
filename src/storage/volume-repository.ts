@@ -24,7 +24,13 @@ interface RepositoryConfig {
   dataDir: string;
 }
 
+interface LoadVolumeOptions {
+  preferCache?: boolean;
+}
+
 export class VolumeRepository {
+  private readonly volumeCache = new Map<string, VolumeRecord>();
+
   public constructor(
     private readonly config: RepositoryConfig,
     private readonly logger: Logger,
@@ -110,7 +116,17 @@ export class VolumeRepository {
     return record;
   }
 
-  public async loadVolume(volumeId: string): Promise<VolumeRecord> {
+  public async loadVolume(
+    volumeId: string,
+    options: LoadVolumeOptions = {},
+  ): Promise<VolumeRecord> {
+    if (options.preferCache) {
+      const cachedRecord = this.volumeCache.get(volumeId);
+      if (cachedRecord) {
+        return cachedRecord;
+      }
+    }
+
     const manifestPath = path.join(this.getVolumeDirectory(volumeId), 'manifest.json');
     const statePath = path.join(this.getVolumeDirectory(volumeId), 'state.json');
 
@@ -125,7 +141,12 @@ export class VolumeRepository {
       readJsonFile<VolumeState>(statePath),
     ]);
 
-    return { manifest, state };
+    const record = { manifest, state };
+    if (options.preferCache) {
+      this.volumeCache.set(volumeId, record);
+    }
+
+    return record;
   }
 
   public async saveVolume(record: VolumeRecord): Promise<void> {
@@ -143,6 +164,8 @@ export class VolumeRepository {
       writeJsonAtomic(statePath, record.state),
     ]);
 
+    this.volumeCache.set(record.manifest.id, record);
+
     this.logger.debug(
       {
         volumeId: record.manifest.id,
@@ -156,6 +179,7 @@ export class VolumeRepository {
   public async deleteVolume(volumeId: string): Promise<void> {
     const targetDirectory = this.getVolumeDirectory(volumeId);
     await fs.rm(targetDirectory, { recursive: true, force: true });
+    this.volumeCache.delete(volumeId);
     this.logger.info({ volumeId }, 'Volume deleted.');
   }
 

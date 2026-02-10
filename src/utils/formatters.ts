@@ -1,3 +1,8 @@
+const dateTimeFormatter = new Intl.DateTimeFormat('it-IT', {
+  dateStyle: 'short',
+  timeStyle: 'short',
+});
+
 export const formatBytes = (value: number): string => {
   if (value < 1024) {
     return `${value} B`;
@@ -16,10 +21,7 @@ export const formatBytes = (value: number): string => {
 };
 
 export const formatDateTime = (value: string): string =>
-  new Intl.DateTimeFormat('it-IT', {
-    dateStyle: 'short',
-    timeStyle: 'short',
-  }).format(new Date(value));
+  dateTimeFormatter.format(new Date(value));
 
 export const truncate = (value: string, maxLength: number): string =>
   value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`;

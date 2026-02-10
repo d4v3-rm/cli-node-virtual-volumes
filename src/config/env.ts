@@ -15,6 +15,31 @@ const emptyStringToUndefined = (value: unknown): unknown => {
   return trimmed.length === 0 ? undefined : trimmed;
 };
 
+const booleanStringToValue = (value: unknown): unknown => {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized.length === 0) {
+    return undefined;
+  }
+
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+
+  return value;
+};
+
 const envSchema = z.object({
   VOLUME_DATA_DIR: z.preprocess(emptyStringToUndefined, z.string().optional()),
   VOLUME_LOG_DIR: z.preprocess(emptyStringToUndefined, z.string().optional()),
@@ -27,8 +52,8 @@ const envSchema = z.object({
     z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   ),
   VOLUME_LOG_TO_STDOUT: z.preprocess(
-    emptyStringToUndefined,
-    z.coerce.boolean().default(false),
+    booleanStringToValue,
+    z.boolean().default(false),
   ),
   VOLUME_PREVIEW_BYTES: z.preprocess(
     emptyStringToUndefined,
@@ -60,7 +85,7 @@ export const loadAppConfig = (
   overrides: RuntimeOverrides = {},
   inputEnvironment: NodeJS.ProcessEnv = process.env,
 ): AppConfig => {
-  loadDotEnv();
+  loadDotEnv({ quiet: true });
 
   const parsed = envSchema.parse({
     ...inputEnvironment,

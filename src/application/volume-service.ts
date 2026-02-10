@@ -11,9 +11,11 @@ import type {
   DirectoryEntry,
   DirectoryListingItem,
   ExplorerSnapshot,
+  ExplorerSnapshotOptions,
   FileEntry,
   FilePreview,
   ImportHostPathsInput,
+  ImportProgress,
   ImportSummary,
   MoveEntryInput,
   VolumeEntry,
@@ -34,6 +36,11 @@ import {
 interface ServiceConfig {
   defaultQuotaBytes: AppConfig['defaultQuotaBytes'];
   previewBytes: AppConfig['previewBytes'];
+}
+
+interface ImportTraversalContext {
+  processedNodes: number;
+  onProgress?: ImportHostPathsInput['onProgress'];
 }
 
 export class VolumeService {
@@ -69,14 +76,26 @@ export class VolumeService {
   public async getExplorerSnapshot(
     volumeId: string,
     currentPath = '/',
+    options: ExplorerSnapshotOptions = {},
   ): Promise<ExplorerSnapshot> {
     const record = await this.repository.loadVolume(volumeId);
     const directory = this.requireDirectoryByPath(record.state, currentPath);
 
-    const entries = directory.childIds
+    const sortedEntries = directory.childIds
       .map((childId) => record.state.entries[childId])
       .filter((entry): entry is VolumeEntry => entry !== undefined)
-      .sort((left, right) => this.sortEntries(left, right))
+      .sort((left, right) => this.sortEntries(left, right));
+
+    const totalEntries = sortedEntries.length;
+    const requestedOffset = Math.max(0, options.offset ?? 0);
+    const windowSize =
+      options.limit === undefined ? totalEntries : Math.max(1, options.limit);
+    const windowOffset = Math.min(
+      requestedOffset,
+      Math.max(0, totalEntries - windowSize),
+    );
+    const entries = sortedEntries
+      .slice(windowOffset, windowOffset + windowSize)
       .map((entry) => this.toDirectoryListingItem(record.state, entry));
 
     return {
@@ -84,6 +103,9 @@ export class VolumeService {
       currentPath: normalizeVirtualPath(currentPath),
       breadcrumbs: ['/', ...getPathSegments(currentPath)],
       entries,
+      totalEntries,
+      windowOffset,
+      windowSize,
       usageBytes: record.manifest.logicalUsedBytes,
       remainingBytes: Math.max(
         0,
@@ -147,6 +169,10 @@ export class VolumeService {
       bytesImported: 0,
       conflictsResolved: 0,
     };
+    const traversalContext: ImportTraversalContext = {
+      processedNodes: 0,
+      onProgress: input.onProgress,
+    };
 
     for (const rawHostPath of input.hostPaths) {
       const absoluteHostPath = path.resolve(rawHostPath);
@@ -156,6 +182,7 @@ export class VolumeService {
         absoluteHostPath,
         destinationDirectory.id,
         summary,
+        traversalContext,
       );
     }
 
@@ -245,6 +272,11 @@ export class VolumeService {
     const targetEntry = this.requireEntryByPath(record.state, normalizedPath);
     const parentDirectory = this.requireDirectoryById(record.state, targetEntry.parentId);
     const idsToDelete = this.collectDescendantIds(record.state, targetEntry.id);
+    const contentRefsToDelete = this.collectContentRefs(record.state, idsToDelete);
+    const blobStore = new BlobStore(
+      this.repository.getVolumeDirectory(volumeId),
+      this.logger.child({ scope: 'blob-store', volumeId }),
+    );
 
     parentDirectory.childIds = parentDirectory.childIds.filter(
       (childId) => childId !== targetEntry.id,
@@ -256,6 +288,7 @@ export class VolumeService {
     }
 
     await this.repository.saveVolume(record);
+    await this.deleteOrphanedBlobs(blobStore, record.state, contentRefsToDelete);
     this.logger.info(
       { volumeId, targetPath: normalizedPath, deletedEntries: idsToDelete.length },
       'Entry deleted.',
@@ -320,11 +353,16 @@ export class VolumeService {
 
     const descriptor = await blobStore.putBuffer(Buffer.from(content, 'utf8'));
     const now = new Date().toISOString();
+    const staleContentRefs: string[] = [];
 
     if (existing?.kind === 'file') {
       const projectedUsage =
         record.manifest.logicalUsedBytes - existing.size + descriptor.size;
       this.ensureWithinQuota(record, projectedUsage);
+
+      if (existing.contentRef !== descriptor.contentRef) {
+        staleContentRefs.push(existing.contentRef);
+      }
 
       existing.contentRef = descriptor.contentRef;
       existing.size = descriptor.size;
@@ -354,6 +392,7 @@ export class VolumeService {
     }
 
     await this.repository.saveVolume(record);
+    await this.deleteOrphanedBlobs(blobStore, record.state, staleContentRefs);
     this.logger.info({ volumeId, filePath: normalizedPath }, 'Text file written.');
   }
 
@@ -363,6 +402,7 @@ export class VolumeService {
     absoluteHostPath: string,
     destinationDirectoryId: string,
     summary: ImportSummary,
+    traversalContext: ImportTraversalContext,
   ): Promise<void> {
     const hostEntryStats = await fs.lstat(absoluteHostPath);
 
@@ -391,6 +431,12 @@ export class VolumeService {
         directoryName,
       );
       summary.directoriesImported += 1;
+      await this.reportImportProgress(
+        traversalContext,
+        absoluteHostPath,
+        'directory',
+        summary,
+      );
 
       const childNames = await fs.readdir(absoluteHostPath);
       childNames.sort((left, right) => left.localeCompare(right));
@@ -402,6 +448,7 @@ export class VolumeService {
           path.join(absoluteHostPath, childName),
           directoryEntry.id,
           summary,
+          traversalContext,
         );
       }
 
@@ -438,6 +485,12 @@ export class VolumeService {
 
       summary.filesImported += 1;
       summary.bytesImported += descriptor.size;
+      await this.reportImportProgress(
+        traversalContext,
+        absoluteHostPath,
+        'file',
+        summary,
+      );
       return;
     }
 
@@ -696,6 +749,72 @@ export class VolumeService {
         `Volume quota exceeded. Projected usage ${projectedUsage} bytes exceeds ${record.manifest.quotaBytes} bytes.`,
       );
     }
+  }
+
+  private async deleteOrphanedBlobs(
+    blobStore: BlobStore,
+    state: VolumeState,
+    candidateContentRefs: string[],
+  ): Promise<void> {
+    if (candidateContentRefs.length === 0) {
+      return;
+    }
+
+    const referencedContentRefs = this.getReferencedContentRefs(state);
+
+    for (const contentRef of new Set(candidateContentRefs)) {
+      if (referencedContentRefs.has(contentRef)) {
+        continue;
+      }
+
+      await blobStore.deleteBlob(contentRef);
+    }
+  }
+
+  private collectContentRefs(state: VolumeState, entryIds: string[]): string[] {
+    return entryIds.flatMap((entryId) => {
+      const entry = state.entries[entryId];
+      if (entry?.kind !== 'file') {
+        return [];
+      }
+
+      return [entry.contentRef];
+    });
+  }
+
+  private getReferencedContentRefs(state: VolumeState): Set<string> {
+    return new Set(
+      Object.values(state.entries).flatMap((entry) =>
+        entry.kind === 'file' ? [entry.contentRef] : [],
+      ),
+    );
+  }
+
+  private async reportImportProgress(
+    context: ImportTraversalContext,
+    currentHostPath: string,
+    phase: ImportProgress['phase'],
+    summary: ImportSummary,
+  ): Promise<void> {
+    context.processedNodes += 1;
+
+    if (context.onProgress) {
+      await context.onProgress({
+        currentHostPath,
+        phase,
+        summary: { ...summary },
+      });
+    }
+
+    if (context.processedNodes % 25 === 0) {
+      await this.yieldToEventLoop();
+    }
+  }
+
+  private async yieldToEventLoop(): Promise<void> {
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
   }
 
   private looksLikeText(buffer: Buffer): boolean {

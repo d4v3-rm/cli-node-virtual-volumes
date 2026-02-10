@@ -98,6 +98,13 @@ export class BlobStore {
     }
   }
 
+  public async deleteBlob(contentRef: string): Promise<void> {
+    const blobPath = this.getBlobPath(contentRef);
+    await fs.rm(blobPath, { force: true });
+    await this.pruneEmptyBlobDirectories(path.dirname(blobPath));
+    this.logger.debug({ contentRef }, 'Blob deleted.');
+  }
+
   private getBlobPath(contentRef: string): string {
     return path.join(
       this.volumeDirectory,
@@ -105,5 +112,20 @@ export class BlobStore {
       contentRef.slice(0, 2),
       contentRef.slice(2),
     );
+  }
+
+  private async pruneEmptyBlobDirectories(directoryPath: string): Promise<void> {
+    const blobsRoot = path.join(this.volumeDirectory, 'blobs');
+    let currentDirectory = directoryPath;
+
+    while (currentDirectory.startsWith(blobsRoot) && currentDirectory !== blobsRoot) {
+      const entries = await fs.readdir(currentDirectory).catch(() => null);
+      if (entries === null || entries.length > 0) {
+        return;
+      }
+
+      await fs.rmdir(currentDirectory).catch(() => undefined);
+      currentDirectory = path.dirname(currentDirectory);
+    }
   }
 }
