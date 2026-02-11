@@ -20,6 +20,23 @@ const createIsolatedRuntime = async () => {
   });
 };
 
+const collectFilesRecursively = async (rootPath: string): Promise<string[]> => {
+  const entries = await fs.readdir(rootPath, { withFileTypes: true }).catch(() => []);
+  let files: string[] = [];
+
+  for (const entry of entries) {
+    const absolutePath = path.join(rootPath, entry.name);
+    if (entry.isDirectory()) {
+      files = files.concat(await collectFilesRecursively(absolutePath));
+      continue;
+    }
+
+    files.push(absolutePath);
+  }
+
+  return files;
+};
+
 afterEach(async () => {
   await Promise.all(
     sandboxes.splice(0, sandboxes.length).map((sandboxRoot) =>
@@ -65,6 +82,19 @@ describe('VolumeService', () => {
     expect(snapshot.entries[0]?.name).toBe('todo.txt');
   });
 
+  it('removes orphaned blobs after overwriting and deleting files', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Blob Cleanup' });
+    const blobsRoot = path.join(runtime.config.dataDir, 'volumes', volume.id, 'blobs');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/cleanup.txt', 'one');
+    await runtime.volumeService.writeTextFile(volume.id, '/cleanup.txt', 'two');
+    await runtime.volumeService.deleteEntry(volume.id, '/cleanup.txt');
+
+    const blobFiles = await collectFilesRecursively(blobsRoot);
+    expect(blobFiles).toHaveLength(0);
+  });
+
   it('imports host files and directories in batch and resolves name conflicts', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Imports' });
@@ -101,6 +131,47 @@ describe('VolumeService', () => {
     ]);
   });
 
+  it('reports import progress while host paths are being ingested', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Progress Import' });
+    const hostRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-progress-'));
+    sandboxes.push(hostRoot);
+
+    await fs.mkdir(path.join(hostRoot, 'batch'), { recursive: true });
+    await fs.writeFile(path.join(hostRoot, 'batch', 'one.txt'), 'one');
+    await fs.writeFile(path.join(hostRoot, 'batch', 'two.txt'), 'two');
+
+    const progressEvents: {
+      phase: 'file' | 'directory';
+      currentHostPath: string;
+      filesImported: number;
+      directoriesImported: number;
+    }[] = [];
+
+    await runtime.volumeService.importHostPaths(volume.id, {
+      destinationPath: '/',
+      hostPaths: [path.join(hostRoot, 'batch')],
+      onProgress: (progress) => {
+        progressEvents.push({
+          phase: progress.phase,
+          currentHostPath: progress.currentHostPath,
+          filesImported: progress.summary.filesImported,
+          directoriesImported: progress.summary.directoriesImported,
+        });
+      },
+    });
+
+    expect(progressEvents[0]).toMatchObject({
+      phase: 'directory',
+      directoriesImported: 1,
+    });
+    expect(progressEvents.some((event) => event.phase === 'file')).toBe(true);
+    expect(progressEvents.at(-1)).toMatchObject({
+      filesImported: 2,
+      directoriesImported: 1,
+    });
+  });
+
   it('prevents moving a directory into one of its descendants', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Move Guard' });
@@ -116,6 +187,63 @@ describe('VolumeService', () => {
     ).rejects.toMatchObject({
       code: 'INVALID_OPERATION',
     });
+  });
+
+  it('returns paged explorer snapshots for large directories', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Paged Explorer' });
+
+    for (let index = 0; index < 24; index += 1) {
+      await runtime.volumeService.createDirectory(
+        volume.id,
+        '/',
+        `dir-${String(index).padStart(2, '0')}`,
+      );
+    }
+
+    const snapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/', {
+      offset: 12,
+      limit: 5,
+    });
+
+    expect(snapshot.totalEntries).toBe(24);
+    expect(snapshot.windowOffset).toBe(12);
+    expect(snapshot.windowSize).toBe(5);
+    expect(snapshot.entries.map((entry) => entry.name)).toEqual([
+      'dir-12',
+      'dir-13',
+      'dir-14',
+      'dir-15',
+      'dir-16',
+    ]);
+  });
+
+  it('reads fresh explorer snapshots across runtimes sharing the same data directory', async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-shared-'));
+    sandboxes.push(sandboxRoot);
+
+    const sharedDataDir = path.join(sandboxRoot, 'data');
+    const runtimeA = await createRuntime({
+      dataDir: sharedDataDir,
+      logDir: path.join(sandboxRoot, 'logs-a'),
+      logLevel: 'silent',
+      logToStdout: false,
+    });
+    const runtimeB = await createRuntime({
+      dataDir: sharedDataDir,
+      logDir: path.join(sandboxRoot, 'logs-b'),
+      logLevel: 'silent',
+      logToStdout: false,
+    });
+
+    const volume = await runtimeA.volumeService.createVolume({ name: 'Shared View' });
+
+    const before = await runtimeA.volumeService.getExplorerSnapshot(volume.id, '/');
+    await runtimeB.volumeService.createDirectory(volume.id, '/', 'external');
+    const after = await runtimeA.volumeService.getExplorerSnapshot(volume.id, '/');
+
+    expect(before.entries).toHaveLength(0);
+    expect(after.entries.map((entry) => entry.name)).toEqual(['external']);
   });
 
   it('deletes directory subtrees recursively', async () => {
