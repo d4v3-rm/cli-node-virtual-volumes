@@ -10,6 +10,9 @@ import type {
   CreateVolumeInput,
   DirectoryEntry,
   DirectoryListingItem,
+  ExportProgress,
+  ExportSummary,
+  ExportVolumeEntryInput,
   ExplorerSnapshot,
   ExplorerSnapshotOptions,
   FileEntry,
@@ -41,6 +44,11 @@ interface ServiceConfig {
 interface ImportTraversalContext {
   processedNodes: number;
   onProgress?: ImportHostPathsInput['onProgress'];
+}
+
+interface ExportTraversalContext {
+  processedNodes: number;
+  onProgress?: ExportVolumeEntryInput['onProgress'];
 }
 
 export class VolumeService {
@@ -190,6 +198,76 @@ export class VolumeService {
     this.logger.info(
       { volumeId, destinationPath: input.destinationPath, summary },
       'Host paths imported.',
+    );
+
+    return summary;
+  }
+
+  public async exportEntryToHost(
+    volumeId: string,
+    input: ExportVolumeEntryInput,
+  ): Promise<ExportSummary> {
+    const record = await this.repository.loadVolume(volumeId);
+    const normalizedSourcePath = normalizeVirtualPath(input.sourcePath);
+    const destinationHostDirectory = path.resolve(input.destinationHostDirectory);
+    const destinationStats = await fs.stat(destinationHostDirectory).catch(() => null);
+
+    if (destinationStats && !destinationStats.isDirectory()) {
+      throw new VolumeError(
+        'INVALID_OPERATION',
+        `The host destination must be a directory: ${destinationHostDirectory}`,
+      );
+    }
+
+    await fs.mkdir(destinationHostDirectory, { recursive: true });
+
+    const blobStore = new BlobStore(
+      this.repository.getVolumeDirectory(volumeId),
+      this.logger.child({ scope: 'blob-store', volumeId }),
+    );
+    const summary: ExportSummary = {
+      filesExported: 0,
+      directoriesExported: 0,
+      bytesExported: 0,
+      conflictsResolved: 0,
+    };
+    const traversalContext: ExportTraversalContext = {
+      processedNodes: 0,
+      onProgress: input.onProgress,
+    };
+
+    if (normalizedSourcePath === '/') {
+      const rootDirectory = this.requireDirectoryById(record.state, record.state.rootId);
+      const childEntries = rootDirectory.childIds
+        .map((childId) => record.state.entries[childId])
+        .filter((entry): entry is VolumeEntry => entry !== undefined)
+        .sort((left, right) => this.sortEntries(left, right));
+
+      for (const childEntry of childEntries) {
+        await this.exportEntry(
+          record.state,
+          blobStore,
+          childEntry,
+          destinationHostDirectory,
+          summary,
+          traversalContext,
+        );
+      }
+    } else {
+      const sourceEntry = this.requireEntryByPath(record.state, normalizedSourcePath);
+      await this.exportEntry(
+        record.state,
+        blobStore,
+        sourceEntry,
+        destinationHostDirectory,
+        summary,
+        traversalContext,
+      );
+    }
+
+    this.logger.info(
+      { volumeId, sourcePath: normalizedSourcePath, destinationHostDirectory, summary },
+      'Virtual entry exported to host.',
     );
 
     return summary;
@@ -436,6 +514,8 @@ export class VolumeService {
         absoluteHostPath,
         'directory',
         summary,
+        0,
+        null,
       );
 
       const childNames = await fs.readdir(absoluteHostPath);
@@ -472,7 +552,19 @@ export class VolumeService {
         record.manifest.logicalUsedBytes + summary.bytesImported + hostEntryStats.size,
       );
 
-      const descriptor = await blobStore.putHostFile(absoluteHostPath);
+      const descriptor = await blobStore.putHostFile(absoluteHostPath, {
+        totalBytes: hostEntryStats.size,
+        onProgress: ({ bytesTransferred, totalBytes }) => {
+          this.emitImportProgress(
+            traversalContext,
+            absoluteHostPath,
+            'file',
+            summary,
+            bytesTransferred,
+            totalBytes,
+          );
+        },
+      });
 
       this.createFileEntry(
         record.state,
@@ -490,6 +582,8 @@ export class VolumeService {
         absoluteHostPath,
         'file',
         summary,
+        descriptor.size,
+        descriptor.size,
       );
       return;
     }
@@ -497,6 +591,94 @@ export class VolumeService {
     throw new VolumeError(
       'UNSUPPORTED_HOST_ENTRY',
       `Unsupported host entry type: ${absoluteHostPath}`,
+    );
+  }
+
+  private async exportEntry(
+    state: VolumeState,
+    blobStore: BlobStore,
+    entry: VolumeEntry,
+    destinationHostDirectory: string,
+    summary: ExportSummary,
+    traversalContext: ExportTraversalContext,
+  ): Promise<void> {
+    const sourceVirtualPath = this.getPathForEntry(state, entry.id);
+
+    if (entry.kind === 'directory') {
+      const destinationDirectoryPath = await this.resolveAvailableHostPath(
+        destinationHostDirectory,
+        entry.name,
+      );
+
+      if (path.basename(destinationDirectoryPath) !== entry.name) {
+        summary.conflictsResolved += 1;
+      }
+
+      await fs.mkdir(destinationDirectoryPath, { recursive: false });
+      summary.directoriesExported += 1;
+      await this.reportExportProgress(
+        traversalContext,
+        sourceVirtualPath,
+        destinationDirectoryPath,
+        'directory',
+        summary,
+        0,
+        null,
+      );
+
+      const childEntries = entry.childIds
+        .map((childId) => state.entries[childId])
+        .filter((childEntry): childEntry is VolumeEntry => childEntry !== undefined)
+        .sort((left, right) => this.sortEntries(left, right));
+
+      for (const childEntry of childEntries) {
+        await this.exportEntry(
+          state,
+          blobStore,
+          childEntry,
+          destinationDirectoryPath,
+          summary,
+          traversalContext,
+        );
+      }
+
+      return;
+    }
+
+    const destinationFilePath = await this.resolveAvailableHostPath(
+      destinationHostDirectory,
+      entry.name,
+    );
+
+    if (path.basename(destinationFilePath) !== entry.name) {
+      summary.conflictsResolved += 1;
+    }
+
+    await blobStore.exportBlobToHost(entry.contentRef, destinationFilePath, {
+      totalBytes: entry.size,
+      onProgress: ({ bytesTransferred, totalBytes }) => {
+        this.emitExportProgress(
+          traversalContext,
+          sourceVirtualPath,
+          destinationFilePath,
+          'file',
+          summary,
+          bytesTransferred,
+          totalBytes,
+        );
+      },
+    });
+
+    summary.filesExported += 1;
+    summary.bytesExported += entry.size;
+    await this.reportExportProgress(
+      traversalContext,
+      sourceVirtualPath,
+      destinationFilePath,
+      'file',
+      summary,
+      entry.size,
+      entry.size,
     );
   }
 
@@ -720,6 +902,31 @@ export class VolumeService {
     }
   }
 
+  private async resolveAvailableHostPath(
+    parentDirectory: string,
+    preferredName: string,
+  ): Promise<string> {
+    const sanitizedName = assertValidEntryName(preferredName);
+    let candidatePath = path.join(parentDirectory, sanitizedName);
+
+    if (!(await this.hostPathExists(candidatePath))) {
+      return candidatePath;
+    }
+
+    const extension = path.extname(sanitizedName);
+    const baseName = sanitizedName.slice(0, sanitizedName.length - extension.length);
+    let attempt = 2;
+
+    while (true) {
+      candidatePath = path.join(parentDirectory, `${baseName} (${attempt})${extension}`);
+      if (!(await this.hostPathExists(candidatePath))) {
+        return candidatePath;
+      }
+
+      attempt += 1;
+    }
+  }
+
   private sortEntries(left: VolumeEntry, right: VolumeEntry): number {
     if (left.kind !== right.kind) {
       return left.kind === 'directory' ? -1 : 1;
@@ -795,6 +1002,8 @@ export class VolumeService {
     currentHostPath: string,
     phase: ImportProgress['phase'],
     summary: ImportSummary,
+    currentBytes: number,
+    currentTotalBytes: number | null,
   ): Promise<void> {
     context.processedNodes += 1;
 
@@ -803,11 +1012,93 @@ export class VolumeService {
         currentHostPath,
         phase,
         summary: { ...summary },
+        currentBytes,
+        currentTotalBytes,
       });
     }
 
     if (context.processedNodes % 25 === 0) {
       await this.yieldToEventLoop();
+    }
+  }
+
+  private emitImportProgress(
+    context: ImportTraversalContext,
+    currentHostPath: string,
+    phase: ImportProgress['phase'],
+    summary: ImportSummary,
+    currentBytes: number,
+    currentTotalBytes: number | null,
+  ): void {
+    if (!context.onProgress) {
+      return;
+    }
+
+    void context.onProgress({
+      currentHostPath,
+      phase,
+      summary: { ...summary },
+      currentBytes,
+      currentTotalBytes,
+    });
+  }
+
+  private async reportExportProgress(
+    context: ExportTraversalContext,
+    currentVirtualPath: string,
+    destinationHostPath: string,
+    phase: ExportProgress['phase'],
+    summary: ExportSummary,
+    currentBytes: number,
+    currentTotalBytes: number | null,
+  ): Promise<void> {
+    context.processedNodes += 1;
+
+    if (context.onProgress) {
+      await context.onProgress({
+        currentVirtualPath,
+        destinationHostPath,
+        phase,
+        summary: { ...summary },
+        currentBytes,
+        currentTotalBytes,
+      });
+    }
+
+    if (context.processedNodes % 25 === 0) {
+      await this.yieldToEventLoop();
+    }
+  }
+
+  private emitExportProgress(
+    context: ExportTraversalContext,
+    currentVirtualPath: string,
+    destinationHostPath: string,
+    phase: ExportProgress['phase'],
+    summary: ExportSummary,
+    currentBytes: number,
+    currentTotalBytes: number | null,
+  ): void {
+    if (!context.onProgress) {
+      return;
+    }
+
+    void context.onProgress({
+      currentVirtualPath,
+      destinationHostPath,
+      phase,
+      summary: { ...summary },
+      currentBytes,
+      currentTotalBytes,
+    });
+  }
+
+  private async hostPathExists(targetPath: string): Promise<boolean> {
+    try {
+      await fs.access(targetPath);
+      return true;
+    } catch {
+      return false;
     }
   }
 

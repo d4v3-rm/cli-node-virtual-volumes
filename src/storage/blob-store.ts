@@ -14,13 +14,26 @@ export interface StoredBlobDescriptor {
   size: number;
 }
 
+interface BlobTransferProgress {
+  bytesTransferred: number;
+  totalBytes: number;
+}
+
+interface BlobTransferOptions {
+  totalBytes?: number;
+  onProgress?: (progress: BlobTransferProgress) => Promise<void> | void;
+}
+
 export class BlobStore {
   public constructor(
     private readonly volumeDirectory: string,
     private readonly logger: Logger,
   ) {}
 
-  public async putHostFile(hostPath: string): Promise<StoredBlobDescriptor> {
+  public async putHostFile(
+    hostPath: string,
+    options: BlobTransferOptions = {},
+  ): Promise<StoredBlobDescriptor> {
     const temporaryDirectory = path.join(this.volumeDirectory, 'tmp');
     await ensureDirectory(temporaryDirectory);
 
@@ -37,6 +50,12 @@ export class BlobStore {
         const bufferChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         size += bufferChunk.byteLength;
         hash.update(bufferChunk);
+        if (options.onProgress) {
+          void options.onProgress({
+            bytesTransferred: size,
+            totalBytes: options.totalBytes ?? size,
+          });
+        }
         callback(null, bufferChunk);
       },
     });
@@ -61,6 +80,57 @@ export class BlobStore {
     this.logger.debug({ contentRef, hostPath, size }, 'Blob stored from host file.');
 
     return { contentRef, size };
+  }
+
+  public async exportBlobToHost(
+    contentRef: string,
+    destinationPath: string,
+    options: BlobTransferOptions = {},
+  ): Promise<number> {
+    const blobPath = this.getBlobPath(contentRef);
+    const totalBytes =
+      options.totalBytes ?? (await fs.stat(blobPath)).size;
+    const destinationDirectory = path.dirname(destinationPath);
+    const temporaryPath = path.join(
+      destinationDirectory,
+      `${path.basename(destinationPath)}.${process.pid}.${Date.now()}.tmp`,
+    );
+    let bytesTransferred = 0;
+
+    await ensureDirectory(destinationDirectory);
+
+    const meteredTransform = new Transform({
+      transform(chunk, _encoding, callback) {
+        const bufferChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        bytesTransferred += bufferChunk.byteLength;
+        if (options.onProgress) {
+          void options.onProgress({
+            bytesTransferred,
+            totalBytes,
+          });
+        }
+        callback(null, bufferChunk);
+      },
+    });
+
+    try {
+      await pipeline(
+        createReadStream(blobPath),
+        meteredTransform,
+        createWriteStream(temporaryPath),
+      );
+      await fs.rename(temporaryPath, destinationPath);
+    } catch (error) {
+      await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+      throw error;
+    }
+
+    this.logger.debug(
+      { contentRef, destinationPath, size: totalBytes },
+      'Blob exported to host file.',
+    );
+
+    return totalBytes;
   }
 
   public async putBuffer(buffer: Buffer): Promise<StoredBlobDescriptor> {

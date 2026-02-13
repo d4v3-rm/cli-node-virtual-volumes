@@ -172,6 +172,99 @@ describe('VolumeService', () => {
     });
   });
 
+  it('exports virtual files and directories to the host and resolves name conflicts', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Exports' });
+    const hostRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-export-'));
+    sandboxes.push(hostRoot);
+
+    await runtime.volumeService.createDirectory(volume.id, '/', 'docs');
+    await runtime.volumeService.writeTextFile(volume.id, '/docs/readme.txt', 'documentation');
+    await runtime.volumeService.writeTextFile(volume.id, '/alpha.txt', 'alpha');
+
+    await fs.mkdir(path.join(hostRoot, 'docs'), { recursive: true });
+    await fs.writeFile(path.join(hostRoot, 'alpha.txt'), 'existing');
+
+    const directorySummary = await runtime.volumeService.exportEntryToHost(volume.id, {
+      sourcePath: '/docs',
+      destinationHostDirectory: hostRoot,
+    });
+    const fileSummary = await runtime.volumeService.exportEntryToHost(volume.id, {
+      sourcePath: '/alpha.txt',
+      destinationHostDirectory: hostRoot,
+    });
+
+    expect(directorySummary).toMatchObject({
+      directoriesExported: 1,
+      filesExported: 1,
+      conflictsResolved: 1,
+    });
+    expect(fileSummary).toMatchObject({
+      directoriesExported: 0,
+      filesExported: 1,
+      conflictsResolved: 1,
+    });
+    await expect(
+      fs.readFile(path.join(hostRoot, 'docs (2)', 'readme.txt'), 'utf8'),
+    ).resolves.toBe('documentation');
+    await expect(
+      fs.readFile(path.join(hostRoot, 'alpha (2).txt'), 'utf8'),
+    ).resolves.toBe('alpha');
+  });
+
+  it('reports export progress while virtual files are being written to the host', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Progress Export' });
+    const hostRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-export-progress-'));
+    sandboxes.push(hostRoot);
+
+    const content = 'x'.repeat(512 * 1024);
+    await runtime.volumeService.writeTextFile(volume.id, '/big.txt', content);
+
+    const progressEvents: {
+      phase: 'file' | 'directory';
+      currentVirtualPath: string;
+      destinationHostPath: string;
+      bytesExported: number;
+      currentBytes: number;
+      currentTotalBytes: number | null;
+    }[] = [];
+
+    const summary = await runtime.volumeService.exportEntryToHost(volume.id, {
+      sourcePath: '/big.txt',
+      destinationHostDirectory: hostRoot,
+      onProgress: (progress) => {
+        progressEvents.push({
+          phase: progress.phase,
+          currentVirtualPath: progress.currentVirtualPath,
+          destinationHostPath: progress.destinationHostPath,
+          bytesExported: progress.summary.bytesExported,
+          currentBytes: progress.currentBytes,
+          currentTotalBytes: progress.currentTotalBytes,
+        });
+      },
+    });
+
+    expect(progressEvents.some((event) => event.phase === 'file' && event.currentBytes > 0)).toBe(
+      true,
+    );
+    expect(progressEvents.at(-1)).toMatchObject({
+      phase: 'file',
+      currentVirtualPath: '/big.txt',
+      bytesExported: Buffer.byteLength(content, 'utf8'),
+      currentBytes: Buffer.byteLength(content, 'utf8'),
+      currentTotalBytes: Buffer.byteLength(content, 'utf8'),
+    });
+    expect(summary).toMatchObject({
+      filesExported: 1,
+      directoriesExported: 0,
+      bytesExported: Buffer.byteLength(content, 'utf8'),
+    });
+    await expect(fs.readFile(path.join(hostRoot, 'big.txt'), 'utf8')).resolves.toHaveLength(
+      content.length,
+    );
+  });
+
   it('prevents moving a directory into one of its descendants', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Move Guard' });

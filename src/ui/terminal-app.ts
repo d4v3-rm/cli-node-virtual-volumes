@@ -7,6 +7,7 @@ import type { AppRuntime } from '../bootstrap/create-runtime.js';
 import type {
   DirectoryListingItem,
   ExplorerSnapshot,
+  ExportProgress,
   FilePreview,
   ImportProgress,
   VolumeManifest,
@@ -478,6 +479,14 @@ export class TerminalApp {
       void this.importWizard();
     });
 
+    this.screen.key(['e'], () => {
+      if (this.busyLabel || this.overlayMode || this.mode !== 'explorer') {
+        return;
+      }
+
+      void this.exportWizard();
+    });
+
     this.screen.key(['m'], () => {
       if (this.busyLabel || this.overlayMode || this.mode !== 'explorer') {
         return;
@@ -714,7 +723,7 @@ export class TerminalApp {
             '[LEFT/RIGHT] Parent or open',
             '[PGUP/PGDN] Page entries',
             '[HOME/END] Jump list bounds',
-            '[I] Import from host',
+            '[I] Import   [E] Export',
             '[C] Folder   [M] Move',
             '[D] Delete   [P] Preview',
             '[R] Refresh  [B/Q] Dashboard',
@@ -1083,6 +1092,43 @@ export class TerminalApp {
       `Imported ${summary.filesImported} files and ${summary.directoriesImported} directories.`,
     );
     await this.openVolume(this.currentVolumeId, destinationPath);
+  }
+
+  private async exportWizard(): Promise<void> {
+    if (!this.currentVolumeId || !this.currentSnapshot) {
+      return;
+    }
+
+    const selectedEntry = this.getSelectedEntry();
+    if (!selectedEntry) {
+      this.notify('info', 'Select a file or folder first.');
+      return;
+    }
+
+    const destinationHostDirectory = await this.openHostExportOverlay(selectedEntry.path);
+    if (destinationHostDirectory === null) {
+      return;
+    }
+
+    const summary = await this.runTask('Exporting to host', () =>
+      this.runtime.volumeService.exportEntryToHost(this.currentVolumeId!, {
+        sourcePath: selectedEntry.path,
+        destinationHostDirectory,
+        onProgress: (progress) => {
+          this.updateBusyLabel(this.formatExportProgress(progress));
+        },
+      }),
+    );
+
+    if (!summary) {
+      return;
+    }
+
+    this.notify(
+      'success',
+      `Exported ${summary.filesExported} files and ${summary.directoriesExported} directories.`,
+    );
+    this.render();
   }
 
   private async openHostImportOverlay(destinationPath: string): Promise<string[] | null> {
@@ -1577,6 +1623,431 @@ export class TerminalApp {
     });
   }
 
+  private async openHostExportOverlay(sourcePath: string): Promise<string | null> {
+    const initialHostPath = await getDefaultHostPath();
+
+    return new Promise<string | null>((resolve) => {
+      const viewportWidth = this.getViewportWidth();
+      const viewportHeight = this.getViewportHeight();
+      const overlayWidth =
+        viewportWidth > 90
+          ? Math.min(viewportWidth - 4, 148)
+          : Math.max(40, viewportWidth - 2);
+      const overlayHeight =
+        viewportHeight > 24
+          ? Math.min(viewportHeight - 4, 30)
+          : Math.max(12, viewportHeight - 1);
+      const summaryWidth = Math.max(
+        22,
+        Math.min(
+          Math.min(38, Math.max(22, overlayWidth - 34)),
+          Math.floor((overlayWidth - 2) * 0.34),
+        ),
+      );
+      let snapshot: HostBrowserSnapshot = {
+        currentPath: initialHostPath,
+        displayPath: 'Loading host filesystem...',
+        entries: [],
+      };
+      let selectedIndex = 0;
+      let loading = false;
+      let settled = false;
+      let renderedRowsSignature = '';
+
+      this.overlayMode = 'hostBrowser';
+      this.overlayBackdrop.show();
+      this.overlayContainer.setLabel(' Host Export ');
+      this.overlayContainer.width = overlayWidth;
+      this.overlayContainer.height = overlayHeight;
+      this.overlayContainer.left = Math.max(
+        0,
+        Math.floor((viewportWidth - overlayWidth) / 2),
+      );
+      this.overlayContainer.top = Math.max(
+        1,
+        Math.floor((viewportHeight - overlayHeight) / 2),
+      );
+      this.overlayContainer.show();
+      this.clearChildren(this.overlayContainer);
+
+      const headerBox = blessed.box({
+        parent: this.overlayContainer,
+        top: 1,
+        left: 2,
+        right: 2,
+        height: 3,
+        style: {
+          bg: THEME.panelAlt,
+          fg: THEME.text,
+        },
+      });
+
+      const browserPane = blessed.box({
+        parent: this.overlayContainer,
+        top: 4,
+        left: 1,
+        right: summaryWidth + 2,
+        bottom: 3,
+        border: 'line',
+        label: ' Host Destination ',
+        style: {
+          bg: THEME.panelAlt,
+          fg: THEME.text,
+          border: {
+            fg: THEME.border,
+          },
+        },
+      });
+
+      const browserList = blessed.list({
+        parent: browserPane,
+        top: 1,
+        left: 1,
+        right: 1,
+        bottom: 1,
+        keys: false,
+        mouse: false,
+        tags: false,
+        style: {
+          bg: THEME.panelAlt,
+          fg: THEME.text,
+          selected: {
+            bg: THEME.accent,
+            fg: THEME.background,
+            bold: true,
+          },
+          item: {
+            bg: THEME.panelAlt,
+            fg: THEME.text,
+          },
+        },
+        scrollbar: {
+          ch: ' ',
+          style: {
+            bg: THEME.accentMuted,
+          },
+        },
+      });
+
+      const summaryPane = blessed.box({
+        parent: this.overlayContainer,
+        top: 4,
+        right: 1,
+        width: summaryWidth,
+        bottom: 3,
+        border: 'line',
+        label: ' Export Summary ',
+        style: {
+          bg: THEME.panelAlt,
+          fg: THEME.text,
+          border: {
+            fg: THEME.border,
+          },
+        },
+      });
+
+      const summaryBox = blessed.box({
+        parent: summaryPane,
+        top: 1,
+        left: 1,
+        right: 1,
+        bottom: 1,
+        scrollable: true,
+        alwaysScroll: true,
+        mouse: false,
+        style: {
+          bg: THEME.panelAlt,
+          fg: THEME.text,
+        },
+        scrollbar: {
+          ch: ' ',
+          style: {
+            bg: THEME.accentMuted,
+          },
+        },
+      });
+
+      const footerBox = blessed.box({
+        parent: this.overlayContainer,
+        left: 2,
+        right: 2,
+        bottom: 1,
+        height: 1,
+        style: {
+          bg: THEME.panelAlt,
+          fg: THEME.muted,
+        },
+      });
+
+      const getCurrentEntry = (): HostBrowserEntry | null =>
+        snapshot.entries[selectedIndex] ?? null;
+
+      const getVisibleEntries = () =>
+        getVisibleWindow(snapshot.entries, selectedIndex, HOST_BROWSER_VISIBLE_ROWS);
+
+      const getRowsSignature = (): string => {
+        if (loading) {
+          return 'loading';
+        }
+
+        if (snapshot.entries.length === 0) {
+          return `empty:${snapshot.currentPath ?? 'root'}`;
+        }
+
+        const window = getVisibleEntries();
+        return [snapshot.currentPath ?? 'root', window.start, window.end].join('::');
+      };
+
+      const close = (result: string | null): void => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        this.closeOverlay();
+        resolve(result);
+      };
+
+      const syncBrowserRows = (): void => {
+        const rowsSignature = getRowsSignature();
+        if (rowsSignature === renderedRowsSignature) {
+          return;
+        }
+
+        renderedRowsSignature = rowsSignature;
+
+        if (loading) {
+          browserList.setItems(['Loading host filesystem...']);
+          browserList.select(0);
+          return;
+        }
+
+        if (snapshot.entries.length === 0) {
+          browserList.setItems(['No folders or files here.']);
+          browserList.select(0);
+          return;
+        }
+
+        const visibleWindow = getVisibleEntries();
+        browserList.setItems(
+          visibleWindow.items.map((entry) =>
+            this.formatHostNavigationRow(entry, this.getContentWidth(browserPane)),
+          ),
+        );
+      };
+
+      const syncBrowserSelection = (): void => {
+        if (loading || snapshot.entries.length === 0) {
+          browserList.select(0);
+          return;
+        }
+
+        const visibleWindow = getVisibleEntries();
+        browserList.select(
+          clampIndex(selectedIndex - visibleWindow.start, visibleWindow.items.length),
+        );
+      };
+
+      const getDestinationPath = (): string | null => {
+        if (snapshot.currentPath !== null) {
+          return snapshot.currentPath;
+        }
+
+        const currentEntry = getCurrentEntry();
+        if (currentEntry?.kind === 'drive' && currentEntry.absolutePath !== null) {
+          return currentEntry.absolutePath;
+        }
+
+        return null;
+      };
+
+      const renderBrowser = (): void => {
+        const headerWidth = this.getContentWidth(this.overlayContainer) - 4;
+        const currentEntry = getCurrentEntry();
+        const visibleWindow = getVisibleEntries();
+        const destinationPath = getDestinationPath();
+
+        headerBox.setContent(
+          [
+            this.fitSingleLine(`Host ${snapshot.displayPath}`, headerWidth),
+            this.fitSingleLine(`Export source ${sourcePath}`, headerWidth),
+          ].join('\n'),
+        );
+
+        browserPane.setLabel(
+          loading
+            ? ' Host Destination  loading '
+            : ` Host Destination  ${formatWindowSummary(
+                visibleWindow.start,
+                visibleWindow.end,
+                snapshot.entries.length,
+              )} `,
+        );
+
+        syncBrowserRows();
+        syncBrowserSelection();
+
+        summaryBox.setContent(
+          [
+            destinationPath
+              ? `Destination: ${truncate(destinationPath, 220)}`
+              : 'Destination: select a drive or folder',
+            '',
+            `Source: ${truncate(sourcePath, 220)}`,
+            currentEntry ? `Highlighted: ${currentEntry.name}` : 'Highlighted: none',
+            currentEntry ? `Type: ${currentEntry.kind}` : '',
+            currentEntry?.absolutePath
+              ? `Path: ${truncate(currentEntry.absolutePath, 220)}`
+              : '',
+            '',
+            'Enter exports into the current folder.',
+            'Right navigates inside the highlighted directory or drive.',
+          ]
+            .filter((line) => line.length > 0)
+            .join('\n'),
+        );
+
+        footerBox.setContent(
+          this.fitSingleLine(
+            'Up/Down move   Right enter   Left back   Enter/E export here   Esc cancel',
+            this.getContentWidth(this.overlayContainer) - 4,
+          ),
+        );
+
+        this.screen.render();
+      };
+
+      const loadSnapshot = async (
+        targetPath: string | null,
+        preferredAbsolutePath: string | null = null,
+      ): Promise<void> => {
+        loading = true;
+        renderBrowser();
+
+        try {
+          const nextSnapshot = await listHostBrowserSnapshot(targetPath);
+          snapshot = nextSnapshot;
+          renderedRowsSignature = '';
+
+          const preferredIndex =
+            preferredAbsolutePath === null
+              ? -1
+              : snapshot.entries.findIndex(
+                  (entry) => entry.absolutePath === preferredAbsolutePath,
+                );
+
+          if (preferredIndex >= 0) {
+            selectedIndex = preferredIndex;
+          } else {
+            selectedIndex = clampIndex(0, snapshot.entries.length);
+          }
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : 'Unable to browse the host filesystem.';
+          this.notify('error', message);
+        } finally {
+          loading = false;
+          renderBrowser();
+        }
+      };
+
+      const moveSelectionBy = (direction: number): void => {
+        if (loading || snapshot.entries.length === 0) {
+          return;
+        }
+
+        selectedIndex = clampIndex(selectedIndex + direction, snapshot.entries.length);
+        syncBrowserSelection();
+        renderBrowser();
+      };
+
+      const navigateIn = async (): Promise<void> => {
+        if (loading) {
+          return;
+        }
+
+        const currentEntry = getCurrentEntry();
+        if (!currentEntry?.navigable) {
+          return;
+        }
+
+        await loadSnapshot(currentEntry.absolutePath);
+      };
+
+      const navigateOut = async (): Promise<void> => {
+        if (loading || snapshot.currentPath === null) {
+          return;
+        }
+
+        const previousPath = snapshot.currentPath;
+        const parentPath = getParentHostPath(snapshot.currentPath);
+        if (parentPath === snapshot.currentPath) {
+          return;
+        }
+
+        await loadSnapshot(parentPath, previousPath);
+      };
+
+      const confirmSelection = (): void => {
+        const destinationPath = getDestinationPath();
+        if (destinationPath === null) {
+          this.notify('info', 'Enter a drive or folder before exporting.');
+          renderBrowser();
+          return;
+        }
+
+        close(destinationPath);
+      };
+
+      browserList.key(['up'], () => {
+        moveSelectionBy(-1);
+      });
+      browserList.key(['down'], () => {
+        moveSelectionBy(1);
+      });
+      browserList.key(['right'], () => {
+        void navigateIn();
+      });
+      browserList.key(['left', 'backspace'], () => {
+        void navigateOut();
+      });
+      browserList.key(['enter', 'e'], () => {
+        confirmSelection();
+      });
+      browserList.key(['pageup'], () => {
+        moveSelectionBy(-HOST_BROWSER_VISIBLE_ROWS);
+      });
+      browserList.key(['pagedown'], () => {
+        moveSelectionBy(HOST_BROWSER_VISIBLE_ROWS);
+      });
+      browserList.key(['home'], () => {
+        if (loading || snapshot.entries.length === 0) {
+          return;
+        }
+
+        selectedIndex = 0;
+        syncBrowserSelection();
+        renderBrowser();
+      });
+      browserList.key(['end'], () => {
+        if (loading || snapshot.entries.length === 0) {
+          return;
+        }
+
+        selectedIndex = snapshot.entries.length - 1;
+        syncBrowserSelection();
+        renderBrowser();
+      });
+      browserList.key(['escape', 'q'], () => {
+        close(null);
+      });
+
+      browserList.focus();
+      renderBrowser();
+      void loadSnapshot(initialHostPath);
+    });
+  }
+
   private async moveSelectedEntry(): Promise<void> {
     if (!this.currentVolumeId || !this.currentSnapshot) {
       return;
@@ -1751,6 +2222,7 @@ export class TerminalApp {
         'Backspace, Left or B: parent directory or dashboard',
         'C: create folder',
         'I: open host browser import modal',
+        'E: export selected file or folder to host',
         'M: move or rename entry',
         'D: delete entry',
         'P: preview file',
@@ -1764,6 +2236,14 @@ export class TerminalApp {
         'Space: toggle checkbox on file or folder',
         'Enter or I: import all checked items',
         'A: toggle all visible entries',
+        'Esc or Q: cancel',
+        '',
+        'Host Export Modal',
+        '',
+        'Up/Down: move selection',
+        'Right: enter selected folder or drive',
+        'Left: parent folder',
+        'Enter or E: export into the current host folder',
         'Esc or Q: cancel',
       ].join('\n'),
     });
@@ -2101,8 +2581,35 @@ export class TerminalApp {
   private formatImportProgress(progress: ImportProgress): string {
     const currentTarget = path.basename(progress.currentHostPath) || progress.currentHostPath;
     const phaseLabel = progress.phase === 'directory' ? 'dir' : 'file';
+    const transferDetail = this.formatTransferDetail(
+      progress.currentBytes,
+      progress.currentTotalBytes,
+    );
 
-    return `Importing ${progress.summary.filesImported} files / ${progress.summary.directoriesImported} dirs / ${formatBytes(progress.summary.bytesImported)}  Current ${phaseLabel}: ${currentTarget}`;
+    return `Importing ${progress.summary.filesImported} files / ${progress.summary.directoriesImported} dirs / ${formatBytes(progress.summary.bytesImported)}  Current ${phaseLabel}: ${currentTarget}${transferDetail}`;
+  }
+
+  private formatExportProgress(progress: ExportProgress): string {
+    const currentTarget = path.basename(progress.currentVirtualPath) || progress.currentVirtualPath;
+    const phaseLabel = progress.phase === 'directory' ? 'dir' : 'file';
+    const transferDetail = this.formatTransferDetail(
+      progress.currentBytes,
+      progress.currentTotalBytes,
+    );
+
+    return `Exporting ${progress.summary.filesExported} files / ${progress.summary.directoriesExported} dirs / ${formatBytes(progress.summary.bytesExported)}  Current ${phaseLabel}: ${currentTarget}${transferDetail}`;
+  }
+
+  private formatTransferDetail(
+    currentBytes: number,
+    currentTotalBytes: number | null,
+  ): string {
+    if (currentTotalBytes === null || currentTotalBytes <= 0) {
+      return '';
+    }
+
+    const percentage = Math.min(100, Math.max(0, Math.floor((currentBytes / currentTotalBytes) * 100)));
+    return `  ${percentage}% ${formatBytes(currentBytes)} / ${formatBytes(currentTotalBytes)}`;
   }
 
   private focusShell(): void {
@@ -2274,6 +2781,16 @@ export class TerminalApp {
 
     return this.fitSingleLine(
       `${checkbox} ${this.getHostEntryIcon(entry)} ${entry.name}`,
+      availableWidth,
+    );
+  }
+
+  private formatHostNavigationRow(
+    entry: HostBrowserEntry,
+    availableWidth: number,
+  ): string {
+    return this.fitSingleLine(
+      `${this.getHostEntryIcon(entry)} ${entry.name}`,
       availableWidth,
     );
   }
