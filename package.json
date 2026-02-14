@@ -3,6 +3,8 @@
   "version": "0.2.0",
   "description": "Node.js virtual volumes with a custom filesystem and a rich terminal UI.",
   "type": "module",
+  "packageManager": "npm@11.6.2",
+  "preferGlobal": true,
   "bin": {
     "virtual-volumes": "./dist/index.js"
   },
@@ -19,28 +21,46 @@
   "files": [
     "dist",
     "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
     ".env.example"
   ],
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsup",
     "start": "node dist/index.js",
+    "clean": "rimraf coverage dist",
+    "clean:package-artifacts": "node ./scripts/clean-package-artifacts.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run --coverage",
     "test:watch": "vitest",
     "check": "npm run lint && npm run typecheck && npm run test",
+    "verify": "npm run check && npm run build",
+    "pack:local": "npm run clean:package-artifacts && npm pack",
+    "set:version": "node ./scripts/set-version.mjs",
     "prepack": "npm run build"
   },
   "keywords": [
     "cli",
+    "custom-filesystem",
+    "data-volume",
     "filesystem",
+    "file-manager",
+    "node",
     "nodejs",
+    "storage",
     "terminal-ui",
+    "tui",
     "typescript",
-    "virtual-volume"
+    "virtual-filesystem",
+    "virtual-volume",
+    "volume"
   ],
-  "author": "",
+  "author": {
+    "name": "Salvatore Scarano",
+    "email": "scarano.salvatore.71@gmail.com"
+  },
   "license": "MIT",
   "engines": {
     "node": ">=20"
@@ -52,10 +72,15 @@
     "@typescript-eslint/eslint-plugin": "^8.58.2",
     "@typescript-eslint/parser": "^8.58.2",
     "@vitest/coverage-v8": "^4.1.4",
+    "conventional-commits-parser": "^6.4.0",
     "eslint": "^10.2.0",
     "eslint-config-prettier": "^10.1.8",
+    "fast-glob": "^3.3.3",
+    "fs-extra": "^11.3.4",
     "globals": "^17.5.0",
     "prettier": "^3.8.2",
+    "rimraf": "^6.1.3",
+    "semver": "^7.7.4",
     "tsup": "^8.5.1",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2",
