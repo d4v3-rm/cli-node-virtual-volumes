@@ -55,34 +55,93 @@ interface LayoutElementSpec {
   parent?: unknown;
 }
 
+interface MutableBorderStyle {
+  fg?: string;
+}
+
+interface MutableListStyle {
+  bg?: string;
+  fg?: string;
+}
+
+interface MutableSelectedStyle extends MutableListStyle {
+  bold?: boolean;
+}
+
+interface MutableElementStyle {
+  bg?: string;
+  fg?: string;
+  border?: MutableBorderStyle;
+  item?: MutableListStyle;
+  selected?: MutableSelectedStyle;
+}
+
 interface ThemePalette {
   background: string;
-  header: string;
-  panel: string;
-  panelAlt: string;
-  border: string;
+  headerDashboard: string;
+  headerExplorer: string;
+  panelNavigation: string;
+  panelInspector: string;
+  panelShortcuts: string;
+  panelOverlay: string;
+  panelOverlayAlt: string;
+  borderNavigation: string;
+  borderInspector: string;
+  borderShortcuts: string;
+  borderOverlay: string;
+  borderOverlayAlt: string;
+  borderStatus: string;
   accent: string;
+  accentSecondary: string;
+  accentWarm: string;
   accentMuted: string;
   text: string;
   muted: string;
+  info: string;
+  infoBg: string;
   success: string;
+  successBg: string;
   warning: string;
+  warningBg: string;
   danger: string;
+  dangerBg: string;
+  statusIdleBg: string;
+  statusBusyBg: string;
+  input: string;
 }
 
 const THEME: ThemePalette = {
   background: '#0b1220',
-  header: '#132238',
-  panel: '#101a2b',
-  panelAlt: '#0f1727',
-  border: '#2a4862',
+  headerDashboard: '#10263f',
+  headerExplorer: '#1d1f4d',
+  panelNavigation: '#0f2036',
+  panelInspector: '#162334',
+  panelShortcuts: '#2a1e2f',
+  panelOverlay: '#11182a',
+  panelOverlayAlt: '#141c30',
+  borderNavigation: '#3f7ecb',
+  borderInspector: '#25a0a8',
+  borderShortcuts: '#c58d3a',
+  borderOverlay: '#5aa9e6',
+  borderOverlayAlt: '#7dd3c7',
+  borderStatus: '#5b7aa1',
   accent: '#4fd1c5',
+  accentSecondary: '#78a9ff',
+  accentWarm: '#f6ad55',
   accentMuted: '#1d7f75',
   text: '#e5eef7',
   muted: '#8aa0b7',
+  info: '#7dd3fc',
+  infoBg: '#10283b',
   success: '#6ee7b7',
+  successBg: '#123628',
   warning: '#fbbf24',
+  warningBg: '#3a2b0f',
   danger: '#fb7185',
+  dangerBg: '#401824',
+  statusIdleBg: '#142033',
+  statusBusyBg: '#10293d',
+  input: '#0b1322',
 };
 
 const SPINNER_FRAMES = ['|', '/', '-', '\\'];
@@ -106,10 +165,10 @@ const createPanel = (
     border: 'line',
     tags: false,
     style: {
-      bg: THEME.panel,
+      bg: THEME.panelNavigation,
       fg: THEME.text,
       border: {
-        fg: THEME.border,
+        fg: THEME.borderNavigation,
       },
     },
     ...options,
@@ -191,7 +250,7 @@ export class TerminalApp {
       width: '100%',
       height: 3,
       style: {
-        bg: THEME.header,
+        bg: THEME.headerDashboard,
         fg: THEME.text,
       },
       padding: {
@@ -219,22 +278,22 @@ export class TerminalApp {
       vi: false,
       tags: false,
       style: {
-        bg: THEME.panel,
+        bg: THEME.panelNavigation,
         fg: THEME.text,
         selected: {
-          bg: THEME.accent,
-          fg: THEME.background,
+          bg: THEME.accentSecondary,
+          fg: '#08121f',
           bold: true,
         },
         item: {
           fg: THEME.text,
-          bg: THEME.panel,
+          bg: THEME.panelNavigation,
         },
       },
       scrollbar: {
         ch: ' ',
         style: {
-          bg: THEME.accentMuted,
+          bg: THEME.borderNavigation,
         },
       },
     });
@@ -245,6 +304,13 @@ export class TerminalApp {
       width: '38%',
       bottom: 13,
       label: ' Inspector ',
+      style: {
+        bg: THEME.panelInspector,
+        fg: THEME.text,
+        border: {
+          fg: THEME.borderInspector,
+        },
+      },
     });
 
     this.inspectorBox = blessed.box({
@@ -259,13 +325,13 @@ export class TerminalApp {
       mouse: false,
       tags: false,
       style: {
-        bg: THEME.panel,
+        bg: THEME.panelInspector,
         fg: THEME.text,
       },
       scrollbar: {
         ch: ' ',
         style: {
-          bg: THEME.accentMuted,
+          bg: THEME.borderInspector,
         },
       },
     });
@@ -276,6 +342,13 @@ export class TerminalApp {
       left: '62%',
       width: '38%',
       label: ' Keyboard ',
+      style: {
+        bg: THEME.panelShortcuts,
+        fg: THEME.text,
+        border: {
+          fg: THEME.borderShortcuts,
+        },
+      },
     });
 
     this.statusBox = createPanel(this.screen, {
@@ -284,6 +357,13 @@ export class TerminalApp {
       left: 0,
       width: '100%',
       label: ' Status ',
+      style: {
+        bg: THEME.statusIdleBg,
+        fg: THEME.text,
+        border: {
+          fg: THEME.borderStatus,
+        },
+      },
     });
 
     this.overlayBackdrop = blessed.box({
@@ -294,7 +374,7 @@ export class TerminalApp {
       height: '100%',
       hidden: true,
       style: {
-        bg: '#050811',
+        bg: '#08111f',
         transparent: false,
       },
     });
@@ -309,10 +389,10 @@ export class TerminalApp {
       border: 'line',
       label: ' Modal ',
       style: {
-        bg: THEME.panelAlt,
+        bg: THEME.panelOverlay,
         fg: THEME.text,
         border: {
-          fg: THEME.accent,
+          fg: THEME.borderOverlay,
         },
       },
     });
@@ -543,12 +623,56 @@ export class TerminalApp {
       return;
     }
 
+    this.applyShellTheme();
     this.renderHeader();
     this.renderPrimaryPane();
     this.renderInspector();
     this.renderShortcuts();
     this.renderStatus();
     this.screen.render();
+  }
+
+  private applyShellTheme(): void {
+    const isDashboard = this.mode === 'dashboard';
+    const navigationBorder = isDashboard ? THEME.borderNavigation : THEME.accent;
+    const navigationSelection = isDashboard ? THEME.accentSecondary : THEME.accent;
+    const navigationPanel = isDashboard ? THEME.panelNavigation : '#0f2430';
+    this.setElementColors(this.headerBox, {
+      bg: isDashboard ? THEME.headerDashboard : THEME.headerExplorer,
+      fg: isDashboard ? THEME.text : '#fef3c7',
+    });
+    this.setElementColors(this.leftPane, {
+      bg: navigationPanel,
+      borderFg: navigationBorder,
+    });
+    this.setListColors(this.primaryList, {
+      bg: navigationPanel,
+      itemBg: navigationPanel,
+      itemFg: THEME.text,
+      selectedBg: navigationSelection,
+      selectedFg: '#08121f',
+      selectedBold: true,
+    });
+
+    this.setElementColors(this.rightPane, {
+      bg: THEME.panelInspector,
+      borderFg: isDashboard ? THEME.borderInspector : THEME.accentSecondary,
+    });
+    this.setElementColors(this.inspectorBox, {
+      bg: THEME.panelInspector,
+      fg: isDashboard ? THEME.text : '#d7fbff',
+    });
+
+    this.setElementColors(this.shortcutsBox, {
+      bg: THEME.panelShortcuts,
+      fg: '#ffeccf',
+      borderFg: isDashboard ? THEME.borderShortcuts : THEME.accentWarm,
+    });
+
+    this.setElementColors(this.overlayContainer, {
+      bg: THEME.panelOverlay,
+      borderFg: THEME.borderOverlay,
+    });
   }
 
   private renderHeader(): void {
@@ -755,6 +879,7 @@ export class TerminalApp {
     const availableWidth = this.getContentWidth(this.statusBox);
 
     if (this.busyLabel) {
+      this.applyStatusTheme('busy');
       this.statusBox.setLabel(' Status  Running ');
       this.statusBox.setContent(
         this.renderBusyStatusLines(availableWidth).join('\n'),
@@ -763,6 +888,7 @@ export class TerminalApp {
     }
 
     if (this.toast) {
+      this.applyStatusTheme(this.toast.tone);
       this.statusBox.setLabel(` Status  ${this.toast.tone.toUpperCase()} `);
       this.statusBox.setContent(
         this.renderToastStatusLines(availableWidth).join('\n'),
@@ -770,10 +896,50 @@ export class TerminalApp {
       return;
     }
 
+    this.applyStatusTheme('idle');
     this.statusBox.setLabel(' Status  Ready ');
     this.statusBox.setContent(
       this.renderIdleStatusLines(availableWidth).join('\n'),
     );
+  }
+
+  private applyStatusTheme(state: ToastTone | 'busy' | 'idle'): void {
+    switch (state) {
+      case 'busy':
+        this.setElementColors(this.statusBox, {
+          bg: THEME.statusBusyBg,
+          fg: THEME.text,
+          borderFg: THEME.info,
+        });
+        return;
+      case 'success':
+        this.setElementColors(this.statusBox, {
+          bg: THEME.successBg,
+          fg: THEME.text,
+          borderFg: THEME.success,
+        });
+        return;
+      case 'error':
+        this.setElementColors(this.statusBox, {
+          bg: THEME.dangerBg,
+          fg: THEME.text,
+          borderFg: THEME.danger,
+        });
+        return;
+      case 'info':
+        this.setElementColors(this.statusBox, {
+          bg: THEME.infoBg,
+          fg: THEME.text,
+          borderFg: THEME.info,
+        });
+        return;
+      default:
+        this.setElementColors(this.statusBox, {
+          bg: THEME.statusIdleBg,
+          fg: THEME.text,
+          borderFg: THEME.borderStatus,
+        });
+    }
   }
 
   private renderBusyStatusLines(availableWidth: number): [string, string] {
@@ -1318,7 +1484,7 @@ export class TerminalApp {
         right: 2,
         height: 3,
         style: {
-          bg: THEME.panelAlt,
+          bg: THEME.panelOverlayAlt,
           fg: THEME.text,
         },
       });
@@ -1332,10 +1498,10 @@ export class TerminalApp {
         border: 'line',
         label: ' Host Filesystem ',
         style: {
-          bg: THEME.panelAlt,
+          bg: THEME.panelOverlayAlt,
           fg: THEME.text,
           border: {
-            fg: THEME.border,
+            fg: THEME.borderOverlayAlt,
           },
         },
       });
@@ -1350,22 +1516,22 @@ export class TerminalApp {
         mouse: false,
         tags: false,
         style: {
-          bg: THEME.panelAlt,
+          bg: THEME.panelOverlayAlt,
           fg: THEME.text,
           selected: {
-            bg: THEME.accent,
-            fg: THEME.background,
+            bg: THEME.success,
+            fg: '#081a14',
             bold: true,
           },
           item: {
-            bg: THEME.panelAlt,
+            bg: THEME.panelOverlayAlt,
             fg: THEME.text,
           },
         },
         scrollbar: {
           ch: ' ',
           style: {
-            bg: THEME.accentMuted,
+            bg: THEME.success,
           },
         },
       });
@@ -1379,10 +1545,10 @@ export class TerminalApp {
         border: 'line',
         label: ' Selection ',
         style: {
-          bg: THEME.panelAlt,
+          bg: THEME.panelOverlayAlt,
           fg: THEME.text,
           border: {
-            fg: THEME.border,
+            fg: THEME.borderOverlayAlt,
           },
         },
       });
@@ -1397,13 +1563,13 @@ export class TerminalApp {
         alwaysScroll: true,
         mouse: false,
         style: {
-          bg: THEME.panelAlt,
+          bg: THEME.panelOverlayAlt,
           fg: THEME.text,
         },
         scrollbar: {
           ch: ' ',
           style: {
-            bg: THEME.accentMuted,
+            bg: THEME.success,
           },
         },
       });
@@ -1415,7 +1581,7 @@ export class TerminalApp {
         bottom: 1,
         height: 1,
         style: {
-          bg: THEME.panelAlt,
+          bg: THEME.panelOverlayAlt,
           fg: THEME.muted,
         },
       });
@@ -1809,7 +1975,7 @@ export class TerminalApp {
         right: 2,
         height: 3,
         style: {
-          bg: THEME.panelAlt,
+          bg: THEME.panelOverlayAlt,
           fg: THEME.text,
         },
       });
@@ -1823,10 +1989,10 @@ export class TerminalApp {
         border: 'line',
         label: ' Host Destination ',
         style: {
-          bg: THEME.panelAlt,
+          bg: THEME.panelOverlayAlt,
           fg: THEME.text,
           border: {
-            fg: THEME.border,
+            fg: THEME.accentWarm,
           },
         },
       });
@@ -1841,22 +2007,22 @@ export class TerminalApp {
         mouse: false,
         tags: false,
         style: {
-          bg: THEME.panelAlt,
+          bg: THEME.panelOverlayAlt,
           fg: THEME.text,
           selected: {
-            bg: THEME.accent,
-            fg: THEME.background,
+            bg: THEME.accentWarm,
+            fg: '#201106',
             bold: true,
           },
           item: {
-            bg: THEME.panelAlt,
+            bg: THEME.panelOverlayAlt,
             fg: THEME.text,
           },
         },
         scrollbar: {
           ch: ' ',
           style: {
-            bg: THEME.accentMuted,
+            bg: THEME.accentWarm,
           },
         },
       });
@@ -1870,10 +2036,10 @@ export class TerminalApp {
         border: 'line',
         label: ' Export Summary ',
         style: {
-          bg: THEME.panelAlt,
+          bg: THEME.panelOverlayAlt,
           fg: THEME.text,
           border: {
-            fg: THEME.border,
+            fg: THEME.accentWarm,
           },
         },
       });
@@ -1888,13 +2054,13 @@ export class TerminalApp {
         alwaysScroll: true,
         mouse: false,
         style: {
-          bg: THEME.panelAlt,
+          bg: THEME.panelOverlayAlt,
           fg: THEME.text,
         },
         scrollbar: {
           ch: ' ',
           style: {
-            bg: THEME.accentMuted,
+            bg: THEME.accentWarm,
           },
         },
       });
@@ -1906,7 +2072,7 @@ export class TerminalApp {
         bottom: 1,
         height: 1,
         style: {
-          bg: THEME.panelAlt,
+          bg: THEME.panelOverlayAlt,
           fg: THEME.muted,
         },
       });
@@ -2406,6 +2572,12 @@ export class TerminalApp {
       this.overlayContainer.setLabel(` ${options.title} `);
       this.overlayContainer.width = '78%';
       this.overlayContainer.height = '72%';
+      this.setElementColors(this.overlayContainer, {
+        bg: THEME.panelOverlay,
+        borderFg: options.title.startsWith('Preview')
+          ? THEME.accentSecondary
+          : THEME.info,
+      });
       this.overlayContainer.show();
       this.clearChildren(this.overlayContainer);
 
@@ -2423,13 +2595,13 @@ export class TerminalApp {
         tags: false,
         content: options.content,
         style: {
-          bg: THEME.panelAlt,
+          bg: THEME.panelOverlayAlt,
           fg: THEME.text,
         },
         scrollbar: {
           ch: ' ',
           style: {
-            bg: THEME.accentMuted,
+            bg: options.title.startsWith('Preview') ? THEME.accentSecondary : THEME.info,
           },
         },
       });
@@ -2442,7 +2614,7 @@ export class TerminalApp {
         height: 1,
         content: options.footer,
         style: {
-          bg: THEME.panelAlt,
+          bg: THEME.panelOverlayAlt,
           fg: THEME.muted,
         },
       });
@@ -2474,6 +2646,11 @@ export class TerminalApp {
       this.overlayContainer.setLabel(` ${options.title} `);
       this.overlayContainer.width = '64%';
       this.overlayContainer.height = 11;
+      const isDangerAction = /delete/i.test(options.title) || /delete/i.test(options.confirmLabel);
+      this.setElementColors(this.overlayContainer, {
+        bg: THEME.panelOverlay,
+        borderFg: isDangerAction ? THEME.danger : THEME.warning,
+      });
       this.overlayContainer.show();
       this.clearChildren(this.overlayContainer);
 
@@ -2485,7 +2662,7 @@ export class TerminalApp {
         height: 4,
         content: options.body,
         style: {
-          bg: THEME.panelAlt,
+          bg: THEME.panelOverlayAlt,
           fg: THEME.text,
         },
       });
@@ -2499,7 +2676,7 @@ export class TerminalApp {
         keys: true,
         mouse: false,
         style: {
-          bg: THEME.panelAlt,
+          bg: THEME.panelOverlayAlt,
           fg: THEME.text,
         },
       });
@@ -2552,6 +2729,10 @@ export class TerminalApp {
       this.overlayContainer.setLabel(` ${options.title} `);
       this.overlayContainer.width = '68%';
       this.overlayContainer.height = 11;
+      this.setElementColors(this.overlayContainer, {
+        bg: THEME.panelOverlay,
+        borderFg: THEME.accentWarm,
+      });
       this.overlayContainer.show();
       this.clearChildren(this.overlayContainer);
 
@@ -2563,7 +2744,7 @@ export class TerminalApp {
         height: 2,
         content: options.description,
         style: {
-          bg: THEME.panelAlt,
+          bg: THEME.panelOverlayAlt,
           fg: THEME.text,
         },
       });
@@ -2579,10 +2760,10 @@ export class TerminalApp {
         mouse: true,
         border: 'line',
         style: {
-          bg: '#0b1322',
+          bg: THEME.input,
           fg: THEME.text,
           border: {
-            fg: THEME.accent,
+            fg: THEME.accentWarm,
           },
           focus: {
             border: {
@@ -2600,7 +2781,7 @@ export class TerminalApp {
         height: 1,
         content: options.footer,
         style: {
-          bg: THEME.panelAlt,
+          bg: THEME.panelOverlayAlt,
           fg: THEME.muted,
         },
       });
@@ -2885,6 +3066,86 @@ export class TerminalApp {
 
   private getViewportHeight(): number {
     return process.stdout.rows ?? 40;
+  }
+
+  private setElementColors(
+    element: Widgets.BoxElement,
+    options: {
+      bg?: string;
+      fg?: string;
+      borderFg?: string;
+    },
+  ): void {
+    const style = element.style as unknown as MutableElementStyle;
+
+    if (options.bg !== undefined) {
+      style.bg = options.bg;
+    }
+
+    if (options.fg !== undefined) {
+      style.fg = options.fg;
+    }
+
+    if (options.borderFg !== undefined) {
+      style.border = style.border ?? {};
+      style.border.fg = options.borderFg;
+    }
+  }
+
+  private setListColors(
+    element: Widgets.ListElement,
+    options: {
+      bg?: string;
+      fg?: string;
+      borderFg?: string;
+      itemBg?: string;
+      itemFg?: string;
+      selectedBg?: string;
+      selectedFg?: string;
+      selectedBold?: boolean;
+    },
+  ): void {
+    const style = element.style as unknown as MutableElementStyle;
+
+    if (options.bg !== undefined) {
+      style.bg = options.bg;
+    }
+
+    if (options.fg !== undefined) {
+      style.fg = options.fg;
+    }
+
+    if (options.borderFg !== undefined) {
+      style.border = style.border ?? {};
+      style.border.fg = options.borderFg;
+    }
+
+    if (options.itemBg !== undefined || options.itemFg !== undefined) {
+      style.item = style.item ?? {};
+      if (options.itemBg !== undefined) {
+        style.item.bg = options.itemBg;
+      }
+      if (options.itemFg !== undefined) {
+        style.item.fg = options.itemFg;
+      }
+    }
+
+    if (
+      options.selectedBg !== undefined ||
+      options.selectedFg !== undefined ||
+      options.selectedBold !== undefined
+    ) {
+      style.selected = style.selected ?? {};
+      if (options.selectedBg !== undefined) {
+        style.selected.bg = options.selectedBg;
+      }
+      if (options.selectedFg !== undefined) {
+        style.selected.fg = options.selectedFg;
+      }
+      if (options.selectedBold !== undefined) {
+        style.selected.bold = options.selectedBold;
+      }
+    }
   }
 
   private getSelectedEntry(): DirectoryListingItem | null {
