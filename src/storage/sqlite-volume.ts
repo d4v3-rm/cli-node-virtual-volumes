@@ -92,7 +92,7 @@ export const withVolumeDatabase = async <T>(
     await database.exec('PRAGMA temp_store = MEMORY;');
     await database.exec(volumeSchema);
 
-    return callback(database);
+    return await callback(database);
   } finally {
     await database.close();
   }

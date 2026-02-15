@@ -9,16 +9,19 @@ import type {
   CreateVolumeInput,
   DirectoryEntry,
   FileEntry,
+  VolumeEntry,
   VolumeManifest,
   VolumeRecord,
   VolumeState,
 } from '../domain/types.js';
+import { ensureDirectory, pathExists } from '../utils/fs.js';
 import {
-  ensureDirectory,
-  pathExists,
-  readJsonFile,
-  writeJsonAtomic,
-} from '../utils/fs.js';
+  VOLUME_DATABASE_EXTENSION,
+  type VolumeEntryRow,
+  type VolumeManifestRow,
+  getVolumeDatabasePath,
+  withVolumeDatabase,
+} from './sqlite-volume.js';
 
 interface RepositoryConfig {
   dataDir: string;
@@ -49,18 +52,40 @@ export class VolumeRepository {
 
     const manifests = await Promise.all(
       directoryEntries
-        .filter((entry) => entry.isDirectory())
+        .filter(
+          (entry) => entry.isFile() && entry.name.endsWith(VOLUME_DATABASE_EXTENSION),
+        )
         .map(async (entry) => {
-          const manifestPath = path.join(
-            this.getVolumeDirectory(entry.name),
-            'manifest.json',
-          );
+          const databasePath = path.join(this.getVolumesDirectory(), entry.name);
 
-          if (!(await pathExists(manifestPath))) {
+          try {
+            return await withVolumeDatabase(databasePath, async (database) => {
+              const manifestRow = await database.get<VolumeManifestRow>(
+                `SELECT
+                   id,
+                   name,
+                   description,
+                   quota_bytes,
+                   logical_used_bytes,
+                   entry_count,
+                   created_at,
+                   updated_at
+                 FROM manifest
+                 LIMIT 1`,
+              );
+
+              return manifestRow ? this.toManifest(manifestRow) : null;
+            });
+          } catch (error) {
+            this.logger.warn(
+              {
+                databasePath,
+                error: error instanceof Error ? error.message : String(error),
+              },
+              'Skipping unreadable volume database.',
+            );
             return null;
           }
-
-          return readJsonFile<VolumeManifest>(manifestPath);
         }),
     );
 
@@ -74,9 +99,6 @@ export class VolumeRepository {
 
     const id = `vol_${nanoid(10)}`;
     const now = new Date().toISOString();
-    const volumeDirectory = this.getVolumeDirectory(id);
-
-    await ensureDirectory(volumeDirectory);
 
     const rootEntry: DirectoryEntry = {
       id: 'root',
@@ -127,21 +149,55 @@ export class VolumeRepository {
       }
     }
 
-    const manifestPath = path.join(this.getVolumeDirectory(volumeId), 'manifest.json');
-    const statePath = path.join(this.getVolumeDirectory(volumeId), 'state.json');
-
-    if (!(await pathExists(manifestPath)) || !(await pathExists(statePath))) {
+    const databasePath = this.getVolumeDatabasePath(volumeId);
+    if (!(await pathExists(databasePath))) {
       throw new VolumeError('NOT_FOUND', `Volume ${volumeId} does not exist.`, {
         volumeId,
       });
     }
 
-    const [manifest, state] = await Promise.all([
-      readJsonFile<VolumeManifest>(manifestPath),
-      readJsonFile<VolumeState>(statePath),
-    ]);
+    const record = await withVolumeDatabase(databasePath, async (database) => {
+      const manifestRow = await database.get<VolumeManifestRow>(
+        `SELECT
+           id,
+           name,
+           description,
+           quota_bytes,
+           logical_used_bytes,
+           entry_count,
+           created_at,
+           updated_at
+         FROM manifest
+         LIMIT 1`,
+      );
 
-    const record = { manifest, state };
+      if (!manifestRow) {
+        throw new VolumeError('NOT_FOUND', `Volume ${volumeId} does not exist.`, {
+          volumeId,
+        });
+      }
+
+      const entryRows = await database.all<VolumeEntryRow[]>(
+        `SELECT
+           id,
+           kind,
+           name,
+           parent_id,
+           created_at,
+           updated_at,
+           size,
+           content_ref,
+           imported_from_host_path
+         FROM entries`,
+      );
+
+      const state = this.toState(entryRows, volumeId);
+      return {
+        manifest: this.toManifest(manifestRow),
+        state,
+      };
+    });
+
     if (options.preferCache) {
       this.volumeCache.set(volumeId, record);
     }
@@ -151,18 +207,94 @@ export class VolumeRepository {
 
   public async saveVolume(record: VolumeRecord): Promise<void> {
     const now = new Date().toISOString();
-    const volumeDirectory = this.getVolumeDirectory(record.manifest.id);
-    const manifestPath = path.join(volumeDirectory, 'manifest.json');
-    const statePath = path.join(volumeDirectory, 'state.json');
-
     record.manifest.logicalUsedBytes = this.getLogicalUsedBytes(record.state);
     record.manifest.entryCount = Object.keys(record.state.entries).length;
     record.manifest.updatedAt = now;
 
-    await Promise.all([
-      writeJsonAtomic(manifestPath, record.manifest),
-      writeJsonAtomic(statePath, record.state),
-    ]);
+    const databasePath = this.getVolumeDatabasePath(record.manifest.id);
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      await database.exec('BEGIN IMMEDIATE TRANSACTION');
+
+      try {
+        await database.exec('DELETE FROM manifest');
+        await database.run(
+          `INSERT INTO manifest (
+             id,
+             name,
+             description,
+             quota_bytes,
+             logical_used_bytes,
+             entry_count,
+             created_at,
+             updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          record.manifest.id,
+          record.manifest.name,
+          record.manifest.description,
+          record.manifest.quotaBytes,
+          record.manifest.logicalUsedBytes,
+          record.manifest.entryCount,
+          record.manifest.createdAt,
+          record.manifest.updatedAt,
+        );
+
+        await database.exec('DELETE FROM entries');
+
+        for (const entry of Object.values(record.state.entries)) {
+          if (entry.kind === 'directory') {
+            await database.run(
+              `INSERT INTO entries (
+                 id,
+                 kind,
+                 name,
+                 parent_id,
+                 created_at,
+                 updated_at,
+                 size,
+                 content_ref,
+                 imported_from_host_path
+               ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL)`,
+              entry.id,
+              entry.kind,
+              entry.name,
+              entry.parentId,
+              entry.createdAt,
+              entry.updatedAt,
+            );
+            continue;
+          }
+
+          await database.run(
+            `INSERT INTO entries (
+               id,
+               kind,
+               name,
+               parent_id,
+               created_at,
+               updated_at,
+               size,
+               content_ref,
+               imported_from_host_path
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            entry.id,
+            entry.kind,
+            entry.name,
+            entry.parentId,
+            entry.createdAt,
+            entry.updatedAt,
+            entry.size,
+            entry.contentRef,
+            entry.importedFromHostPath,
+          );
+        }
+
+        await database.exec('COMMIT');
+      } catch (error) {
+        await database.exec('ROLLBACK').catch(() => undefined);
+        throw error;
+      }
+    });
 
     this.volumeCache.set(record.manifest.id, record);
 
@@ -177,14 +309,19 @@ export class VolumeRepository {
   }
 
   public async deleteVolume(volumeId: string): Promise<void> {
-    const targetDirectory = this.getVolumeDirectory(volumeId);
-    await fs.rm(targetDirectory, { recursive: true, force: true });
+    const databasePath = this.getVolumeDatabasePath(volumeId);
+    await Promise.all([
+      fs.rm(databasePath, { force: true }),
+      fs.rm(`${databasePath}-journal`, { force: true }),
+      fs.rm(`${databasePath}-wal`, { force: true }),
+      fs.rm(`${databasePath}-shm`, { force: true }),
+    ]);
     this.volumeCache.delete(volumeId);
     this.logger.info({ volumeId }, 'Volume deleted.');
   }
 
-  public getVolumeDirectory(volumeId: string): string {
-    return path.join(this.getVolumesDirectory(), volumeId);
+  public getVolumeDatabasePath(volumeId: string): string {
+    return getVolumeDatabasePath(this.config.dataDir, volumeId);
   }
 
   private getVolumesDirectory(): string {
@@ -199,5 +336,77 @@ export class VolumeRepository {
 
       return total;
     }, 0);
+  }
+
+  private toManifest(row: VolumeManifestRow): VolumeManifest {
+    return {
+      id: row.id,
+      name: row.name,
+      description: row.description,
+      quotaBytes: row.quota_bytes,
+      logicalUsedBytes: row.logical_used_bytes,
+      entryCount: row.entry_count,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  private toState(entryRows: VolumeEntryRow[], volumeId: string): VolumeState {
+    const entries: Record<string, VolumeEntry> = {};
+    let rootId: string | null = null;
+
+    for (const row of entryRows) {
+      if (row.kind === 'directory') {
+        entries[row.id] = {
+          id: row.id,
+          kind: 'directory',
+          name: row.name,
+          parentId: row.parent_id,
+          childIds: [],
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        };
+      } else {
+        entries[row.id] = {
+          id: row.id,
+          kind: 'file',
+          name: row.name,
+          parentId: row.parent_id,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+          size: row.size ?? 0,
+          contentRef: row.content_ref ?? '',
+          importedFromHostPath: row.imported_from_host_path,
+        };
+      }
+
+      if (row.parent_id === null) {
+        rootId = row.id;
+      }
+    }
+
+    if (!rootId) {
+      throw new VolumeError(
+        'INVALID_PATH',
+        `Volume ${volumeId} does not contain a root directory.`,
+      );
+    }
+
+    for (const entry of Object.values(entries)) {
+      if (entry.parentId === null) {
+        continue;
+      }
+
+      const parentEntry = entries[entry.parentId];
+      if (parentEntry?.kind === 'directory') {
+        parentEntry.childIds.push(entry.id);
+      }
+    }
+
+    return {
+      version: 1,
+      rootId,
+      entries,
+    };
   }
 }

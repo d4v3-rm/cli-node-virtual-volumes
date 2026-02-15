@@ -1,13 +1,13 @@
 import { createHash } from 'node:crypto';
-import { createReadStream, createWriteStream } from 'node:fs';
+import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { Transform } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 
 import type { Logger } from 'pino';
 
-import { ensureDirectory, pathExists } from '../utils/fs.js';
+import { VolumeError } from '../domain/errors.js';
+import { ensureDirectory } from '../utils/fs.js';
+import { withVolumeDatabase } from './sqlite-volume.js';
 
 export interface StoredBlobDescriptor {
   contentRef: string;
@@ -24,9 +24,11 @@ interface BlobTransferOptions {
   onProgress?: (progress: BlobTransferProgress) => Promise<void> | void;
 }
 
+const EXPORT_CHUNK_SIZE = 64 * 1024;
+
 export class BlobStore {
   public constructor(
-    private readonly volumeDirectory: string,
+    private readonly databasePath: string,
     private readonly logger: Logger,
   ) {}
 
@@ -34,51 +36,29 @@ export class BlobStore {
     hostPath: string,
     options: BlobTransferOptions = {},
   ): Promise<StoredBlobDescriptor> {
-    const temporaryDirectory = path.join(this.volumeDirectory, 'tmp');
-    await ensureDirectory(temporaryDirectory);
-
-    const temporaryPath = path.join(
-      temporaryDirectory,
-      `blob-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`,
-    );
-
     const hash = createHash('sha256');
+    const chunks: Uint8Array[] = [];
     let size = 0;
 
-    const meteredTransform = new Transform({
-      transform(chunk, _encoding, callback) {
-        const bufferChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        size += bufferChunk.byteLength;
-        hash.update(bufferChunk);
-        if (options.onProgress) {
-          void options.onProgress({
-            bytesTransferred: size,
-            totalBytes: options.totalBytes ?? size,
-          });
-        }
-        callback(null, bufferChunk);
-      },
-    });
+    for await (const chunk of createReadStream(hostPath)) {
+      const bufferChunk = Buffer.from(chunk);
+      chunks.push(bufferChunk);
+      size += bufferChunk.byteLength;
+      hash.update(bufferChunk);
 
-    await pipeline(
-      createReadStream(hostPath),
-      meteredTransform,
-      createWriteStream(temporaryPath),
-    );
-
-    const contentRef = hash.digest('hex');
-    const finalPath = this.getBlobPath(contentRef);
-
-    await ensureDirectory(path.dirname(finalPath));
-
-    if (await pathExists(finalPath)) {
-      await fs.unlink(temporaryPath);
-    } else {
-      await fs.rename(temporaryPath, finalPath);
+      if (options.onProgress) {
+        await options.onProgress({
+          bytesTransferred: size,
+          totalBytes: options.totalBytes ?? size,
+        });
+      }
     }
 
-    this.logger.debug({ contentRef, hostPath, size }, 'Blob stored from host file.');
+    const contentRef = hash.digest('hex');
+    const buffer = Buffer.concat(chunks, size);
+    await this.persistBlob(contentRef, buffer);
 
+    this.logger.debug({ contentRef, hostPath, size }, 'Blob stored from host file.');
     return { contentRef, size };
   }
 
@@ -87,43 +67,44 @@ export class BlobStore {
     destinationPath: string,
     options: BlobTransferOptions = {},
   ): Promise<number> {
-    const blobPath = this.getBlobPath(contentRef);
-    const totalBytes =
-      options.totalBytes ?? (await fs.stat(blobPath)).size;
+    const buffer = await this.readBuffer(contentRef);
+    const totalBytes = options.totalBytes ?? buffer.byteLength;
     const destinationDirectory = path.dirname(destinationPath);
     const temporaryPath = path.join(
       destinationDirectory,
       `${path.basename(destinationPath)}.${process.pid}.${Date.now()}.tmp`,
     );
-    let bytesTransferred = 0;
 
     await ensureDirectory(destinationDirectory);
 
-    const meteredTransform = new Transform({
-      transform(chunk, _encoding, callback) {
-        const bufferChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        bytesTransferred += bufferChunk.byteLength;
+    const fileHandle = await fs.open(temporaryPath, 'w');
+    let bytesTransferred = 0;
+
+    try {
+      while (bytesTransferred < buffer.byteLength) {
+        const nextOffset = Math.min(
+          bytesTransferred + EXPORT_CHUNK_SIZE,
+          buffer.byteLength,
+        );
+        const nextChunk = buffer.subarray(bytesTransferred, nextOffset);
+        await fileHandle.write(nextChunk);
+        bytesTransferred += nextChunk.byteLength;
+
         if (options.onProgress) {
-          void options.onProgress({
+          await options.onProgress({
             bytesTransferred,
             totalBytes,
           });
         }
-        callback(null, bufferChunk);
-      },
-    });
-
-    try {
-      await pipeline(
-        createReadStream(blobPath),
-        meteredTransform,
-        createWriteStream(temporaryPath),
-      );
-      await fs.rename(temporaryPath, destinationPath);
+      }
     } catch (error) {
+      await fileHandle.close().catch(() => undefined);
       await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
       throw error;
     }
+
+    await fileHandle.close();
+    await fs.rename(temporaryPath, destinationPath);
 
     this.logger.debug(
       { contentRef, destinationPath, size: totalBytes },
@@ -135,13 +116,7 @@ export class BlobStore {
 
   public async putBuffer(buffer: Buffer): Promise<StoredBlobDescriptor> {
     const contentRef = createHash('sha256').update(buffer).digest('hex');
-    const finalPath = this.getBlobPath(contentRef);
-
-    await ensureDirectory(path.dirname(finalPath));
-
-    if (!(await pathExists(finalPath))) {
-      await fs.writeFile(finalPath, buffer);
-    }
+    await this.persistBlob(contentRef, buffer);
 
     return {
       contentRef,
@@ -150,52 +125,61 @@ export class BlobStore {
   }
 
   public async readBuffer(contentRef: string): Promise<Buffer> {
-    return fs.readFile(this.getBlobPath(contentRef));
+    return withVolumeDatabase(this.databasePath, async (database) => {
+      const row = await database.get<{ content: Buffer }>(
+        'SELECT content FROM blobs WHERE content_ref = ?',
+        contentRef,
+      );
+
+      if (!row) {
+        throw new VolumeError('NOT_FOUND', `Blob ${contentRef} does not exist.`, {
+          contentRef,
+        });
+      }
+
+      return row.content;
+    });
   }
 
-  public async readPreview(
-    contentRef: string,
-    maxBytes: number,
-  ): Promise<Buffer> {
-    const fileHandle = await fs.open(this.getBlobPath(contentRef), 'r');
-    const buffer = Buffer.alloc(maxBytes);
+  public async readPreview(contentRef: string, maxBytes: number): Promise<Buffer> {
+    return withVolumeDatabase(this.databasePath, async (database) => {
+      const row = await database.get<{ preview: Buffer }>(
+        'SELECT substr(content, 1, ?) AS preview FROM blobs WHERE content_ref = ?',
+        maxBytes,
+        contentRef,
+      );
 
-    try {
-      const { bytesRead } = await fileHandle.read(buffer, 0, maxBytes, 0);
-      return buffer.subarray(0, bytesRead);
-    } finally {
-      await fileHandle.close();
-    }
+      if (!row) {
+        throw new VolumeError('NOT_FOUND', `Blob ${contentRef} does not exist.`, {
+          contentRef,
+        });
+      }
+
+      return row.preview;
+    });
   }
 
   public async deleteBlob(contentRef: string): Promise<void> {
-    const blobPath = this.getBlobPath(contentRef);
-    await fs.rm(blobPath, { force: true });
-    await this.pruneEmptyBlobDirectories(path.dirname(blobPath));
+    await withVolumeDatabase(this.databasePath, async (database) => {
+      await database.run('DELETE FROM blobs WHERE content_ref = ?', contentRef);
+    });
     this.logger.debug({ contentRef }, 'Blob deleted.');
   }
 
-  private getBlobPath(contentRef: string): string {
-    return path.join(
-      this.volumeDirectory,
-      'blobs',
-      contentRef.slice(0, 2),
-      contentRef.slice(2),
-    );
-  }
-
-  private async pruneEmptyBlobDirectories(directoryPath: string): Promise<void> {
-    const blobsRoot = path.join(this.volumeDirectory, 'blobs');
-    let currentDirectory = directoryPath;
-
-    while (currentDirectory.startsWith(blobsRoot) && currentDirectory !== blobsRoot) {
-      const entries = await fs.readdir(currentDirectory).catch(() => null);
-      if (entries === null || entries.length > 0) {
-        return;
-      }
-
-      await fs.rmdir(currentDirectory).catch(() => undefined);
-      currentDirectory = path.dirname(currentDirectory);
-    }
+  private async persistBlob(contentRef: string, buffer: Buffer): Promise<void> {
+    await withVolumeDatabase(this.databasePath, async (database) => {
+      await database.run(
+        `INSERT OR IGNORE INTO blobs (
+           content_ref,
+           size,
+           content,
+           created_at
+         ) VALUES (?, ?, ?, ?)`,
+        contentRef,
+        buffer.byteLength,
+        buffer,
+        new Date().toISOString(),
+      );
+    });
   }
 }
