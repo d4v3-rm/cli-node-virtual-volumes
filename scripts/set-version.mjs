@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { CommitParser } from 'conventional-commits-parser';
-import { readFile, readJson, writeFile, writeJson } from 'fs-extra/esm';
+import { readJson, writeJson } from 'fs-extra/esm';
 import semver from 'semver';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
