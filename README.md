@@ -1,4 +1,4 @@
-# 📦 Virtual Volumes CLI
+# 📦 CLI Node Virtual Volumes
 
 <p align="center">
   <strong>Custom virtual volumes for Node.js, with a keyboard-first terminal file manager.</strong>
@@ -16,7 +16,7 @@
   <img alt="Tags" src="https://img.shields.io/badge/tags-nodejs%2Ctypescript%2Ccli%2Ctui%2Cfilesystem%2Cvirtual--volume-111827.svg" />
 </p>
 
-> `virtual-volumes-cli` e' un file system virtuale custom, persistente e Node-only, progettato per creare volumi logici separati dalla macchina host e gestirli da una TUI ricca, veloce e orientata alle scorciatoie da tastiera.
+> `cli-node-virtual-volumes` e' un file system virtuale custom, persistente e Node-only, progettato per creare volumi logici separati dalla macchina host e gestirli da una TUI ricca, veloce e orientata alle scorciatoie da tastiera.
 
 ## ✨ Perche' esiste
 
@@ -140,7 +140,7 @@ npm install
 
 ```bash
 npm pack
-npm install -g ./virtual-volumes-cli-0.2.0.tgz
+npm install -g ./cli-node-virtual-volumes-0.2.0.tgz
 ```
 
 Dopo l'installazione globale il comando disponibile e':
@@ -286,10 +286,10 @@ L'export supporta sia file singoli sia directory ricorsive.
 Oltre alla TUI, il progetto espone una API utilizzabile da codice:
 
 ```ts
-import { createRuntime } from 'virtual-volumes-cli';
+import { createRuntime } from 'cli-node-virtual-volumes';
 
 const runtime = await createRuntime({
-  dataDir: 'C:/virtual-volumes/data',
+  dataDir: 'C:/cli-node-virtual-volumes/data',
   logLevel: 'info'
 });
 

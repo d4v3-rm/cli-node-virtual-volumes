@@ -6,7 +6,7 @@ import type { AppConfig } from '../config/env.js';
 
 const buildLogFilePath = (config: AppConfig, date = new Date()): string => {
   const dayStamp = date.toISOString().slice(0, 10);
-  return path.join(config.logDir, `virtual-volumes-${dayStamp}.log`);
+  return path.join(config.logDir, `cli-node-virtual-volumes-${dayStamp}.log`);
 };
 
 export const createAppLogger = (config: AppConfig): Logger => {
@@ -26,7 +26,7 @@ export const createAppLogger = (config: AppConfig): Logger => {
 
   return pino(
     {
-      name: 'virtual-volumes',
+      name: 'cli-node-virtual-volumes',
       level: config.logLevel,
       base: {
         pid: process.pid,
