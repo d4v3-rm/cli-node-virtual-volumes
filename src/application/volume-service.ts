@@ -167,7 +167,7 @@ export class VolumeService {
       input.destinationPath,
     );
     const blobStore = new BlobStore(
-      this.repository.getVolumeDirectory(volumeId),
+      this.repository.getVolumeDatabasePath(volumeId),
       this.logger.child({ scope: 'blob-store', volumeId }),
     );
 
@@ -222,7 +222,7 @@ export class VolumeService {
     await fs.mkdir(destinationHostDirectory, { recursive: true });
 
     const blobStore = new BlobStore(
-      this.repository.getVolumeDirectory(volumeId),
+      this.repository.getVolumeDatabasePath(volumeId),
       this.logger.child({ scope: 'blob-store', volumeId }),
     );
     const summary: ExportSummary = {
@@ -352,7 +352,7 @@ export class VolumeService {
     const idsToDelete = this.collectDescendantIds(record.state, targetEntry.id);
     const contentRefsToDelete = this.collectContentRefs(record.state, idsToDelete);
     const blobStore = new BlobStore(
-      this.repository.getVolumeDirectory(volumeId),
+      this.repository.getVolumeDatabasePath(volumeId),
       this.logger.child({ scope: 'blob-store', volumeId }),
     );
 
@@ -379,7 +379,7 @@ export class VolumeService {
     const record = await this.repository.loadVolume(volumeId);
     const fileEntry = this.requireFileByPath(record.state, filePath);
     const blobStore = new BlobStore(
-      this.repository.getVolumeDirectory(volumeId),
+      this.repository.getVolumeDatabasePath(volumeId),
       this.logger.child({ scope: 'blob-store', volumeId }),
     );
 
@@ -425,7 +425,7 @@ export class VolumeService {
     const fileName = assertValidEntryName(getBaseName(normalizedPath));
     const existing = this.findChildByName(record.state, parentDirectory.id, fileName);
     const blobStore = new BlobStore(
-      this.repository.getVolumeDirectory(volumeId),
+      this.repository.getVolumeDatabasePath(volumeId),
       this.logger.child({ scope: 'blob-store', volumeId }),
     );
 
