@@ -75,11 +75,12 @@ export interface ImportSummary {
   directoriesImported: number;
   bytesImported: number;
   conflictsResolved: number;
+  integrityChecksPassed: number;
 }
 
 export interface ImportProgress {
   currentHostPath: string;
-  phase: 'file' | 'directory';
+  phase: 'file' | 'directory' | 'integrity';
   summary: ImportSummary;
   currentBytes: number;
   currentTotalBytes: number | null;
@@ -90,12 +91,13 @@ export interface ExportSummary {
   directoriesExported: number;
   bytesExported: number;
   conflictsResolved: number;
+  integrityChecksPassed: number;
 }
 
 export interface ExportProgress {
   currentVirtualPath: string;
   destinationHostPath: string;
-  phase: 'file' | 'directory';
+  phase: 'file' | 'directory' | 'integrity';
   summary: ExportSummary;
   currentBytes: number;
   currentTotalBytes: number | null;
