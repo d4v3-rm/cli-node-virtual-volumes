@@ -16,6 +16,10 @@
   <img alt="Tags" src="https://img.shields.io/badge/tags-nodejs%2Ctypescript%2Ccli%2Ctui%2Cfilesystem%2Cvirtual--volume-111827.svg" />
 </p>
 
+<p align="center">
+  <img alt="CLI Node Virtual Volumes TUI" src="./assets/screen.png" width="100%" />
+</p>
+
 > `cli-node-virtual-volumes` e' un file system virtuale custom, persistente e Node-only, progettato per creare volumi logici separati dalla macchina host e gestirli da una TUI ricca, veloce e orientata alle scorciatoie da tastiera.
 
 ## ✨ Perche' esiste
