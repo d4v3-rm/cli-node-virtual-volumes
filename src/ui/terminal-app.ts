@@ -111,37 +111,37 @@ interface ThemePalette {
 }
 
 const THEME: ThemePalette = {
-  background: '#0b1220',
-  headerDashboard: '#10263f',
-  headerExplorer: '#1d1f4d',
-  panelNavigation: '#0f2036',
-  panelInspector: '#162334',
-  panelShortcuts: '#2a1e2f',
-  panelOverlay: '#11182a',
-  panelOverlayAlt: '#141c30',
-  borderNavigation: '#3f7ecb',
-  borderInspector: '#25a0a8',
-  borderShortcuts: '#c58d3a',
-  borderOverlay: '#5aa9e6',
-  borderOverlayAlt: '#7dd3c7',
-  borderStatus: '#5b7aa1',
-  accent: '#4fd1c5',
-  accentSecondary: '#78a9ff',
-  accentWarm: '#f6ad55',
-  accentMuted: '#1d7f75',
-  text: '#e5eef7',
-  muted: '#8aa0b7',
-  info: '#7dd3fc',
-  infoBg: '#10283b',
-  success: '#6ee7b7',
-  successBg: '#123628',
+  background: 'black',
+  headerDashboard: 'black',
+  headerExplorer: 'black',
+  panelNavigation: 'black',
+  panelInspector: 'black',
+  panelShortcuts: 'black',
+  panelOverlay: 'black',
+  panelOverlayAlt: 'black',
+  borderNavigation: '#3b82f6',
+  borderInspector: '#2dd4bf',
+  borderShortcuts: '#f59e0b',
+  borderOverlay: '#60a5fa',
+  borderOverlayAlt: '#34d399',
+  borderStatus: '#64748b',
+  accent: '#2dd4bf',
+  accentSecondary: '#60a5fa',
+  accentWarm: '#f59e0b',
+  accentMuted: '#14b8a6',
+  text: '#f3f4f6',
+  muted: '#94a3b8',
+  info: '#38bdf8',
+  infoBg: 'black',
+  success: '#34d399',
+  successBg: 'black',
   warning: '#fbbf24',
-  warningBg: '#3a2b0f',
+  warningBg: 'black',
   danger: '#fb7185',
-  dangerBg: '#401824',
-  statusIdleBg: '#142033',
-  statusBusyBg: '#10293d',
-  input: '#0b1322',
+  dangerBg: 'black',
+  statusIdleBg: 'black',
+  statusBusyBg: 'black',
+  input: 'black',
 };
 
 const SPINNER_FRAMES = ['|', '/', '-', '\\'];
@@ -251,7 +251,7 @@ export class TerminalApp {
       height: 3,
       style: {
         bg: THEME.headerDashboard,
-        fg: THEME.text,
+        fg: THEME.accentSecondary,
       },
       padding: {
         left: 1,
@@ -282,7 +282,7 @@ export class TerminalApp {
         fg: THEME.text,
         selected: {
           bg: THEME.accentSecondary,
-          fg: '#08121f',
+          fg: '#020617',
           bold: true,
         },
         item: {
@@ -374,7 +374,7 @@ export class TerminalApp {
       height: '100%',
       hidden: true,
       style: {
-        bg: '#08111f',
+        bg: THEME.background,
         transparent: false,
       },
     });
@@ -636,10 +636,10 @@ export class TerminalApp {
     const isDashboard = this.mode === 'dashboard';
     const navigationBorder = isDashboard ? THEME.borderNavigation : THEME.accent;
     const navigationSelection = isDashboard ? THEME.accentSecondary : THEME.accent;
-    const navigationPanel = isDashboard ? THEME.panelNavigation : '#0f2430';
+    const navigationPanel = THEME.panelNavigation;
     this.setElementColors(this.headerBox, {
       bg: isDashboard ? THEME.headerDashboard : THEME.headerExplorer,
-      fg: isDashboard ? THEME.text : '#fef3c7',
+      fg: isDashboard ? THEME.accentSecondary : THEME.accentWarm,
     });
     this.setElementColors(this.leftPane, {
       bg: navigationPanel,
@@ -650,7 +650,7 @@ export class TerminalApp {
       itemBg: navigationPanel,
       itemFg: THEME.text,
       selectedBg: navigationSelection,
-      selectedFg: '#08121f',
+      selectedFg: '#020617',
       selectedBold: true,
     });
 
@@ -660,12 +660,12 @@ export class TerminalApp {
     });
     this.setElementColors(this.inspectorBox, {
       bg: THEME.panelInspector,
-      fg: isDashboard ? THEME.text : '#d7fbff',
+      fg: isDashboard ? THEME.text : '#dbeafe',
     });
 
     this.setElementColors(this.shortcutsBox, {
       bg: THEME.panelShortcuts,
-      fg: '#ffeccf',
+      fg: '#fef3c7',
       borderFg: isDashboard ? THEME.borderShortcuts : THEME.accentWarm,
     });
 
