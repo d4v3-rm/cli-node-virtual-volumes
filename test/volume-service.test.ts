@@ -5,6 +5,10 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createRuntime } from '../src/bootstrap/create-runtime.js';
+import {
+  getVolumeDatabasePath,
+  withVolumeDatabase,
+} from '../src/storage/sqlite-volume.js';
 
 const sandboxes: string[] = [];
 
@@ -20,22 +24,17 @@ const createIsolatedRuntime = async () => {
   });
 };
 
-const collectFilesRecursively = async (rootPath: string): Promise<string[]> => {
-  const entries = await fs.readdir(rootPath, { withFileTypes: true }).catch(() => []);
-  let files: string[] = [];
+const countPersistedBlobs = async (
+  dataDir: string,
+  volumeId: string,
+): Promise<number> =>
+  withVolumeDatabase(getVolumeDatabasePath(dataDir, volumeId), async (database) => {
+    const row = await database.get<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM blobs',
+    );
 
-  for (const entry of entries) {
-    const absolutePath = path.join(rootPath, entry.name);
-    if (entry.isDirectory()) {
-      files = files.concat(await collectFilesRecursively(absolutePath));
-      continue;
-    }
-
-    files.push(absolutePath);
-  }
-
-  return files;
-};
+    return row?.count ?? 0;
+  });
 
 afterEach(async () => {
   await Promise.all(
@@ -85,14 +84,24 @@ describe('VolumeService', () => {
   it('removes orphaned blobs after overwriting and deleting files', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Blob Cleanup' });
-    const blobsRoot = path.join(runtime.config.dataDir, 'volumes', volume.id, 'blobs');
 
     await runtime.volumeService.writeTextFile(volume.id, '/cleanup.txt', 'one');
     await runtime.volumeService.writeTextFile(volume.id, '/cleanup.txt', 'two');
     await runtime.volumeService.deleteEntry(volume.id, '/cleanup.txt');
 
-    const blobFiles = await collectFilesRecursively(blobsRoot);
-    expect(blobFiles).toHaveLength(0);
+    await expect(countPersistedBlobs(runtime.config.dataDir, volume.id)).resolves.toBe(0);
+  });
+
+  it('stores each volume in a single sqlite file', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Single File' });
+    const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+    const legacyDirectoryPath = path.join(runtime.config.dataDir, 'volumes', volume.id);
+
+    const databaseStats = await fs.stat(databasePath);
+
+    expect(databaseStats.isFile()).toBe(true);
+    await expect(fs.stat(legacyDirectoryPath)).rejects.toBeTruthy();
   });
 
   it('imports host files and directories in batch and resolves name conflicts', async () => {
