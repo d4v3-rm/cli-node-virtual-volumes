@@ -6,10 +6,12 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createRuntime } from '../src/bootstrap/create-runtime.js';
+import { BlobStore } from '../src/storage/blob-store.js';
 import {
   getVolumeDatabasePath,
   withVolumeDatabase,
 } from '../src/storage/sqlite-volume.js';
+import { VolumeRepository } from '../src/storage/volume-repository.js';
 
 const sandboxes: string[] = [];
 
@@ -160,6 +162,7 @@ describe('VolumeService', () => {
           quotaBytes: 1024 * 1024,
           logicalUsedBytes: legacyContent.byteLength,
           entryCount: 2,
+          revision: 0,
           createdAt: timestamp,
           updatedAt: timestamp,
         },
@@ -520,6 +523,94 @@ describe('VolumeService', () => {
 
     expect(before.entries).toHaveLength(0);
     expect(after.entries.map((entry) => entry.name)).toEqual(['external']);
+  });
+
+  it('rejects stale repository saves after a concurrent update bumps the volume revision', async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-concurrency-'));
+    sandboxes.push(sandboxRoot);
+
+    const runtime = await createRuntime({
+      dataDir: path.join(sandboxRoot, 'data'),
+      logDir: path.join(sandboxRoot, 'logs'),
+      logLevel: 'silent',
+      logToStdout: false,
+    });
+    const volume = await runtime.volumeService.createVolume({ name: 'Concurrent Save' });
+    const repositoryA = new VolumeRepository(
+      runtime.config,
+      runtime.logger.child({ scope: 'repo-a' }),
+    );
+    const repositoryB = new VolumeRepository(
+      runtime.config,
+      runtime.logger.child({ scope: 'repo-b' }),
+    );
+
+    await Promise.all([repositoryA.initialize(), repositoryB.initialize()]);
+
+    const recordA = await repositoryA.loadVolume(volume.id);
+    const recordB = await repositoryB.loadVolume(volume.id);
+
+    recordA.manifest.description = 'saved by repository A';
+    await repositoryA.saveVolume(recordA);
+
+    recordB.manifest.description = 'stale write from repository B';
+
+    await expect(repositoryB.saveVolume(recordB)).rejects.toMatchObject({
+      code: 'CONCURRENT_MODIFICATION',
+    });
+
+    const refreshed = await repositoryA.loadVolume(volume.id);
+    expect(refreshed.manifest.description).toBe('saved by repository A');
+    expect(refreshed.manifest.revision).toBe(2);
+  });
+
+  it('reports missing and orphaned blobs through storage doctor diagnostics', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Doctor' });
+    const repository = new VolumeRepository(
+      runtime.config,
+      runtime.logger.child({ scope: 'doctor-repository' }),
+    );
+    const blobStore = new BlobStore(
+      getVolumeDatabasePath(runtime.config.dataDir, volume.id),
+      runtime.logger.child({ scope: 'doctor-blob-store' }),
+    );
+
+    await repository.initialize();
+    await runtime.volumeService.writeTextFile(volume.id, '/tracked.txt', 'tracked content');
+
+    const record = await repository.loadVolume(volume.id);
+    const trackedEntry = Object.values(record.state.entries).find(
+      (entry) => entry.kind === 'file' && entry.name === 'tracked.txt',
+    );
+
+    expect(trackedEntry?.kind).toBe('file');
+
+    const orphanBlob = await blobStore.putBuffer(Buffer.from('orphan blob', 'utf8'));
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, volume.id), async (database) => {
+      await database.run(
+        'DELETE FROM blob_chunks WHERE content_ref = ?',
+        trackedEntry?.kind === 'file' ? trackedEntry.contentRef : '',
+      );
+      await database.run(
+        'DELETE FROM blobs WHERE content_ref = ?',
+        trackedEntry?.kind === 'file' ? trackedEntry.contentRef : '',
+      );
+    });
+
+    const report = await runtime.volumeService.runDoctor(volume.id);
+    const issueCodes = report.volumes[0]?.issues.map((issue) => issue.code) ?? [];
+
+    expect(report.healthy).toBe(false);
+    expect(report.issueCount).toBeGreaterThanOrEqual(2);
+    expect(issueCodes).toContain('MISSING_BLOB');
+    expect(issueCodes).toContain('ORPHAN_BLOB');
+    expect(
+      report.volumes[0]?.issues.some(
+        (issue) => issue.code === 'ORPHAN_BLOB' && issue.contentRef === orphanBlob.contentRef,
+      ),
+    ).toBe(true);
   });
 
   it('deletes directory subtrees recursively', async () => {

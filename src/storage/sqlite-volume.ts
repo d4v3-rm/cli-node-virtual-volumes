@@ -17,6 +17,7 @@ export interface VolumeManifestRow {
   quota_bytes: number;
   logical_used_bytes: number;
   entry_count: number;
+  revision: number;
   created_at: string;
   updated_at: string;
 }
@@ -49,6 +50,7 @@ const volumeSchema = `
     quota_bytes INTEGER NOT NULL,
     logical_used_bytes INTEGER NOT NULL,
     entry_count INTEGER NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -90,17 +92,93 @@ const volumeSchema = `
     ON blob_chunks (content_ref, chunk_index);
 `;
 
-const migrateBlobSchema = async (database: SqliteVolumeDatabase): Promise<void> => {
-  const blobColumns = await database.all<{ name: string }[]>(
-    'PRAGMA table_info(blobs)',
+const metadataSchema = `
+  CREATE TABLE IF NOT EXISTS schema_metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
   );
-  const hasChunkCount = blobColumns.some((column) => column.name === 'chunk_count');
 
-  if (!hasChunkCount) {
+  CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    applied_at TEXT NOT NULL
+  );
+`;
+
+const LATEST_SCHEMA_VERSION = 2;
+
+const getTableColumns = async (
+  database: SqliteVolumeDatabase,
+  tableName: string,
+): Promise<string[]> => {
+  const rows = await database.all<{ name: string }[]>(
+    `PRAGMA table_info(${tableName})`,
+  );
+
+  return rows.map((row) => row.name);
+};
+
+const hasColumn = async (
+  database: SqliteVolumeDatabase,
+  tableName: string,
+  columnName: string,
+): Promise<boolean> => {
+  const columns = await getTableColumns(database, tableName);
+  return columns.includes(columnName);
+};
+
+const recordSchemaMigration = async (
+  database: SqliteVolumeDatabase,
+  version: number,
+  name: string,
+): Promise<void> => {
+  await database.run(
+    `INSERT OR IGNORE INTO schema_migrations (
+       version,
+       name,
+       applied_at
+     ) VALUES (?, ?, ?)`,
+    version,
+    name,
+    new Date().toISOString(),
+  );
+};
+
+const migrateBlobSchema = async (database: SqliteVolumeDatabase): Promise<void> => {
+  if (!(await hasColumn(database, 'blobs', 'chunk_count'))) {
     await database.exec(
       'ALTER TABLE blobs ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 0',
     );
   }
+};
+
+const migrateManifestRevisionSchema = async (
+  database: SqliteVolumeDatabase,
+): Promise<void> => {
+  if (!(await hasColumn(database, 'manifest', 'revision'))) {
+    await database.exec(
+      'ALTER TABLE manifest ADD COLUMN revision INTEGER NOT NULL DEFAULT 0',
+    );
+  }
+};
+
+const applySchemaMigrations = async (
+  database: SqliteVolumeDatabase,
+): Promise<void> => {
+  await database.exec(metadataSchema);
+  await database.exec(volumeSchema);
+  await recordSchemaMigration(database, 1, 'bootstrap-volume-schema');
+
+  await migrateBlobSchema(database);
+  await migrateManifestRevisionSchema(database);
+  await recordSchemaMigration(database, 2, 'manifest-revision-and-blob-metadata');
+
+  await database.run(
+    `INSERT INTO schema_metadata (key, value)
+     VALUES ('schema_version', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    String(LATEST_SCHEMA_VERSION),
+  );
 };
 
 export const getVolumeDatabasePath = (dataDir: string, volumeId: string): string =>
@@ -119,11 +197,11 @@ export const withVolumeDatabase = async <T>(
 
   try {
     database.configure('busyTimeout', 5000);
-    await database.exec('PRAGMA journal_mode = DELETE;');
-    await database.exec('PRAGMA synchronous = NORMAL;');
+    await database.exec('PRAGMA foreign_keys = ON;');
+    await database.exec('PRAGMA journal_mode = WAL;');
+    await database.exec('PRAGMA synchronous = FULL;');
     await database.exec('PRAGMA temp_store = MEMORY;');
-    await database.exec(volumeSchema);
-    await migrateBlobSchema(database);
+    await applySchemaMigrations(database);
 
     return await callback(database);
   } finally {
