@@ -43,115 +43,127 @@ export class BlobStore {
     hostPath: string,
     options: BlobTransferOptions = {},
   ): Promise<StoredBlobDescriptor> {
-    const temporaryContentRef = `tmp_${randomUUID()}`;
-    const createdAt = new Date().toISOString();
-    let size = 0;
-    let chunkCount = 0;
-    let contentRef = '';
-    let reusedExistingBlob = false;
-
-    await withVolumeDatabase(this.databasePath, async (database) => {
+    return withVolumeDatabase(this.databasePath, async (database) => {
       await database.exec('BEGIN IMMEDIATE TRANSACTION');
 
       try {
-        await this.insertBlobMetadata(database, temporaryContentRef, 0, 0, createdAt);
-
-        const hash = createHash('sha256');
-
-        for await (const chunk of createReadStream(hostPath, {
-          highWaterMark: BLOB_CHUNK_SIZE,
-        })) {
-          const bufferChunk = Buffer.from(chunk);
-          size += bufferChunk.byteLength;
-          hash.update(bufferChunk);
-
-          await database.run(
-            `INSERT INTO blob_chunks (
-               content_ref,
-               chunk_index,
-               content
-             ) VALUES (?, ?, ?)`,
-            temporaryContentRef,
-            chunkCount,
-            bufferChunk,
-          );
-          chunkCount += 1;
-
-          if (options.onProgress) {
-            await options.onProgress({
-              bytesTransferred: size,
-              totalBytes: options.totalBytes ?? size,
-              phase: 'transfer',
-            });
-          }
-        }
-
-        if (options.totalBytes !== undefined && size !== options.totalBytes) {
-          throw new VolumeError(
-            'INTEGRITY_CHECK_FAILED',
-            `Host file changed during import: expected ${options.totalBytes} bytes, read ${size}.`,
-            {
-              hostPath,
-              expectedBytes: options.totalBytes,
-              actualBytes: size,
-            },
-          );
-        }
-
-        contentRef = hash.digest('hex');
-
-        const existingBlob = await this.getBlobRow(database, contentRef);
-        if (existingBlob) {
-          const existingIntegrity = await this.verifyBlobIntegrityInDatabase(
-            database,
-            existingBlob,
-          );
-
-          if (existingIntegrity.contentRef !== contentRef || existingIntegrity.size !== size) {
-            await this.deleteBlobRows(database, contentRef);
-            await this.promoteTemporaryBlob(
-              database,
-              temporaryContentRef,
-              contentRef,
-              size,
-              chunkCount,
-            );
-          } else {
-            await this.deleteBlobRows(database, temporaryContentRef);
-            reusedExistingBlob = true;
-          }
-        } else {
-          await this.promoteTemporaryBlob(
-            database,
-            temporaryContentRef,
-            contentRef,
-            size,
-            chunkCount,
-          );
-        }
-
+        const descriptor = await this.putHostFileInDatabase(database, hostPath, options);
         await database.exec('COMMIT');
+        return descriptor;
       } catch (error) {
         await database.exec('ROLLBACK').catch(() => undefined);
         throw error;
       }
     });
+  }
+
+  public async putHostFileInDatabase(
+    database: SqliteVolumeDatabase,
+    hostPath: string,
+    options: BlobTransferOptions = {},
+  ): Promise<StoredBlobDescriptor> {
+    const temporaryContentRef = `tmp_${randomUUID()}`;
+    const createdAt = new Date().toISOString();
+    let size = 0;
+    let chunkCount = 0;
+    let contentRef: string;
+    let reusedExistingBlob = false;
+
+    await this.insertBlobMetadata(database, temporaryContentRef, 0, 0, createdAt);
+
+    const hash = createHash('sha256');
+
+    for await (const chunk of createReadStream(hostPath, {
+      highWaterMark: BLOB_CHUNK_SIZE,
+    })) {
+      const bufferChunk = Buffer.from(chunk);
+      size += bufferChunk.byteLength;
+      hash.update(bufferChunk);
+
+      await database.run(
+        `INSERT INTO blob_chunks (
+           content_ref,
+           chunk_index,
+           content
+         ) VALUES (?, ?, ?)`,
+        temporaryContentRef,
+        chunkCount,
+        bufferChunk,
+      );
+      chunkCount += 1;
+
+      if (options.onProgress) {
+        await options.onProgress({
+          bytesTransferred: size,
+          totalBytes: options.totalBytes ?? size,
+          phase: 'transfer',
+        });
+      }
+    }
+
+    if (options.totalBytes !== undefined && size !== options.totalBytes) {
+      throw new VolumeError(
+        'INTEGRITY_CHECK_FAILED',
+        `Host file changed during import: expected ${options.totalBytes} bytes, read ${size}.`,
+        {
+          hostPath,
+          expectedBytes: options.totalBytes,
+          actualBytes: size,
+        },
+      );
+    }
+
+    contentRef = hash.digest('hex');
+
+    const existingBlob = await this.getBlobRow(database, contentRef);
+    if (existingBlob) {
+      const existingIntegrity = await this.verifyBlobIntegrityInDatabase(
+        database,
+        existingBlob,
+      );
+
+      if (existingIntegrity.contentRef !== contentRef || existingIntegrity.size !== size) {
+        await this.deleteBlobRows(database, contentRef);
+        await this.promoteTemporaryBlob(
+          database,
+          temporaryContentRef,
+          contentRef,
+          size,
+          chunkCount,
+        );
+      } else {
+        await this.deleteBlobRows(database, temporaryContentRef);
+        reusedExistingBlob = true;
+      }
+    } else {
+      await this.promoteTemporaryBlob(
+        database,
+        temporaryContentRef,
+        contentRef,
+        size,
+        chunkCount,
+      );
+    }
 
     try {
-      await this.verifyBlobIntegrity(contentRef, {
+      const verifiedBlob = await this.verifyBlobIntegrityInDatabase(
+        database,
+        await this.requireBlobRow(database, contentRef),
+        {
         expectedSize: size,
         expectedContentRef: contentRef,
         onProgress: options.onProgress,
-      });
+        },
+      );
+
+      this.logger.debug({ contentRef, hostPath, size, chunkCount }, 'Blob stored from host file.');
+      return { contentRef: verifiedBlob.contentRef, size: verifiedBlob.size };
     } catch (error) {
       if (!reusedExistingBlob) {
-        await this.deleteBlob(contentRef).catch(() => undefined);
+        await this.deleteBlobRows(database, contentRef).catch(() => undefined);
       }
       throw error;
     }
-
-    this.logger.debug({ contentRef, hostPath, size, chunkCount }, 'Blob stored from host file.');
-    return { contentRef, size };
   }
 
   public async exportBlobToHost(
@@ -232,16 +244,18 @@ export class BlobStore {
 
   public async putBuffer(buffer: Buffer): Promise<StoredBlobDescriptor> {
     const contentRef = createHash('sha256').update(buffer).digest('hex');
-    await this.persistBufferedBlob(contentRef, buffer);
-    await this.verifyBlobIntegrity(contentRef, {
-      expectedSize: buffer.byteLength,
-      expectedContentRef: contentRef,
-    });
+    return withVolumeDatabase(this.databasePath, async (database) => {
+      await database.exec('BEGIN IMMEDIATE TRANSACTION');
 
-    return {
-      contentRef,
-      size: buffer.byteLength,
-    };
+      try {
+        const descriptor = await this.putBufferInDatabase(database, buffer, contentRef);
+        await database.exec('COMMIT');
+        return descriptor;
+      } catch (error) {
+        await database.exec('ROLLBACK').catch(() => undefined);
+        throw error;
+      }
+    });
   }
 
   public async putKnownBuffer(
@@ -260,16 +274,18 @@ export class BlobStore {
       );
     }
 
-    await this.persistBufferedBlob(contentRef, buffer);
-    await this.verifyBlobIntegrity(contentRef, {
-      expectedSize: buffer.byteLength,
-      expectedContentRef: contentRef,
-    });
+    return withVolumeDatabase(this.databasePath, async (database) => {
+      await database.exec('BEGIN IMMEDIATE TRANSACTION');
 
-    return {
-      contentRef,
-      size: buffer.byteLength,
-    };
+      try {
+        const descriptor = await this.putBufferInDatabase(database, buffer, contentRef);
+        await database.exec('COMMIT');
+        return descriptor;
+      } catch (error) {
+        await database.exec('ROLLBACK').catch(() => undefined);
+        throw error;
+      }
+    });
   }
 
   public async readBuffer(contentRef: string): Promise<Buffer> {
@@ -343,7 +359,7 @@ export class BlobStore {
       await database.exec('BEGIN IMMEDIATE TRANSACTION');
 
       try {
-        await this.deleteBlobRows(database, contentRef);
+        await this.deleteBlobInDatabase(database, contentRef);
         await database.exec('COMMIT');
       } catch (error) {
         await database.exec('ROLLBACK').catch(() => undefined);
@@ -352,6 +368,13 @@ export class BlobStore {
     });
 
     this.logger.debug({ contentRef }, 'Blob deleted.');
+  }
+
+  public async deleteBlobInDatabase(
+    database: SqliteVolumeDatabase,
+    contentRef: string,
+  ): Promise<void> {
+    await this.deleteBlobRows(database, contentRef);
   }
 
   public async verifyBlobIntegrity(
@@ -377,48 +400,62 @@ export class BlobStore {
     });
   }
 
-  private async persistBufferedBlob(contentRef: string, buffer: Buffer): Promise<void> {
-    const existingBlob = await this.getBlobMetadata(contentRef);
+  public async putBufferInDatabase(
+    database: SqliteVolumeDatabase,
+    buffer: Buffer,
+    contentRef = createHash('sha256').update(buffer).digest('hex'),
+  ): Promise<StoredBlobDescriptor> {
+    const existingBlob = await this.getBlobRow(database, contentRef);
     if (existingBlob) {
-      return;
+      const verifiedBlob = await this.verifyBlobIntegrityInDatabase(database, existingBlob, {
+        expectedSize: buffer.byteLength,
+        expectedContentRef: contentRef,
+      });
+
+      return {
+        contentRef: verifiedBlob.contentRef,
+        size: verifiedBlob.size,
+      };
     }
 
     const chunkCount = Math.ceil(buffer.byteLength / BLOB_CHUNK_SIZE);
     const createdAt = new Date().toISOString();
+    await this.insertBlobMetadata(
+      database,
+      contentRef,
+      buffer.byteLength,
+      chunkCount,
+      createdAt,
+    );
 
-    await withVolumeDatabase(this.databasePath, async (database) => {
-      await database.exec('BEGIN IMMEDIATE TRANSACTION');
+    for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+      const offset = chunkIndex * BLOB_CHUNK_SIZE;
+      const chunk = buffer.subarray(offset, offset + BLOB_CHUNK_SIZE);
+      await database.run(
+        `INSERT INTO blob_chunks (
+           content_ref,
+           chunk_index,
+           content
+         ) VALUES (?, ?, ?)`,
+        contentRef,
+        chunkIndex,
+        chunk,
+      );
+    }
 
-      try {
-        await this.insertBlobMetadata(
-          database,
-          contentRef,
-          buffer.byteLength,
-          chunkCount,
-          createdAt,
-        );
+    const verifiedBlob = await this.verifyBlobIntegrityInDatabase(
+      database,
+      await this.requireBlobRow(database, contentRef),
+      {
+        expectedSize: buffer.byteLength,
+        expectedContentRef: contentRef,
+      },
+    );
 
-        for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
-          const offset = chunkIndex * BLOB_CHUNK_SIZE;
-          const chunk = buffer.subarray(offset, offset + BLOB_CHUNK_SIZE);
-          await database.run(
-            `INSERT INTO blob_chunks (
-               content_ref,
-               chunk_index,
-               content
-             ) VALUES (?, ?, ?)`,
-            contentRef,
-            chunkIndex,
-            chunk,
-          );
-        }
-
-        await database.exec('COMMIT');
-      } catch (error) {
-        await database.exec('ROLLBACK').catch(() => undefined);
-        throw error;
-      }
-    });
+    return {
+      contentRef: verifiedBlob.contentRef,
+      size: verifiedBlob.size,
+    };
   }
 
   private async verifyHostFileIntegrity(
@@ -465,12 +502,6 @@ export class BlobStore {
         },
       );
     }
-  }
-
-  private async getBlobMetadata(contentRef: string): Promise<BlobRow | null> {
-    return withVolumeDatabase(this.databasePath, async (database) =>
-      this.getBlobRow(database, contentRef),
-    );
   }
 
   private async getBlobRow(
