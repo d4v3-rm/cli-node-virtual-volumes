@@ -12,6 +12,9 @@ import type {
   StorageDoctorIssue,
   StorageDoctorReport,
   StorageDoctorVolumeReport,
+  StorageRepairAction,
+  StorageRepairReport,
+  StorageRepairVolumeReport,
   VolumeEntry,
   VolumeManifest,
   VolumeRecord,
@@ -435,6 +438,27 @@ export class VolumeRepository {
     };
   }
 
+  public async runRepair(volumeId?: string): Promise<StorageRepairReport> {
+    const manifests = volumeId
+      ? [(await this.loadVolume(volumeId)).manifest]
+      : await this.listVolumes();
+    const volumeReports = await Promise.all(
+      manifests.map(async (manifest) => this.repairVolume(manifest.id)),
+    );
+
+    return {
+      generatedAt: new Date().toISOString(),
+      healthy: volumeReports.every((report) => report.healthy),
+      checkedVolumes: volumeReports.length,
+      repairedVolumes: volumeReports.filter((report) => report.repaired).length,
+      actionsApplied: volumeReports.reduce(
+        (total, report) => total + report.actions.length,
+        0,
+      ),
+      volumes: volumeReports,
+    };
+  }
+
   public async deleteVolume(volumeId: string): Promise<void> {
     const databasePath = this.getVolumeDatabasePath(volumeId);
     await Promise.all([
@@ -622,6 +646,145 @@ export class VolumeRepository {
 
   private async inspectVolume(volumeId: string): Promise<StorageDoctorVolumeReport> {
     const record = await this.loadVolume(volumeId);
+    const persistedBlobRefs = await withVolumeDatabase(
+      this.getVolumeDatabasePath(volumeId),
+      async (database) => this.listPersistedBlobRefs(database),
+    );
+    const issues = this.collectDoctorIssues(record, persistedBlobRefs);
+
+    return {
+      volumeId: record.manifest.id,
+      volumeName: record.manifest.name,
+      revision: record.manifest.revision,
+      healthy: issues.length === 0,
+      issueCount: issues.length,
+      issues,
+    };
+  }
+
+  private async repairVolume(volumeId: string): Promise<StorageRepairVolumeReport> {
+    const databasePath = this.getVolumeDatabasePath(volumeId);
+
+    return withVolumeDatabase(databasePath, async (database) => {
+      await database.exec('BEGIN IMMEDIATE TRANSACTION');
+
+      try {
+        const record = await this.loadVolumeFromDatabase(database, volumeId);
+        const actions: StorageRepairAction[] = [];
+        let persistedBlobRefs = await this.listPersistedBlobRefs(database);
+        const issuesBefore = this.collectDoctorIssues(record, persistedBlobRefs);
+
+        for (const issue of issuesBefore) {
+          if (issue.code !== 'ORPHAN_BLOB' || !issue.contentRef) {
+            continue;
+          }
+
+          await database.run('DELETE FROM blob_chunks WHERE content_ref = ?', issue.contentRef);
+          await database.run('DELETE FROM blobs WHERE content_ref = ?', issue.contentRef);
+          actions.push({
+            code: 'DELETE_ORPHAN_BLOB',
+            message: `Deleted orphan blob ${issue.contentRef}.`,
+            contentRef: issue.contentRef,
+          });
+        }
+
+        if (
+          issuesBefore.some(
+            (issue) =>
+              issue.code === 'MANIFEST_USAGE_MISMATCH' ||
+              issue.code === 'MANIFEST_ENTRY_COUNT_MISMATCH',
+          )
+        ) {
+          await this.persistVolumeToDatabase(database, record);
+          actions.push({
+            code: 'REBUILD_MANIFEST',
+            message: 'Rebuilt manifest counters and revision from the current volume state.',
+          });
+        }
+
+        persistedBlobRefs = await this.listPersistedBlobRefs(database);
+        const remainingIssues = this.collectDoctorIssues(record, persistedBlobRefs);
+
+        await database.exec('COMMIT');
+
+        return {
+          volumeId: record.manifest.id,
+          volumeName: record.manifest.name,
+          revision: record.manifest.revision,
+          healthy: remainingIssues.length === 0,
+          repaired: actions.length > 0,
+          issueCountBefore: issuesBefore.length,
+          issueCountAfter: remainingIssues.length,
+          actions,
+          remainingIssues,
+        };
+      } catch (error) {
+        await database.exec('ROLLBACK').catch(() => undefined);
+        throw error;
+      }
+    });
+  }
+
+  private async loadVolumeFromDatabase(
+    database: SqliteVolumeDatabase,
+    volumeId: string,
+  ): Promise<VolumeRecord> {
+    const manifestRow = await database.get<VolumeManifestRow>(
+      `SELECT
+         id,
+         name,
+         description,
+         quota_bytes,
+         logical_used_bytes,
+         entry_count,
+         revision,
+         created_at,
+         updated_at
+       FROM manifest
+       LIMIT 1`,
+    );
+
+    if (!manifestRow) {
+      throw new VolumeError('NOT_FOUND', `Volume ${volumeId} does not exist.`, {
+        volumeId,
+      });
+    }
+
+    const entryRows = await database.all<VolumeEntryRow[]>(
+      `SELECT
+         id,
+         kind,
+         name,
+         parent_id,
+         created_at,
+         updated_at,
+         size,
+         content_ref,
+         imported_from_host_path
+       FROM entries`,
+    );
+
+    return {
+      manifest: this.toManifest(manifestRow),
+      state: this.toState(entryRows, volumeId),
+    };
+  }
+
+  private async listPersistedBlobRefs(
+    database: SqliteVolumeDatabase,
+  ): Promise<Set<string>> {
+    const blobRows = await database.all<{ content_ref: string }[]>(
+      `SELECT content_ref
+         FROM blobs`,
+    );
+
+    return new Set(blobRows.map((row) => row.content_ref));
+  }
+
+  private collectDoctorIssues(
+    record: VolumeRecord,
+    persistedBlobRefs: Set<string>,
+  ): StorageDoctorIssue[] {
     const issues: StorageDoctorIssue[] = [];
     const entries = Object.values(record.state.entries);
     const rootEntry = record.state.entries[record.state.rootId];
@@ -631,7 +794,7 @@ export class VolumeRepository {
       issues.push({
         code: 'BROKEN_ROOT',
         severity: 'error',
-        message: `Volume ${volumeId} does not contain a valid root directory.`,
+        message: `Volume ${record.manifest.id} does not contain a valid root directory.`,
         entryId: record.state.rootId,
       });
     }
@@ -689,18 +852,6 @@ export class VolumeRepository {
       referencedBlobRefs.add(entry.contentRef);
     }
 
-    const persistedBlobRefs = await withVolumeDatabase(
-      this.getVolumeDatabasePath(volumeId),
-      async (database) => {
-        const blobRows = await database.all<{ content_ref: string }[]>(
-          `SELECT content_ref
-             FROM blobs`,
-        );
-
-        return new Set(blobRows.map((row) => row.content_ref));
-      },
-    );
-
     for (const entry of entries) {
       if (entry.kind !== 'file' || entry.contentRef.length === 0) {
         continue;
@@ -748,59 +899,7 @@ export class VolumeRepository {
       });
     }
 
-    return {
-      volumeId: record.manifest.id,
-      volumeName: record.manifest.name,
-      revision: record.manifest.revision,
-      healthy: issues.length === 0,
-      issueCount: issues.length,
-      issues,
-    };
-  }
-
-  private async loadVolumeFromDatabase(
-    database: SqliteVolumeDatabase,
-    volumeId: string,
-  ): Promise<VolumeRecord> {
-    const manifestRow = await database.get<VolumeManifestRow>(
-      `SELECT
-         id,
-         name,
-         description,
-         quota_bytes,
-         logical_used_bytes,
-         entry_count,
-         revision,
-         created_at,
-         updated_at
-       FROM manifest
-       LIMIT 1`,
-    );
-
-    if (!manifestRow) {
-      throw new VolumeError('NOT_FOUND', `Volume ${volumeId} does not exist.`, {
-        volumeId,
-      });
-    }
-
-    const entryRows = await database.all<VolumeEntryRow[]>(
-      `SELECT
-         id,
-         kind,
-         name,
-         parent_id,
-         created_at,
-         updated_at,
-         size,
-         content_ref,
-         imported_from_host_path
-       FROM entries`,
-    );
-
-    return {
-      manifest: this.toManifest(manifestRow),
-      state: this.toState(entryRows, volumeId),
-    };
+    return issues;
   }
 
   private async persistVolumeToDatabase(

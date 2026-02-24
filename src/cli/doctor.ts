@@ -2,6 +2,8 @@ import type {
   StorageDoctorIssue,
   StorageDoctorReport,
   StorageDoctorVolumeReport,
+  StorageRepairReport,
+  StorageRepairVolumeReport,
 } from '../domain/types.js';
 
 const formatIssue = (issue: StorageDoctorIssue): string => {
@@ -40,6 +42,45 @@ export const formatDoctorReport = (report: StorageDoctorReport): string => {
   if (report.volumes.length > 0) {
     lines.push('');
     lines.push(...report.volumes.map((volume) => formatVolumeReport(volume)));
+  }
+
+  return lines.join('\n');
+};
+
+const formatRepairVolumeReport = (report: StorageRepairVolumeReport): string => {
+  const lines = [
+    `${report.healthy ? 'OK' : 'WARN'} ${report.volumeName} (${report.volumeId}) revision=${report.revision} before=${report.issueCountBefore} after=${report.issueCountAfter}`,
+  ];
+
+  if (report.actions.length === 0) {
+    lines.push('  - No automatic repair actions were applied.');
+  } else {
+    for (const action of report.actions) {
+      const suffix = action.contentRef ? ` (contentRef=${action.contentRef})` : '';
+      lines.push(`  - [FIX] ${action.code}: ${action.message}${suffix}`);
+    }
+  }
+
+  if (report.remainingIssues.length > 0) {
+    for (const issue of report.remainingIssues) {
+      lines.push(formatIssue(issue));
+    }
+  }
+
+  return lines.join('\n');
+};
+
+export const formatRepairReport = (report: StorageRepairReport): string => {
+  const lines = [
+    `Storage repair: ${report.healthy ? 'HEALTHY' : 'ISSUES REMAIN'}`,
+    `Checked volumes: ${report.checkedVolumes}`,
+    `Repaired volumes: ${report.repairedVolumes}`,
+    `Actions applied: ${report.actionsApplied}`,
+  ];
+
+  if (report.volumes.length > 0) {
+    lines.push('');
+    lines.push(...report.volumes.map((volume) => formatRepairVolumeReport(volume)));
   }
 
   return lines.join('\n');
