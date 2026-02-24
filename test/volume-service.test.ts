@@ -589,6 +589,7 @@ describe('VolumeService', () => {
     const orphanBlob = await blobStore.putBuffer(Buffer.from('orphan blob', 'utf8'));
 
     await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, volume.id), async (database) => {
+      await database.exec('PRAGMA foreign_keys = OFF');
       await database.run(
         'DELETE FROM blob_chunks WHERE content_ref = ?',
         trackedEntry?.kind === 'file' ? trackedEntry.contentRef : '',
@@ -597,6 +598,7 @@ describe('VolumeService', () => {
         'DELETE FROM blobs WHERE content_ref = ?',
         trackedEntry?.kind === 'file' ? trackedEntry.contentRef : '',
       );
+      await database.exec('PRAGMA foreign_keys = ON');
     });
 
     const report = await runtime.volumeService.runDoctor(volume.id);
@@ -611,6 +613,105 @@ describe('VolumeService', () => {
         (issue) => issue.code === 'ORPHAN_BLOB' && issue.contentRef === orphanBlob.contentRef,
       ),
     ).toBe(true);
+  });
+
+  it('enforces sibling uniqueness at the SQLite level', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Unique Siblings' });
+    const timestamp = new Date().toISOString();
+
+    await runtime.volumeService.createDirectory(volume.id, '/', 'docs');
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, volume.id), async (database) => {
+      await database.exec('BEGIN IMMEDIATE TRANSACTION');
+
+      try {
+        await expect(
+          database.run(
+            `INSERT INTO entries (
+               id,
+               kind,
+               name,
+               parent_id,
+               created_at,
+               updated_at,
+               size,
+               content_ref,
+               imported_from_host_path
+             ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL)`,
+            'dir_duplicate_docs',
+            'directory',
+            'docs',
+            'root',
+            timestamp,
+            timestamp,
+          ),
+        ).rejects.toMatchObject({
+          code: 'SQLITE_CONSTRAINT',
+        });
+      } finally {
+        await database.exec('ROLLBACK').catch(() => undefined);
+      }
+    });
+  });
+
+  it('enforces relational foreign keys for file blobs at the SQLite level', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Relational Constraints' });
+    const timestamp = new Date().toISOString();
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, volume.id), async (database) => {
+      const entryForeignKeys = await database.all<{ table: string; from: string }[]>(
+        'PRAGMA foreign_key_list(entries)',
+      );
+      const blobChunkForeignKeys = await database.all<{ table: string; from: string }[]>(
+        'PRAGMA foreign_key_list(blob_chunks)',
+      );
+
+      expect(
+        entryForeignKeys.some((row) => row.table === 'entries' && row.from === 'parent_id'),
+      ).toBe(true);
+      expect(
+        entryForeignKeys.some((row) => row.table === 'blobs' && row.from === 'content_ref'),
+      ).toBe(true);
+      expect(
+        blobChunkForeignKeys.some(
+          (row) => row.table === 'blobs' && row.from === 'content_ref',
+        ),
+      ).toBe(true);
+
+      await database.exec('BEGIN IMMEDIATE TRANSACTION');
+
+      try {
+        await database.run(
+          `INSERT INTO entries (
+             id,
+             kind,
+             name,
+             parent_id,
+             created_at,
+             updated_at,
+             size,
+             content_ref,
+             imported_from_host_path
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+          'file_missing_blob',
+          'file',
+          'ghost.txt',
+          'root',
+          timestamp,
+          timestamp,
+          5,
+          'missing_blob_ref',
+        );
+
+        await expect(database.exec('COMMIT')).rejects.toMatchObject({
+          code: 'SQLITE_CONSTRAINT',
+        });
+      } finally {
+        await database.exec('ROLLBACK').catch(() => undefined);
+      }
+    });
   });
 
   it('deletes directory subtrees recursively', async () => {
