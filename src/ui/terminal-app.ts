@@ -28,11 +28,7 @@ import {
   getPageOffset,
   getVisibleWindow,
 } from './navigation.js';
-import {
-  createActivityBar,
-  createProgressBar,
-  formatElapsedTime,
-} from './status.js';
+import { buildStatusPanel, getStatusContextLine } from './status-panel.js';
 import {
   fitSingleLine as fitSingleLineText,
   formatEntryRow as formatExplorerEntryRow,
@@ -890,30 +886,27 @@ export class TerminalApp {
 
   private renderStatus(): void {
     const availableWidth = this.getContentWidth(this.statusBox);
+    const rendered = buildStatusPanel({
+      availableWidth,
+      mode: this.mode,
+      volumes: this.volumes,
+      selectedVolumeIndex: this.selectedVolumeIndex,
+      currentSnapshot: this.currentSnapshot,
+      selectedEntry: this.getSelectedEntry(),
+      logDir: this.runtime.config.logDir,
+      busyLabel: this.busyLabel,
+      busyDetail: this.busyDetail,
+      busyProgressCurrent: this.busyProgressCurrent,
+      busyProgressTotal: this.busyProgressTotal,
+      elapsedMs: Date.now() - this.busyStartedAt,
+      spinnerIndex: this.spinnerIndex,
+      spinnerFrames: SPINNER_FRAMES,
+      toast: this.toast,
+    });
 
-    if (this.busyLabel) {
-      this.applyStatusTheme('busy');
-      this.statusBox.setLabel(' Status  Running ');
-      this.statusBox.setContent(
-        this.renderBusyStatusLines(availableWidth).join('\n'),
-      );
-      return;
-    }
-
-    if (this.toast) {
-      this.applyStatusTheme(this.toast.tone);
-      this.statusBox.setLabel(` Status  ${this.toast.tone.toUpperCase()} `);
-      this.statusBox.setContent(
-        this.renderToastStatusLines(availableWidth).join('\n'),
-      );
-      return;
-    }
-
-    this.applyStatusTheme('idle');
-    this.statusBox.setLabel(' Status  Ready ');
-    this.statusBox.setContent(
-      this.renderIdleStatusLines(availableWidth).join('\n'),
-    );
+    this.applyStatusTheme(rendered.state);
+    this.statusBox.setLabel(rendered.label);
+    this.statusBox.setContent(rendered.lines.join('\n'));
   }
 
   private applyStatusTheme(state: ToastTone | 'busy' | 'idle'): void {
@@ -953,116 +946,6 @@ export class TerminalApp {
           borderFg: THEME.borderStatus,
         });
     }
-  }
-
-  private renderBusyStatusLines(availableWidth: number): [string, string] {
-    const elapsedLabel = formatElapsedTime(Date.now() - this.busyStartedAt);
-    const titleLine = this.fitSingleLine(
-      `${SPINNER_FRAMES[this.spinnerIndex]} ${this.busyLabel}  ${elapsedLabel}`,
-      availableWidth,
-    );
-    const detailLabel = this.busyDetail ?? this.getStatusContextLine(false);
-
-    if (this.busyProgressTotal !== null && this.busyProgressTotal > 0) {
-      const progressBarWidth = Math.max(10, Math.min(24, Math.floor(availableWidth * 0.24)));
-      const progressBar = createProgressBar(
-        this.busyProgressCurrent ?? 0,
-        this.busyProgressTotal,
-        progressBarWidth,
-      );
-      const percentage = Math.min(
-        100,
-        Math.max(
-          0,
-          Math.floor(((this.busyProgressCurrent ?? 0) / this.busyProgressTotal) * 100),
-        ),
-      );
-
-      return [
-        titleLine,
-        this.fitSingleLine(
-          `${progressBar} ${String(percentage).padStart(3, ' ')}%  ${formatBytes(this.busyProgressCurrent ?? 0)} / ${formatBytes(this.busyProgressTotal)}  ${detailLabel}`,
-          availableWidth,
-        ),
-      ];
-    }
-
-    const activityBarWidth = Math.max(10, Math.min(24, Math.floor(availableWidth * 0.24)));
-    const activityBar = createActivityBar(this.spinnerIndex, activityBarWidth);
-
-    return [
-      titleLine,
-      this.fitSingleLine(
-        `${activityBar} ${detailLabel}`,
-        availableWidth,
-      ),
-    ];
-  }
-
-  private renderToastStatusLines(availableWidth: number): [string, string] {
-    const titleLine = this.fitSingleLine(
-      `[${this.toast?.tone.toUpperCase()}] ${this.toast?.message ?? ''}`,
-      availableWidth,
-    );
-    const detailLine = this.fitSingleLine(
-      this.toast?.detail ?? this.getStatusContextLine(true),
-      availableWidth,
-    );
-
-    return [titleLine, detailLine];
-  }
-
-  private renderIdleStatusLines(availableWidth: number): [string, string] {
-    const headline =
-      this.mode === 'dashboard'
-        ? `Ready. Dashboard active with ${this.volumes.length} volumes available.`
-        : `Ready. Explorer active in ${this.currentSnapshot?.currentPath ?? '/'}.`;
-
-    return [
-      this.fitSingleLine(headline, availableWidth),
-      this.fitSingleLine(this.getStatusContextLine(true), availableWidth),
-    ];
-  }
-
-  private getStatusContextLine(includeLogs: boolean): string {
-    const baseContext =
-      this.mode === 'dashboard'
-        ? this.getDashboardStatusContext()
-        : this.getExplorerStatusContext();
-
-    if (!includeLogs) {
-      return baseContext;
-    }
-
-    return `${baseContext}  Logs ${this.runtime.config.logDir}`;
-  }
-
-  private getDashboardStatusContext(): string {
-    const selectedVolume = this.volumes[this.selectedVolumeIndex] ?? null;
-
-    if (!selectedVolume) {
-      return 'Press N to create your first volume. Use arrows to navigate when volumes are available.';
-    }
-
-    return `Selected volume ${selectedVolume.name}  Quota ${formatBytes(selectedVolume.quotaBytes)}  Used ${formatBytes(selectedVolume.logicalUsedBytes)}`;
-  }
-
-  private getExplorerStatusContext(): string {
-    if (!this.currentSnapshot) {
-      return 'Open a volume to browse files and folders.';
-    }
-
-    const selectedEntry = this.getSelectedEntry();
-    if (!selectedEntry) {
-      return `Volume ${this.currentSnapshot.volume.name}  Path ${this.currentSnapshot.currentPath}  Directory empty.`;
-    }
-
-    const selectionDetail =
-      selectedEntry.kind === 'file'
-        ? `Selected file ${selectedEntry.name}  ${formatBytes(selectedEntry.size)}`
-        : `Selected folder ${selectedEntry.name}`;
-
-    return `Volume ${this.currentSnapshot.volume.name}  Path ${this.currentSnapshot.currentPath}  ${selectionDetail}`;
   }
 
   private async moveSelection(direction: -1 | 1): Promise<void> {
@@ -2857,7 +2740,7 @@ export class TerminalApp {
       const message = error instanceof Error ? error.message : 'Unexpected error.';
       this.runtime.logger.error({ error, label }, 'Terminal operation failed.');
       this.finishBusyState();
-      this.notify('error', message, `Operation failed: ${label}. ${this.getStatusContextLine(true)}`);
+      this.notify('error', message, `Operation failed: ${label}. ${this.buildStatusContextLine(true)}`);
       return null;
     }
   }
@@ -2893,11 +2776,23 @@ export class TerminalApp {
 
   private startBusyState(label: string, detail?: string): void {
     this.busyLabel = label;
-    this.busyDetail = detail ?? this.getStatusContextLine(false);
+    this.busyDetail = detail ?? this.buildStatusContextLine(false);
     this.busyProgressCurrent = null;
     this.busyProgressTotal = null;
     this.busyStartedAt = Date.now();
     this.lastBusyRefreshAt = 0;
+  }
+
+  private buildStatusContextLine(includeLogs: boolean): string {
+    return getStatusContextLine({
+      mode: this.mode,
+      volumes: this.volumes,
+      selectedVolumeIndex: this.selectedVolumeIndex,
+      currentSnapshot: this.currentSnapshot,
+      selectedEntry: this.getSelectedEntry(),
+      logDir: this.runtime.config.logDir,
+      includeLogs,
+    });
   }
 
   private finishBusyState(): void {
