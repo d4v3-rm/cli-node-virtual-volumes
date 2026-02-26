@@ -25,6 +25,7 @@ Questo progetto nasce per offrire un ambiente di storage virtuale che:
 - non monta dischi reali a livello OS
 - non espone un file system nativo accessibile da altri programmi
 - vive all'interno di un runtime Node.js
+- salva ogni volume in un singolo file SQLite
 - permette import/export da e verso la macchina host
 - offre una UX da terminale curata, con navigator, modali e progress feedback reali
 
@@ -67,6 +68,7 @@ In pratica ottieni volumi virtuali persistenti, con spazio logico configurabile,
 - Supporto a move, rename, delete e navigazione gerarchica.
 - Preview rapida dei file di testo.
 - Persistenza dei contenuti e dei metadata.
+- Un file `.sqlite` dedicato per ogni volume virtuale.
 
 ### Terminal experience
 
@@ -116,8 +118,8 @@ src/
 | Modulo | Ruolo |
 | --- | --- |
 | `VolumeService` | Regola i flussi applicativi di volumi, file, import ed export |
-| `VolumeRepository` | Gestisce metadata e stato dei volumi |
-| `BlobStore` | Conserva il contenuto reale dei file virtuali |
+| `VolumeRepository` | Gestisce metadata e stato dei volumi nel file SQLite del volume |
+| `BlobStore` | Conserva il contenuto reale dei file virtuali nello stesso SQLite del volume |
 | `TerminalApp` | Costruisce la TUI e orchestra la UX runtime |
 | `env` config | Traduce `.env`, flag CLI e default applicativi |
 | `logger` | Registra eventi, errori e trace su file system |
@@ -140,7 +142,7 @@ npm install
 
 ```bash
 npm pack
-npm install -g ./cli-node-virtual-volumes-0.2.0.tgz
+npm install -g ./cli-node-virtual-volumes-0.3.0.tgz
 ```
 
 Dopo l'installazione globale il comando disponibile e':
@@ -191,6 +193,7 @@ Il progetto legge la configurazione da `.env`, flag CLI e default interni. E' di
 ### Note operative
 
 - Di default i volumi vengono salvati nella directory corrente da cui lanci il programma, a meno che tu non sovrascriva il path via config.
+- Dentro `VOLUME_DATA_DIR/volumes` ogni volume viene persistito come file singolo `.sqlite`.
 - I log sono pensati per stare su file; l'output su terminale e' utile in debug, ma puo' interferire con la TUI fullscreen.
 
 ## ⌨️ Controlli TUI
