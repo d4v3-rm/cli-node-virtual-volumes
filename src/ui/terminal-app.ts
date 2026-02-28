@@ -10,7 +10,6 @@ import type {
   ImportProgress,
   VolumeManifest,
 } from '../domain/types.js';
-import { formatBytes, formatDateTime, truncate } from '../utils/formatters.js';
 import { getParentVirtualPath } from '../utils/virtual-paths.js';
 import {
   buildCreateFolderPrompt,
@@ -63,22 +62,24 @@ import {
   VISIBLE_ENTRY_ROWS,
   VISIBLE_VOLUME_ROWS,
   clampIndex,
-  formatWindowSummary,
   getPageOffset,
-  getVisibleWindow,
 } from './navigation.js';
 import { buildStatusPanel, getStatusContextLine } from './status-panel.js';
 import {
   fitSingleLine as fitSingleLineText,
-  formatEntryRow as formatExplorerEntryRow,
   formatExportProgress as formatExportProgressText,
   formatImportProgress as formatImportProgressText,
-  formatVolumeRow as formatVolumeListRow,
 } from './presenters.js';
 import {
   getContentWidth as getLayoutContentWidth,
   resolveElementOuterWidth as resolveLayoutOuterWidth,
 } from './layout.js';
+import {
+  buildHeaderPanelContent,
+  buildInspectorPanelContent,
+  buildPrimaryPanelView,
+  buildShortcutsPanelContent,
+} from './shell-panels.js';
 
 type ScreenMode = 'dashboard' | 'explorer';
 type ToastTone = 'success' | 'error' | 'info';
@@ -723,202 +724,51 @@ export class TerminalApp {
   }
 
   private renderHeader(): void {
-    const headerWidth = this.getContentWidth(this.headerBox);
-
-    if (this.mode === 'dashboard') {
-      this.headerBox.setContent(
-        [
-          this.fitSingleLine('Virtual Volumes  Stable keyboard-first shell', headerWidth),
-          this.fitSingleLine(`Data root ${this.runtime.config.dataDir}`, headerWidth),
-        ].join('\n'),
-      );
-      return;
-    }
-
-    if (!this.currentSnapshot) {
-      this.headerBox.setContent(
-        [
-          this.fitSingleLine('Virtual Volumes', headerWidth),
-          this.fitSingleLine('No volume opened.', headerWidth),
-        ].join('\n'),
-      );
-      return;
-    }
-
-    const pageSummary = formatWindowSummary(
-      this.currentSnapshot.windowOffset,
-      this.currentSnapshot.windowOffset + this.currentSnapshot.entries.length,
-      this.currentSnapshot.totalEntries,
-    );
-
     this.headerBox.setContent(
-      [
-        this.fitSingleLine(
-          `${this.currentSnapshot.volume.name}  ${this.currentSnapshot.currentPath}`,
-          headerWidth,
-        ),
-        this.fitSingleLine(
-          `Entries ${pageSummary}  Remaining ${formatBytes(this.currentSnapshot.remainingBytes)}`,
-          headerWidth,
-        ),
-      ].join('\n'),
+      buildHeaderPanelContent({
+        currentSnapshot: this.currentSnapshot,
+        dataDir: this.runtime.config.dataDir,
+        headerWidth: this.getContentWidth(this.headerBox),
+        mode: this.mode,
+      }),
     );
   }
 
   private renderPrimaryPane(): void {
-    if (this.mode === 'dashboard') {
-      const visibleVolumes = getVisibleWindow(
-        this.volumes,
-        this.selectedVolumeIndex,
-        VISIBLE_VOLUME_ROWS,
-      );
+    const view = buildPrimaryPanelView({
+      currentSnapshot: this.currentSnapshot,
+      leftPaneWidth: this.getContentWidth(this.leftPane),
+      mode: this.mode,
+      selectedEntryIndex: this.selectedEntryIndex,
+      selectedVolumeIndex: this.selectedVolumeIndex,
+      volumes: this.volumes,
+    });
 
-      this.leftPane.setLabel(
-        this.volumes.length > 0
-          ? ` Volumes  ${formatWindowSummary(visibleVolumes.start, visibleVolumes.end, this.volumes.length)} `
-          : ' Volumes ',
-      );
-
-      if (visibleVolumes.items.length === 0) {
-        this.primaryList.setItems([
-          this.fitSingleLine('No virtual volumes yet. Press N to create one.', this.getContentWidth(this.leftPane)),
-        ]);
-        this.primaryList.select(0);
-        return;
-      }
-
-      this.primaryList.setItems(
-        visibleVolumes.items.map((volume) =>
-          this.formatVolumeRow(volume, this.getContentWidth(this.leftPane)),
-        ),
-      );
-      this.primaryList.select(this.selectedVolumeIndex - visibleVolumes.start);
-      return;
-    }
-
-    if (!this.currentSnapshot || this.currentSnapshot.entries.length === 0) {
-      const currentPath = this.currentSnapshot?.currentPath ?? '/';
-      this.leftPane.setLabel(
-        ` Entries  ${this.fitSingleLine(currentPath, Math.max(12, this.getContentWidth(this.leftPane) - 10))} `,
-      );
-      this.primaryList.setItems([
-        this.fitSingleLine('This directory is empty.', this.getContentWidth(this.leftPane)),
-      ]);
-      this.primaryList.select(0);
-      return;
-    }
-
-    this.leftPane.setLabel(
-      ` Entries  ${formatWindowSummary(
-        this.currentSnapshot.windowOffset,
-        this.currentSnapshot.windowOffset + this.currentSnapshot.entries.length,
-        this.currentSnapshot.totalEntries,
-      )} `,
-    );
-
-    this.primaryList.setItems(
-      this.currentSnapshot.entries.map((entry) =>
-        this.formatEntryRow(entry, this.getContentWidth(this.leftPane)),
-      ),
-    );
-    this.primaryList.select(this.selectedEntryIndex - this.currentSnapshot.windowOffset);
+    this.leftPane.setLabel(view.label);
+    this.primaryList.setItems(view.items);
+    this.primaryList.select(view.selectedIndex);
   }
 
   private renderInspector(): void {
-    if (this.mode === 'dashboard') {
-      const selectedVolume = this.volumes[this.selectedVolumeIndex] ?? null;
-      if (!selectedVolume) {
-        this.inspectorBox.setContent(
-          [
-            'No volume selected.',
-            '',
-            `Data dir: ${this.runtime.config.dataDir}`,
-            `Logs: ${this.runtime.config.logDir}`,
-            '',
-            'Use arrows to move and Enter to open a volume.',
-          ].join('\n'),
-        );
-        return;
-      }
-
-      this.inspectorBox.setContent(
-        [
-          selectedVolume.name,
-          `Id: ${selectedVolume.id}`,
-          '',
-          `Used: ${formatBytes(selectedVolume.logicalUsedBytes)}`,
-          `Quota: ${formatBytes(selectedVolume.quotaBytes)}`,
-          `Entries: ${selectedVolume.entryCount}`,
-          `Updated: ${formatDateTime(selectedVolume.updatedAt)}`,
-          '',
-          truncate(selectedVolume.description || 'No description.', 220),
-          '',
-          `Data dir: ${this.runtime.config.dataDir}`,
-          `Logs: ${this.runtime.config.logDir}`,
-        ].join('\n'),
-      );
-      return;
-    }
-
-    if (!this.currentSnapshot) {
-      this.inspectorBox.setContent('No volume opened.');
-      return;
-    }
-
-    const selectedEntry = this.getSelectedEntry();
-
     this.inspectorBox.setContent(
-      [
-        this.currentSnapshot.volume.name,
-        `Path: ${this.currentSnapshot.currentPath}`,
-        '',
-        `Used: ${formatBytes(this.currentSnapshot.usageBytes)}`,
-        `Quota: ${formatBytes(this.currentSnapshot.volume.quotaBytes)}`,
-        `Remaining: ${formatBytes(this.currentSnapshot.remainingBytes)}`,
-        `Entries in dir: ${this.currentSnapshot.totalEntries}`,
-        '',
-        selectedEntry ? `Selected: ${selectedEntry.name}` : 'Selected: none',
-        selectedEntry ? `Type: ${selectedEntry.kind}` : '',
-        selectedEntry?.kind === 'file'
-          ? `Size: ${formatBytes(selectedEntry.size)}`
-          : '',
-        selectedEntry ? `Updated: ${formatDateTime(selectedEntry.updatedAt)}` : '',
-        selectedEntry ? `Path: ${truncate(selectedEntry.path, 220)}` : '',
-      ]
-        .filter((line) => line.length > 0)
-        .join('\n'),
+      buildInspectorPanelContent({
+        currentSnapshot: this.currentSnapshot,
+        dataDir: this.runtime.config.dataDir,
+        logDir: this.runtime.config.logDir,
+        mode: this.mode,
+        selectedEntry: this.getSelectedEntry(),
+        selectedVolumeIndex: this.selectedVolumeIndex,
+        volumes: this.volumes,
+      }),
     );
   }
 
   private renderShortcuts(): void {
-    const shortcuts =
-      this.mode === 'dashboard'
-        ? [
-            '[UP/DOWN] Select volume',
-            '[RIGHT/ENTER] Open volume',
-            '[PGUP/PGDN] Page volumes',
-            '[HOME/END] Jump list bounds',
-            '[N] New volume',
-            '[X] Delete volume',
-            '[R] Refresh   [?] Help',
-            '[Q] Quit',
-          ]
-        : [
-            '[UP/DOWN] Select entry',
-            '[LEFT/RIGHT] Parent or open',
-            '[PGUP/PGDN] Page entries',
-            '[HOME/END] Jump list bounds',
-            '[I] Import   [E] Export',
-            '[C] Folder   [M] Move',
-            '[D] Delete   [P] Preview',
-            '[R] Refresh  [B/Q] Dashboard',
-          ];
-
-    const availableWidth = this.getContentWidth(this.shortcutsBox);
     this.shortcutsBox.setContent(
-      shortcuts
-        .map((shortcut) => this.fitSingleLine(shortcut, availableWidth))
-        .join('\n'),
+      buildShortcutsPanelContent({
+        mode: this.mode,
+        width: this.getContentWidth(this.shortcutsBox),
+      }),
     );
   }
 
@@ -2645,14 +2495,6 @@ export class TerminalApp {
 
     const relativeIndex = this.selectedEntryIndex - this.currentSnapshot.windowOffset;
     return relativeIndex >= 0 ? this.currentSnapshot.entries[relativeIndex] ?? null : null;
-  }
-
-  private formatVolumeRow(volume: VolumeManifest, availableWidth: number): string {
-    return formatVolumeListRow(volume, availableWidth);
-  }
-
-  private formatEntryRow(entry: DirectoryListingItem, availableWidth: number): string {
-    return formatExplorerEntryRow(entry, availableWidth);
   }
 
   private shutdown(): void {
