@@ -64,6 +64,18 @@ import {
   formatExportProgress as formatExportProgressText,
   formatImportProgress as formatImportProgressText,
 } from './presenters.js';
+import type {
+  OverlayBorderTone,
+  OverlayFrameMode,
+  OverlayFrameView,
+  OverlayRegionLayout,
+} from './overlay-shell.js';
+import {
+  buildOverlayFrame,
+  getConfirmOverlayLayout,
+  getPromptOverlayLayout,
+  getScrollableOverlayLayout,
+} from './overlay-shell.js';
 import {
   getContentWidth as getLayoutContentWidth,
   resolveElementOuterWidth as resolveLayoutOuterWidth,
@@ -94,7 +106,7 @@ import {
 
 type ScreenMode = 'dashboard' | 'explorer';
 type ToastTone = 'success' | 'error' | 'info';
-type OverlayMode = 'help' | 'preview' | 'confirm' | 'input' | 'hostBrowser' | null;
+type OverlayMode = OverlayFrameMode | null;
 
 interface ToastState {
   tone: ToastTone;
@@ -1237,21 +1249,17 @@ export class TerminalApp {
       let renderedRowsSignature = '';
       let selectedPaths = new Set<string>();
 
-      this.overlayMode = 'hostBrowser';
-      this.overlayBackdrop.show();
-      this.overlayContainer.setLabel(modeConfig.containerLabel);
-      this.overlayContainer.width = overlayWidth;
-      this.overlayContainer.height = overlayHeight;
-      this.overlayContainer.left = Math.max(
-        0,
-        Math.floor((viewportWidth - overlayWidth) / 2),
+      this.openOverlayFrame(
+        buildOverlayFrame({
+          borderTone: isImportMode ? 'success' : 'accentWarm',
+          height: overlayHeight,
+          mode: 'hostBrowser',
+          title: modeConfig.containerLabel,
+          viewportHeight,
+          viewportWidth,
+          width: overlayWidth,
+        }),
       );
-      this.overlayContainer.top = Math.max(
-        1,
-        Math.floor((viewportHeight - overlayHeight) / 2),
-      );
-      this.overlayContainer.show();
-      this.clearChildren(this.overlayContainer);
 
       const headerBox = blessed.box({
         parent: this.overlayContainer,
@@ -1729,25 +1737,19 @@ export class TerminalApp {
   }): Promise<void> {
     await new Promise<void>((resolve) => {
       const view = buildScrollableOverlayView(options);
+      const layout = getScrollableOverlayLayout();
 
-      this.overlayMode = view.mode;
-      this.overlayBackdrop.show();
-      this.overlayContainer.setLabel(` ${view.title} `);
-      this.overlayContainer.width = view.width;
-      this.overlayContainer.height = view.height;
-      this.setElementColors(this.overlayContainer, {
-        bg: THEME.panelOverlay,
-        borderFg: view.borderTone === 'accentSecondary' ? THEME.accentSecondary : THEME.info,
-      });
-      this.overlayContainer.show();
-      this.clearChildren(this.overlayContainer);
+      this.openOverlayFrame(
+        buildOverlayFrame({
+          borderTone: view.borderTone,
+          height: view.height,
+          mode: view.mode,
+          title: view.title,
+          width: view.width,
+        }),
+      );
 
-      const contentBox = blessed.box({
-        parent: this.overlayContainer,
-        top: 1,
-        left: 1,
-        right: 1,
-        bottom: 2,
+      const contentBox = this.createOverlayBox(layout.contentBox, {
         scrollable: true,
         alwaysScroll: true,
         keys: true,
@@ -1767,18 +1769,7 @@ export class TerminalApp {
         },
       });
 
-      blessed.box({
-        parent: this.overlayContainer,
-        left: 1,
-        right: 1,
-        bottom: 0,
-        height: 1,
-        content: view.footer,
-        style: {
-          bg: THEME.panelOverlayAlt,
-          fg: THEME.muted,
-        },
-      });
+      this.createOverlayFooter(layout.footerBox, view.footer);
 
       const close = (): void => {
         this.closeOverlay();
@@ -1801,30 +1792,33 @@ export class TerminalApp {
   }): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       let selectedButton: 'confirm' | 'cancel' = 'confirm';
+      const layout = getConfirmOverlayLayout();
       const applyConfirmView = (): void => {
         const view = buildConfirmOverlayView(options, selectedButton);
 
-        this.overlayContainer.setLabel(` ${view.title} `);
-        this.overlayContainer.width = view.width;
-        this.overlayContainer.height = view.height;
-        this.setElementColors(this.overlayContainer, {
-          bg: THEME.panelOverlay,
-          borderFg: view.borderTone === 'danger' ? THEME.danger : THEME.warning,
-        });
+        this.applyOverlayFrame(
+          buildOverlayFrame({
+            borderTone: view.borderTone,
+            height: view.height,
+            mode: view.mode,
+            title: view.title,
+            width: view.width,
+          }),
+        );
         buttonRow.setContent(view.buttonContent);
       };
 
-      this.overlayMode = 'confirm';
-      this.overlayBackdrop.show();
-      this.overlayContainer.show();
-      this.clearChildren(this.overlayContainer);
+      this.openOverlayFrame(
+        buildOverlayFrame({
+          borderTone: 'warning',
+          height: 11,
+          mode: 'confirm',
+          title: options.title,
+          width: '64%',
+        }),
+      );
 
-      blessed.box({
-        parent: this.overlayContainer,
-        top: 1,
-        left: 2,
-        right: 2,
-        height: 4,
+      this.createOverlayBox(layout.bodyBox, {
         content: options.body,
         style: {
           bg: THEME.panelOverlayAlt,
@@ -1832,12 +1826,7 @@ export class TerminalApp {
         },
       });
 
-      const buttonRow = blessed.box({
-        parent: this.overlayContainer,
-        bottom: 1,
-        left: 2,
-        right: 2,
-        height: 2,
+      const buttonRow = this.createOverlayBox(layout.buttonRow, {
         keys: true,
         mouse: false,
         style: {
@@ -1876,25 +1865,19 @@ export class TerminalApp {
     return new Promise<string | null>((resolve) => {
       let settled = false;
       const view = buildPromptOverlayView(options);
+      const layout = getPromptOverlayLayout();
 
-      this.overlayMode = view.mode;
-      this.overlayBackdrop.show();
-      this.overlayContainer.setLabel(` ${view.title} `);
-      this.overlayContainer.width = view.width;
-      this.overlayContainer.height = view.height;
-      this.setElementColors(this.overlayContainer, {
-        bg: THEME.panelOverlay,
-        borderFg: THEME.accentWarm,
-      });
-      this.overlayContainer.show();
-      this.clearChildren(this.overlayContainer);
+      this.openOverlayFrame(
+        buildOverlayFrame({
+          borderTone: view.borderTone,
+          height: view.height,
+          mode: view.mode,
+          title: view.title,
+          width: view.width,
+        }),
+      );
 
-      blessed.box({
-        parent: this.overlayContainer,
-        top: 1,
-        left: 2,
-        right: 2,
-        height: 2,
+      this.createOverlayBox(layout.descriptionBox, {
         content: view.description,
         style: {
           bg: THEME.panelOverlayAlt,
@@ -1902,12 +1885,7 @@ export class TerminalApp {
         },
       });
 
-      const input = blessed.textbox({
-        parent: this.overlayContainer,
-        top: 4,
-        left: 2,
-        right: 2,
-        height: 3,
+      const input = this.createOverlayTextbox(layout.inputBox, {
         inputOnFocus: true,
         keys: true,
         mouse: true,
@@ -1926,18 +1904,7 @@ export class TerminalApp {
         },
       });
 
-      blessed.box({
-        parent: this.overlayContainer,
-        left: 2,
-        right: 2,
-        bottom: 0,
-        height: 1,
-        content: view.footer,
-        style: {
-          bg: THEME.panelOverlayAlt,
-          fg: THEME.muted,
-        },
-      });
+      this.createOverlayFooter(layout.footerBox, view.footer);
 
       input.setValue(view.initialValue);
 
@@ -1978,6 +1945,75 @@ export class TerminalApp {
     this.clearChildren(this.overlayContainer);
     this.focusShell();
     this.screen.render();
+  }
+
+  private resolveOverlayBorderColor(tone: OverlayBorderTone): string {
+    switch (tone) {
+      case 'accentSecondary':
+        return THEME.accentSecondary;
+      case 'warning':
+        return THEME.warning;
+      case 'danger':
+        return THEME.danger;
+      case 'accentWarm':
+        return THEME.accentWarm;
+      case 'success':
+        return THEME.borderOverlayAlt;
+      default:
+        return THEME.info;
+    }
+  }
+
+  private applyOverlayFrame(view: OverlayFrameView): void {
+    this.overlayMode = view.mode;
+    this.overlayContainer.setLabel(view.label);
+    this.overlayContainer.width = view.width;
+    this.overlayContainer.height = view.height;
+    this.overlayContainer.left = view.left;
+    this.overlayContainer.top = view.top;
+    this.setElementColors(this.overlayContainer, {
+      bg: THEME.panelOverlay,
+      borderFg: this.resolveOverlayBorderColor(view.borderTone),
+    });
+  }
+
+  private openOverlayFrame(view: OverlayFrameView): void {
+    this.overlayBackdrop.show();
+    this.applyOverlayFrame(view);
+    this.overlayContainer.show();
+    this.clearChildren(this.overlayContainer);
+  }
+
+  private createOverlayBox(
+    layout: OverlayRegionLayout,
+    options: Widgets.BoxOptions,
+  ): Widgets.BoxElement {
+    return blessed.box({
+      parent: this.overlayContainer,
+      ...layout,
+      ...options,
+    });
+  }
+
+  private createOverlayTextbox(
+    layout: OverlayRegionLayout,
+    options: Widgets.TextboxOptions,
+  ): Widgets.TextboxElement {
+    return blessed.textbox({
+      parent: this.overlayContainer,
+      ...layout,
+      ...options,
+    });
+  }
+
+  private createOverlayFooter(layout: OverlayRegionLayout, content: string): Widgets.BoxElement {
+    return this.createOverlayBox(layout, {
+      content,
+      style: {
+        bg: THEME.panelOverlayAlt,
+        fg: THEME.muted,
+      },
+    });
   }
 
   private async runTask<T>(
