@@ -41,7 +41,18 @@ import {
   getMoveEntryAction,
   getPreviewEntryAction,
 } from './action-controller.js';
-import type { HostBrowserEntry, HostBrowserSnapshot } from './host-browser.js';
+import {
+  applyHostBrowserSnapshot,
+  createHostBrowserSessionState,
+  getHostBrowserConfirmAction,
+  getHostBrowserNavigateInAction,
+  getHostBrowserNavigateOutAction,
+  jumpHostBrowserSelectionState,
+  moveHostBrowserSelectionState,
+  setHostBrowserLoading,
+  toggleCurrentHostBrowserSelectionState,
+  toggleVisibleHostBrowserSelectionsState,
+} from './host-browser-controller.js';
 import {
   buildConfirmOverlayView,
   buildPromptOverlayView,
@@ -52,21 +63,13 @@ import {
 import {
   buildHostExportOverlayView,
   buildHostImportOverlayView,
-  getExportDestinationPath,
   getHostBrowserModeConfig,
   getHostOverlayDimensions,
   getHostRowsSignature,
-  getHostVisibleEntries,
-  getPreferredHostSelectionIndex,
   HOST_BROWSER_VISIBLE_ROWS,
-  jumpHostSelection,
-  moveHostSelection,
-  toggleHostSelection,
-  toggleVisibleHostSelections,
 } from './host-browser-overlay.js';
 import {
   getDefaultHostPath,
-  getParentHostPath,
   listHostBrowserSnapshot,
 } from './host-browser.js';
 import { buildStatusPanel, getStatusContextLine } from './status-panel.js';
@@ -1250,16 +1253,9 @@ export class TerminalApp {
         viewportHeight,
         options.mode,
       );
-      let snapshot: HostBrowserSnapshot = {
-        currentPath: initialHostPath,
-        displayPath: 'Loading host filesystem...',
-        entries: [],
-      };
-      let selectedIndex = 0;
-      let loading = false;
+      let session = createHostBrowserSessionState(initialHostPath);
       let settled = false;
       let renderedRowsSignature = '';
-      let selectedPaths = new Set<string>();
 
       this.openOverlayFrame(
         buildOverlayFrame({
@@ -1382,9 +1378,6 @@ export class TerminalApp {
         },
       });
 
-      const getCurrentEntry = (): HostBrowserEntry | null =>
-        snapshot.entries[selectedIndex] ?? null;
-
       const close = (result: string[] | string | null): void => {
         if (settled) {
           return;
@@ -1398,29 +1391,29 @@ export class TerminalApp {
       const renderBrowser = (): void => {
         const contentWidth = this.getContentWidth(this.overlayContainer) - 4;
         const rowsSignature = getHostRowsSignature({
-          loading,
-          selectedIndex,
-          selectedPaths: isImportMode ? selectedPaths : undefined,
-          snapshot,
+          loading: session.loading,
+          selectedIndex: session.selectedIndex,
+          selectedPaths: isImportMode ? session.selectedPaths : undefined,
+          snapshot: session.snapshot,
         });
         const view = isImportMode
           ? buildHostImportOverlayView({
               browserContentWidth: this.getContentWidth(browserPane),
               destinationPath: options.destinationPath,
               headerWidth: contentWidth,
-              loading,
+              loading: session.loading,
               overlayContentWidth: contentWidth,
-              selectedIndex,
-              selectedPaths,
-              snapshot,
+              selectedIndex: session.selectedIndex,
+              selectedPaths: session.selectedPaths,
+              snapshot: session.snapshot,
             })
           : buildHostExportOverlayView({
               browserContentWidth: this.getContentWidth(browserPane),
               headerWidth: contentWidth,
-              loading,
+              loading: session.loading,
               overlayContentWidth: contentWidth,
-              selectedIndex,
-              snapshot,
+              selectedIndex: session.selectedIndex,
+              snapshot: session.snapshot,
               sourcePath: options.sourcePath,
             });
 
@@ -1443,89 +1436,74 @@ export class TerminalApp {
         targetPath: string | null,
         preferredAbsolutePath: string | null = null,
       ): Promise<void> => {
-        loading = true;
+        session = setHostBrowserLoading(session, true);
         renderBrowser();
 
         try {
           const nextSnapshot = await listHostBrowserSnapshot(targetPath);
-          snapshot = nextSnapshot;
+          session = applyHostBrowserSnapshot(session, nextSnapshot, preferredAbsolutePath);
           renderedRowsSignature = '';
-          selectedIndex = getPreferredHostSelectionIndex(snapshot, preferredAbsolutePath);
         } catch (error) {
           const message =
             error instanceof Error ? error.message : 'Unable to browse the host filesystem.';
+          session = setHostBrowserLoading(session, false);
           this.notify('error', message);
-        } finally {
-          loading = false;
-          renderBrowser();
         }
+
+        renderBrowser();
       };
 
       const moveSelectionBy = (direction: number): void => {
-        if (loading || snapshot.entries.length === 0) {
+        const nextSession = moveHostBrowserSelectionState(session, direction);
+        if (nextSession === session) {
           return;
         }
 
-        selectedIndex = moveHostSelection(selectedIndex, snapshot.entries.length, direction);
+        session = nextSession;
         renderBrowser();
       };
 
       const navigateIn = async (): Promise<void> => {
-        if (loading) {
-          return;
-        }
-
-        const currentEntry = getCurrentEntry();
-        if (!currentEntry) {
-          return;
-        }
-
-        if (currentEntry.navigable) {
-          await loadSnapshot(currentEntry.absolutePath);
-          return;
-        }
-
-        if (isImportMode && currentEntry.selectable && currentEntry.absolutePath !== null) {
-          selectedPaths = toggleHostSelection(selectedPaths, currentEntry);
-          renderedRowsSignature = '';
-          renderBrowser();
+        const action = getHostBrowserNavigateInAction(options.mode, session);
+        switch (action.kind) {
+          case 'load':
+            await loadSnapshot(
+              action.request.targetPath,
+              action.request.preferredAbsolutePath,
+            );
+            return;
+          case 'update':
+            session = action.state;
+            renderBrowser();
+            return;
+          default:
+            return;
         }
       };
 
       const navigateOut = async (): Promise<void> => {
-        if (loading || snapshot.currentPath === null) {
-          return;
+        const action = getHostBrowserNavigateOutAction(session);
+        if (action.kind === 'load') {
+          await loadSnapshot(
+            action.request.targetPath,
+            action.request.preferredAbsolutePath,
+          );
         }
-
-        const previousPath = snapshot.currentPath;
-        const parentPath = getParentHostPath(snapshot.currentPath);
-        if (parentPath === snapshot.currentPath) {
-          return;
-        }
-
-        await loadSnapshot(parentPath, previousPath);
       };
 
       const confirmSelection = (): void => {
-        if (isImportMode) {
-          if (selectedPaths.size === 0) {
-            this.notify('info', modeConfig.emptySelectionMessage ?? 'Nothing selected.');
-            renderBrowser();
-            return;
-          }
-
-          close(Array.from(selectedPaths));
-          return;
-        }
-
-        const destinationPath = getExportDestinationPath(snapshot, getCurrentEntry());
-        if (destinationPath === null) {
-          this.notify('info', modeConfig.emptySelectionMessage ?? 'Select a destination.');
+        const action = getHostBrowserConfirmAction({
+          emptySelectionMessage: modeConfig.emptySelectionMessage,
+          mode: options.mode,
+          state: session,
+        });
+        if (action.kind === 'notify') {
+          this.notify('info', action.message);
           renderBrowser();
           return;
         }
 
-        close(destinationPath);
+        close(action.result);
       };
 
       browserList.key(['up'], () => {
@@ -1545,18 +1523,21 @@ export class TerminalApp {
           confirmSelection();
         });
         browserList.key(['space'], () => {
-          selectedPaths = toggleHostSelection(selectedPaths, getCurrentEntry());
-          renderedRowsSignature = '';
-          renderBrowser();
-        });
-        browserList.key(['a'], () => {
-          const visibleEntries = getHostVisibleEntries(snapshot, selectedIndex).items;
-          if (visibleEntries.length === 0) {
+          const nextSession = toggleCurrentHostBrowserSelectionState(session);
+          if (nextSession === session) {
             return;
           }
 
-          selectedPaths = toggleVisibleHostSelections(selectedPaths, visibleEntries);
-          renderedRowsSignature = '';
+          session = nextSession;
+          renderBrowser();
+        });
+        browserList.key(['a'], () => {
+          const nextSession = toggleVisibleHostBrowserSelectionsState(session);
+          if (nextSession === session) {
+            return;
+          }
+
+          session = nextSession;
           renderBrowser();
         });
       } else {
@@ -1571,19 +1552,21 @@ export class TerminalApp {
         moveSelectionBy(HOST_BROWSER_VISIBLE_ROWS);
       });
       browserList.key(['home'], () => {
-        if (loading || snapshot.entries.length === 0) {
+        const nextSession = jumpHostBrowserSelectionState(session, 'start');
+        if (nextSession === session) {
           return;
         }
 
-        selectedIndex = jumpHostSelection('start', snapshot.entries.length);
+        session = nextSession;
         renderBrowser();
       });
       browserList.key(['end'], () => {
-        if (loading || snapshot.entries.length === 0) {
+        const nextSession = jumpHostBrowserSelectionState(session, 'end');
+        if (nextSession === session) {
           return;
         }
 
-        selectedIndex = jumpHostSelection('end', snapshot.entries.length);
+        session = nextSession;
         renderBrowser();
       });
       browserList.key(['escape', 'q'], () => {
