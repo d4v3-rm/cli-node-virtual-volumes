@@ -14,7 +14,8 @@ import type {
   VolumeRecord,
   VolumeState,
 } from '../domain/types.js';
-import { ensureDirectory, pathExists } from '../utils/fs.js';
+import { ensureDirectory, pathExists, readJsonFile } from '../utils/fs.js';
+import { BlobStore } from './blob-store.js';
 import {
   VOLUME_DATABASE_EXTENSION,
   type VolumeEntryRow,
@@ -41,6 +42,7 @@ export class VolumeRepository {
 
   public async initialize(): Promise<void> {
     await ensureDirectory(this.getVolumesDirectory());
+    await this.migrateLegacyVolumes();
   }
 
   public async listVolumes(): Promise<VolumeManifest[]> {
@@ -408,5 +410,86 @@ export class VolumeRepository {
       rootId,
       entries,
     };
+  }
+
+  private async migrateLegacyVolumes(): Promise<void> {
+    const directoryEntries = await fs.readdir(this.getVolumesDirectory(), {
+      withFileTypes: true,
+    });
+
+    for (const entry of directoryEntries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+
+      const legacyDirectoryPath = path.join(this.getVolumesDirectory(), entry.name);
+      const manifestPath = path.join(legacyDirectoryPath, 'manifest.json');
+      const statePath = path.join(legacyDirectoryPath, 'state.json');
+
+      if (!(await pathExists(manifestPath)) || !(await pathExists(statePath))) {
+        continue;
+      }
+
+      try {
+        const manifest = await readJsonFile<VolumeManifest>(manifestPath);
+        const state = await readJsonFile<VolumeState>(statePath);
+        const databasePath = this.getVolumeDatabasePath(manifest.id);
+
+        if (!(await pathExists(databasePath))) {
+          await this.saveVolume({ manifest, state });
+          await this.migrateLegacyBlobs(legacyDirectoryPath, databasePath, state);
+        }
+
+        await fs.rm(legacyDirectoryPath, { recursive: true, force: true });
+        this.logger.info(
+          { legacyDirectoryPath, volumeId: manifest.id },
+          'Migrated legacy volume directory to sqlite volume file.',
+        );
+      } catch (error) {
+        this.logger.error(
+          {
+            legacyDirectoryPath,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          'Failed to migrate legacy volume directory.',
+        );
+      }
+    }
+  }
+
+  private async migrateLegacyBlobs(
+    legacyDirectoryPath: string,
+    databasePath: string,
+    state: VolumeState,
+  ): Promise<void> {
+    const contentRefs = new Set(
+      Object.values(state.entries).flatMap((entry) =>
+        entry.kind === 'file' ? [entry.contentRef] : [],
+      ),
+    );
+    const blobStore = new BlobStore(
+      databasePath,
+      this.logger.child({ scope: 'blob-store-migration' }),
+    );
+
+    for (const contentRef of contentRefs) {
+      const legacyBlobPath = path.join(
+        legacyDirectoryPath,
+        'blobs',
+        contentRef.slice(0, 2),
+        contentRef.slice(2),
+      );
+
+      if (!(await pathExists(legacyBlobPath))) {
+        this.logger.warn(
+          { legacyBlobPath, contentRef },
+          'Legacy blob file is missing during sqlite migration.',
+        );
+        continue;
+      }
+
+      const buffer = await fs.readFile(legacyBlobPath);
+      await blobStore.putKnownBuffer(contentRef, buffer);
+    }
   }
 }

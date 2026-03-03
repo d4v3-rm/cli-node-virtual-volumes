@@ -124,6 +124,18 @@ export class BlobStore {
     };
   }
 
+  public async putKnownBuffer(
+    contentRef: string,
+    buffer: Buffer,
+  ): Promise<StoredBlobDescriptor> {
+    await this.persistBlob(contentRef, buffer);
+
+    return {
+      contentRef,
+      size: buffer.byteLength,
+    };
+  }
+
   public async readBuffer(contentRef: string): Promise<Buffer> {
     return withVolumeDatabase(this.databasePath, async (database) => {
       const row = await database.get<{ content: Buffer }>(
