@@ -108,6 +108,12 @@ import {
   buildPrimaryPanelView,
   buildShortcutsPanelContent,
 } from './shell-panels.js';
+import {
+  canRunShellHotkey,
+  getShellHotkeyBindings,
+  type ShellHotkeyAction,
+  type ShellHotkeyContext,
+} from './shell-hotkeys.js';
 import { buildScreenOptions, buildShellWidgetSpecs } from './shell-widgets.js';
 import {
   buildExplorerOpenRequest,
@@ -336,156 +342,15 @@ export class TerminalApp {
       void this.goToDashboard();
     });
 
-    this.screen.key(['?'], () => {
-      if (this.isBusy() || this.overlayMode) {
-        return;
-      }
+    for (const binding of getShellHotkeyBindings()) {
+      this.screen.key(binding.keys, () => {
+        if (!canRunShellHotkey(binding.scope, this.getShellHotkeyContext())) {
+          return;
+        }
 
-      void this.openHelpOverlay();
-    });
-
-    this.screen.key(['up'], () => {
-      if (!this.canHandleNavigation()) {
-        return;
-      }
-
-      void this.moveSelection(-1);
-    });
-
-    this.screen.key(['down'], () => {
-      if (!this.canHandleNavigation()) {
-        return;
-      }
-
-      void this.moveSelection(1);
-    });
-
-    this.screen.key(['pageup'], () => {
-      if (!this.canHandleNavigation()) {
-        return;
-      }
-
-      void this.moveByPage(-1);
-    });
-
-    this.screen.key(['pagedown'], () => {
-      if (!this.canHandleNavigation()) {
-        return;
-      }
-
-      void this.moveByPage(1);
-    });
-
-    this.screen.key(['home'], () => {
-      if (!this.canHandleNavigation()) {
-        return;
-      }
-
-      void this.jumpSelection('start');
-    });
-
-    this.screen.key(['end'], () => {
-      if (!this.canHandleNavigation()) {
-        return;
-      }
-
-      void this.jumpSelection('end');
-    });
-
-    this.screen.key(['left', 'backspace', 'b'], () => {
-      if (this.isBusy() || this.overlayMode) {
-        return;
-      }
-
-      if (this.mode === 'explorer') {
-        void this.goBack();
-      }
-    });
-
-    this.screen.key(['right', 'enter', 'o'], () => {
-      if (this.isBusy() || this.overlayMode) {
-        return;
-      }
-
-      if (this.mode === 'dashboard') {
-        void this.openSelectedVolume();
-        return;
-      }
-
-      void this.openSelectedEntry();
-    });
-
-    this.screen.key(['r'], () => {
-      if (this.isBusy() || this.overlayMode) {
-        return;
-      }
-
-      void this.refreshCurrentScreen();
-    });
-
-    this.screen.key(['n'], () => {
-      if (this.isBusy() || this.overlayMode || this.mode !== 'dashboard') {
-        return;
-      }
-
-      void this.createVolumeWizard();
-    });
-
-    this.screen.key(['x'], () => {
-      if (this.isBusy() || this.overlayMode || this.mode !== 'dashboard') {
-        return;
-      }
-
-      void this.deleteSelectedVolume();
-    });
-
-    this.screen.key(['c'], () => {
-      if (this.isBusy() || this.overlayMode || this.mode !== 'explorer') {
-        return;
-      }
-
-      void this.createFolderWizard();
-    });
-
-    this.screen.key(['i'], () => {
-      if (this.isBusy() || this.overlayMode || this.mode !== 'explorer') {
-        return;
-      }
-
-      void this.importWizard();
-    });
-
-    this.screen.key(['e'], () => {
-      if (this.isBusy() || this.overlayMode || this.mode !== 'explorer') {
-        return;
-      }
-
-      void this.exportWizard();
-    });
-
-    this.screen.key(['m'], () => {
-      if (this.isBusy() || this.overlayMode || this.mode !== 'explorer') {
-        return;
-      }
-
-      void this.moveSelectedEntry();
-    });
-
-    this.screen.key(['d'], () => {
-      if (this.isBusy() || this.overlayMode || this.mode !== 'explorer') {
-        return;
-      }
-
-      void this.deleteSelectedEntry();
-    });
-
-    this.screen.key(['p'], () => {
-      if (this.isBusy() || this.overlayMode || this.mode !== 'explorer') {
-        return;
-      }
-
-      void this.previewSelectedEntry();
-    });
+        this.runShellHotkey(binding.action);
+      });
+    }
   }
 
   private canHandleNavigation(): boolean {
@@ -496,6 +361,79 @@ export class TerminalApp {
       overlayOpen: this.overlayMode !== null,
       volumesLength: this.volumes.length,
     });
+  }
+
+  private getShellHotkeyContext(): ShellHotkeyContext {
+    return {
+      busy: this.isBusy(),
+      mode: this.mode,
+      navigationAvailable: this.canHandleNavigation(),
+      overlayOpen: this.overlayMode !== null,
+    };
+  }
+
+  private runShellHotkey(action: ShellHotkeyAction): void {
+    switch (action) {
+      case 'help':
+        void this.openHelpOverlay();
+        return;
+      case 'moveUp':
+        void this.moveSelection(-1);
+        return;
+      case 'moveDown':
+        void this.moveSelection(1);
+        return;
+      case 'pageUp':
+        void this.moveByPage(-1);
+        return;
+      case 'pageDown':
+        void this.moveByPage(1);
+        return;
+      case 'jumpStart':
+        void this.jumpSelection('start');
+        return;
+      case 'jumpEnd':
+        void this.jumpSelection('end');
+        return;
+      case 'goBack':
+        void this.goBack();
+        return;
+      case 'openSelected':
+        if (this.mode === 'dashboard') {
+          void this.openSelectedVolume();
+          return;
+        }
+
+        void this.openSelectedEntry();
+        return;
+      case 'refresh':
+        void this.refreshCurrentScreen();
+        return;
+      case 'createVolume':
+        void this.createVolumeWizard();
+        return;
+      case 'deleteVolume':
+        void this.deleteSelectedVolume();
+        return;
+      case 'createFolder':
+        void this.createFolderWizard();
+        return;
+      case 'import':
+        void this.importWizard();
+        return;
+      case 'export':
+        void this.exportWizard();
+        return;
+      case 'moveEntry':
+        void this.moveSelectedEntry();
+        return;
+      case 'deleteEntry':
+        void this.deleteSelectedEntry();
+        return;
+      case 'previewEntry':
+        void this.previewSelectedEntry();
+        return;
+    }
   }
 
   private isBusy(): boolean {
