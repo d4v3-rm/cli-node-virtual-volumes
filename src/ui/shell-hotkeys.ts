@@ -35,6 +35,12 @@ export interface ShellHotkeyContext {
   overlayOpen: boolean;
 }
 
+export type QuitHotkeyAction =
+  | { kind: 'noop' }
+  | { kind: 'notify'; message: string }
+  | { kind: 'shutdown' }
+  | { kind: 'dashboard' };
+
 const SHELL_HOTKEY_BINDINGS: ShellHotkeyBinding[] = [
   { action: 'help', keys: ['?'], scope: 'globalIdle' },
   { action: 'moveUp', keys: ['up'], scope: 'navigation' },
@@ -56,7 +62,33 @@ const SHELL_HOTKEY_BINDINGS: ShellHotkeyBinding[] = [
   { action: 'previewEntry', keys: ['p'], scope: 'explorer' },
 ];
 
+const SHELL_SHORTCUT_LINES: Record<ShellScreenMode, string[]> = {
+  dashboard: [
+    '[UP/DOWN] Select volume',
+    '[RIGHT/ENTER] Open volume',
+    '[PGUP/PGDN] Page volumes',
+    '[HOME/END] Jump list bounds',
+    '[N] New volume',
+    '[X] Delete volume',
+    '[R] Refresh   [?] Help',
+    '[Q] Quit',
+  ],
+  explorer: [
+    '[UP/DOWN] Select entry',
+    '[LEFT/RIGHT] Parent or open',
+    '[PGUP/PGDN] Page entries',
+    '[HOME/END] Jump list bounds',
+    '[I] Import   [E] Export',
+    '[C] Folder   [M] Move',
+    '[D] Delete   [P] Preview',
+    '[R] Refresh  [B/Q] Dashboard',
+  ],
+};
+
 export const getShellHotkeyBindings = (): ShellHotkeyBinding[] => SHELL_HOTKEY_BINDINGS;
+
+export const buildShellShortcutLines = (mode: ShellScreenMode): string[] =>
+  SHELL_SHORTCUT_LINES[mode];
 
 export const canRunShellHotkey = (
   scope: ShellHotkeyScope,
@@ -76,4 +108,23 @@ export const canRunShellHotkey = (
     default:
       return true;
   }
+};
+
+export const getQuitHotkeyAction = (options: {
+  busy: boolean;
+  mode: ShellScreenMode;
+  overlayOpen: boolean;
+}): QuitHotkeyAction => {
+  if (options.overlayOpen) {
+    return { kind: 'noop' };
+  }
+
+  if (options.busy) {
+    return {
+      kind: 'notify',
+      message: 'An operation is still running. Press Ctrl+C to force exit.',
+    };
+  }
+
+  return options.mode === 'dashboard' ? { kind: 'shutdown' } : { kind: 'dashboard' };
 };

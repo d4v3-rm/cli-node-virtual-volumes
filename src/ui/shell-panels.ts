@@ -5,6 +5,7 @@ import type {
 } from '../domain/types.js';
 import { formatBytes, formatDateTime, truncate } from '../utils/formatters.js';
 import { fitSingleLine, formatEntryRow, formatVolumeRow } from './presenters.js';
+import { buildShellShortcutLines } from './shell-hotkeys.js';
 import {
   VISIBLE_VOLUME_ROWS,
   formatWindowSummary,
@@ -204,30 +205,7 @@ export const buildInspectorPanelContent = (
 export const buildShortcutsPanelContent = (
   options: ShortcutsPanelOptions,
 ): string => {
-  const shortcuts =
-    options.mode === 'dashboard'
-      ? [
-          '[UP/DOWN] Select volume',
-          '[RIGHT/ENTER] Open volume',
-          '[PGUP/PGDN] Page volumes',
-          '[HOME/END] Jump list bounds',
-          '[N] New volume',
-          '[X] Delete volume',
-          '[R] Refresh   [?] Help',
-          '[Q] Quit',
-        ]
-      : [
-          '[UP/DOWN] Select entry',
-          '[LEFT/RIGHT] Parent or open',
-          '[PGUP/PGDN] Page entries',
-          '[HOME/END] Jump list bounds',
-          '[I] Import   [E] Export',
-          '[C] Folder   [M] Move',
-          '[D] Delete   [P] Preview',
-          '[R] Refresh  [B/Q] Dashboard',
-        ];
-
-  return shortcuts
+  return buildShellShortcutLines(options.mode)
     .map((shortcut) => fitSingleLine(shortcut, options.width))
     .join('\n');
 };
