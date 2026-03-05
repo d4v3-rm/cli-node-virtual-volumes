@@ -11,36 +11,20 @@ import type {
   VolumeManifest,
 } from '../domain/types.js';
 import {
-  buildCreateFolderPrompt,
-  buildCreateFolderSuccessMessage,
-  buildCreateVolumePrompts,
-  buildCreateVolumeSuccessMessage,
-  buildDeleteEntryConfirmation,
-  buildDeleteEntrySuccessMessage,
-  buildDeleteVolumeConfirmation,
-  buildDeleteVolumeSuccessMessage,
-  buildExportSuccessNotification,
-  buildExportTaskDetail,
   buildHelpOverlayOptions,
-  buildImportEmptySelectionMessage,
-  buildImportSuccessNotification,
-  buildImportTaskDetail,
-  buildMoveEntryPrompts,
-  buildMoveEntrySuccessMessage,
   buildPreviewOverlayOptions,
-  parseVolumeQuotaInput,
 } from './action-presenters.js';
-import type { ExplorerActionContext } from './action-controller.js';
 import {
-  getCreateFolderAction,
-  getCreatedVolumeSelectionIndex,
-  getDeleteEntryAction,
-  getDeleteVolumeAction,
-  getExportAction,
-  getImportAction,
-  getMoveEntryAction,
-  getPreviewEntryAction,
-} from './action-controller.js';
+  runCreateFolderWizard,
+  runCreateVolumeWizard,
+  runDeleteSelectedEntry,
+  runDeleteSelectedVolume,
+  runExportWizard,
+  runImportWizard,
+  runMoveSelectedEntry,
+  runPreviewSelectedEntry,
+  type ActionRuntime,
+} from './action-runtime.js';
 import {
   applyHostBrowserSnapshot,
   createHostBrowserSessionState,
@@ -808,155 +792,19 @@ export class TerminalApp {
   }
 
   private async createVolumeWizard(): Promise<void> {
-    const prompts = buildCreateVolumePrompts(this.runtime.config.defaultQuotaBytes);
-    const name = await this.promptValue(prompts.name);
-
-    if (name === null) {
-      return;
-    }
-
-    const quotaInput = await this.promptValue(prompts.quota);
-
-    if (quotaInput === null) {
-      return;
-    }
-
-    const parsedQuota = parseVolumeQuotaInput(quotaInput);
-    if (parsedQuota.error) {
-      this.notify('error', parsedQuota.error);
-      return;
-    }
-
-    const description = await this.promptValue(prompts.description);
-
-    if (description === null) {
-      return;
-    }
-
-    const createdVolume = await this.runTask('Creating volume', () =>
-      this.runtime.volumeService.createVolume({
-        name,
-        quotaBytes: parsedQuota.quotaBytes,
-        description,
-      }),
-    );
-
-    if (!createdVolume) {
-      return;
-    }
-
-    this.notify('success', buildCreateVolumeSuccessMessage(createdVolume.name));
-    await this.loadVolumes();
-    this.selectedVolumeIndex = getCreatedVolumeSelectionIndex(this.volumes, createdVolume.id);
-    this.render();
+    await runCreateVolumeWizard(this.getActionRuntime());
   }
 
   private async createFolderWizard(): Promise<void> {
-    const action = getCreateFolderAction(this.getExplorerActionContext());
-    if (action.kind !== 'ready') {
-      return;
-    }
-
-    const name = await this.promptValue(buildCreateFolderPrompt(action.currentPath));
-
-    if (name === null) {
-      return;
-    }
-
-    const createdDirectory = await this.runTask('Creating folder', () =>
-      this.runtime.volumeService.createDirectory(action.volumeId, action.currentPath, name),
-    );
-
-    if (!createdDirectory) {
-      return;
-    }
-
-    this.notify('success', buildCreateFolderSuccessMessage(createdDirectory.name));
-    await this.openVolume(
-      action.refreshRequest.volumeId,
-      action.refreshRequest.targetPath,
-      action.refreshRequest.selectionIndex,
-    );
+    await runCreateFolderWizard(this.getActionRuntime());
   }
 
   private async importWizard(): Promise<void> {
-    const action = getImportAction(this.getExplorerActionContext());
-    if (action.kind !== 'ready') {
-      return;
-    }
-
-    const hostPaths = await this.openHostImportOverlay(action.destinationPath);
-    if (hostPaths === null) {
-      return;
-    }
-
-    if (hostPaths.length === 0) {
-      this.notify('info', buildImportEmptySelectionMessage());
-      return;
-    }
-
-    const summary = await this.runTask('Importing host paths', () =>
-      this.runtime.volumeService.importHostPaths(action.volumeId, {
-        hostPaths,
-        destinationPath: action.destinationPath,
-        onProgress: (progress) => {
-          this.updateBusyState({
-            detail: this.formatImportProgress(progress),
-            currentValue: progress.currentBytes,
-            totalValue: progress.currentTotalBytes,
-          });
-        },
-      }),
-      buildImportTaskDetail(action.destinationPath, hostPaths.length),
-    );
-
-    if (!summary) {
-      return;
-    }
-
-    const success = buildImportSuccessNotification(summary, action.destinationPath);
-    this.notify('success', success.message, success.detail);
-    await this.openVolume(action.volumeId, action.destinationPath);
+    await runImportWizard(this.getActionRuntime());
   }
 
   private async exportWizard(): Promise<void> {
-    const action = getExportAction(this.getExplorerActionContext());
-    if (action.kind === 'notify') {
-      this.notify('info', action.message);
-      return;
-    }
-
-    if (action.kind !== 'ready') {
-      return;
-    }
-
-    const destinationHostDirectory = await this.openHostExportOverlay(action.sourcePath);
-    if (destinationHostDirectory === null) {
-      return;
-    }
-
-    const summary = await this.runTask('Exporting to host', () =>
-      this.runtime.volumeService.exportEntryToHost(action.volumeId, {
-        sourcePath: action.sourcePath,
-        destinationHostDirectory,
-        onProgress: (progress) => {
-          this.updateBusyState({
-            detail: this.formatExportProgress(progress),
-            currentValue: progress.currentBytes,
-            totalValue: progress.currentTotalBytes,
-          });
-        },
-      }),
-      buildExportTaskDetail(action.sourcePath, destinationHostDirectory),
-    );
-
-    if (!summary) {
-      return;
-    }
-
-    const success = buildExportSuccessNotification(summary, destinationHostDirectory);
-    this.notify('success', success.message, success.detail);
-    this.render();
+    await runExportWizard(this.getActionRuntime());
   }
 
   private async openHostImportOverlay(destinationPath: string): Promise<string[] | null> {
@@ -1324,136 +1172,19 @@ export class TerminalApp {
   }
 
   private async moveSelectedEntry(): Promise<void> {
-    const action = getMoveEntryAction(this.getExplorerActionContext());
-    if (action.kind === 'notify') {
-      this.notify('info', action.message);
-      return;
-    }
-
-    if (action.kind !== 'ready') {
-      return;
-    }
-
-    const movePrompts = buildMoveEntryPrompts(
-      action.selectedEntry.name,
-      action.currentPath,
-    );
-    const destinationPath = await this.promptValue(movePrompts.destination);
-
-    if (destinationPath === null) {
-      return;
-    }
-
-    const newName = await this.promptValue(movePrompts.rename);
-
-    if (newName === null) {
-      return;
-    }
-
-    const updatedPath = await this.runTask('Moving entry', () =>
-      this.runtime.volumeService.moveEntry(action.volumeId, {
-        sourcePath: action.selectedEntry.path,
-        destinationDirectoryPath: destinationPath,
-        newName,
-      }),
-    );
-
-    if (!updatedPath) {
-      return;
-    }
-
-    this.notify('success', buildMoveEntrySuccessMessage(updatedPath));
-    await this.openVolume(
-      action.refreshRequest.volumeId,
-      action.refreshRequest.targetPath,
-      action.refreshRequest.selectionIndex,
-    );
+    await runMoveSelectedEntry(this.getActionRuntime());
   }
 
   private async deleteSelectedEntry(): Promise<void> {
-    const action = getDeleteEntryAction(this.getExplorerActionContext());
-    if (action.kind === 'notify') {
-      this.notify('info', action.message);
-      return;
-    }
-
-    if (action.kind !== 'ready') {
-      return;
-    }
-
-    const confirmed = await this.confirmAction(buildDeleteEntryConfirmation(action.selectedEntry));
-
-    if (!confirmed) {
-      return;
-    }
-
-    const deletedCount = await this.runTask('Deleting entry', () =>
-      this.runtime.volumeService.deleteEntry(action.volumeId, action.selectedEntry.path),
-    );
-
-    if (deletedCount === null) {
-      return;
-    }
-
-    this.notify('success', buildDeleteEntrySuccessMessage(deletedCount));
-    await this.openVolume(
-      action.refreshRequest.volumeId,
-      action.refreshRequest.targetPath,
-      action.refreshRequest.selectionIndex,
-    );
+    await runDeleteSelectedEntry(this.getActionRuntime());
   }
 
   private async deleteSelectedVolume(): Promise<void> {
-    const action = getDeleteVolumeAction(this.volumes, this.selectedVolumeIndex);
-    if (action.kind === 'notify') {
-      this.notify('info', action.message);
-      return;
-    }
-
-    const confirmed = await this.confirmAction(
-      buildDeleteVolumeConfirmation(action.volume),
-    );
-
-    if (!confirmed) {
-      return;
-    }
-
-    const deleted = await this.runTask('Deleting volume', async () => {
-      await this.runtime.volumeService.deleteVolume(action.volume.id);
-      return true;
-    });
-
-    if (!deleted) {
-      return;
-    }
-
-    this.notify('success', buildDeleteVolumeSuccessMessage(action.volume.name));
-    this.currentVolumeId = null;
-    this.currentSnapshot = null;
-    this.mode = 'dashboard';
-    await this.loadVolumes();
+    await runDeleteSelectedVolume(this.getActionRuntime());
   }
 
   private async previewSelectedEntry(): Promise<void> {
-    const action = getPreviewEntryAction(this.getExplorerActionContext());
-    if (action.kind === 'notify') {
-      this.notify('info', action.message);
-      return;
-    }
-
-    if (action.kind !== 'ready') {
-      return;
-    }
-
-    const preview = await this.runTask('Loading preview', () =>
-      this.runtime.volumeService.previewFile(action.volumeId, action.sourcePath),
-    );
-
-    if (!preview) {
-      return;
-    }
-
-    await this.openPreviewOverlay(preview);
+    await runPreviewSelectedEntry(this.getActionRuntime());
   }
 
   private async openHelpOverlay(): Promise<void> {
@@ -1974,12 +1705,35 @@ export class TerminalApp {
     return getSelectedExplorerEntry(this.currentSnapshot, this.selectedEntryIndex);
   }
 
-  private getExplorerActionContext(): ExplorerActionContext {
+  private getActionRuntime(): ActionRuntime {
     return {
       currentSnapshot: this.currentSnapshot,
       currentVolumeId: this.currentVolumeId,
+      defaultQuotaBytes: this.runtime.config.defaultQuotaBytes,
       selectedEntry: this.getSelectedEntry(),
       selectedEntryIndex: this.selectedEntryIndex,
+      selectedVolumeIndex: this.selectedVolumeIndex,
+      volumeService: this.runtime.volumeService,
+      volumes: this.volumes,
+      confirmAction: (options) => this.confirmAction(options),
+      formatExportProgress: (progress) => this.formatExportProgress(progress),
+      formatImportProgress: (progress) => this.formatImportProgress(progress),
+      getVolumes: () => this.volumes,
+      goToDashboard: () => this.goToDashboard(),
+      loadVolumes: () => this.loadVolumes(),
+      notify: (tone, message, detail) => this.notify(tone, message, detail),
+      openHostExportOverlay: (sourcePath) => this.openHostExportOverlay(sourcePath),
+      openHostImportOverlay: (destinationPath) => this.openHostImportOverlay(destinationPath),
+      openPreviewOverlay: (preview) => this.openPreviewOverlay(preview),
+      openVolume: (volumeId, targetPath, selectionIndex) =>
+        this.openVolume(volumeId, targetPath, selectionIndex),
+      promptValue: (options) => this.promptValue(options),
+      render: () => this.render(),
+      runTask: (label, operation, detail) => this.runTask(label, operation, detail),
+      setSelectedVolumeIndex: (index) => {
+        this.selectedVolumeIndex = index;
+      },
+      updateBusyState: (options) => this.updateBusyState(options),
     };
   }
 
