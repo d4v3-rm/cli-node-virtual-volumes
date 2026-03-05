@@ -564,6 +564,85 @@ describe('VolumeService', () => {
     expect(refreshed.manifest.revision).toBe(2);
   });
 
+  it('creates consistent SQLite backups and restores them after volume deletion', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Recovery Drill' });
+    const backupRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-backup-'));
+    sandboxes.push(backupRoot);
+    const backupPath = path.join(backupRoot, 'recovery-drill.sqlite');
+
+    await runtime.volumeService.createDirectory(volume.id, '/', 'docs');
+    await runtime.volumeService.writeTextFile(volume.id, '/docs/plan.txt', 'snapshot state');
+
+    const backupResult = await runtime.volumeService.backupVolume(volume.id, backupPath);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/docs/plan.txt', 'live change');
+    await runtime.volumeService.writeTextFile(volume.id, '/later.txt', 'created after backup');
+    await runtime.volumeService.deleteVolume(volume.id);
+
+    const restoreResult = await runtime.volumeService.restoreVolumeBackup(backupPath);
+    const rootSnapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+    const docsSnapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/docs');
+    const preview = await runtime.volumeService.previewFile(volume.id, '/docs/plan.txt');
+
+    expect(backupResult).toMatchObject({
+      volumeId: volume.id,
+      volumeName: 'Recovery Drill',
+      backupPath: path.resolve(backupPath),
+      revision: 3,
+    });
+    expect(backupResult.bytesWritten).toBeGreaterThan(0);
+    expect(restoreResult).toMatchObject({
+      volumeId: volume.id,
+      volumeName: 'Recovery Drill',
+      backupPath: path.resolve(backupPath),
+      revision: 3,
+    });
+    expect(restoreResult.bytesRestored).toBeGreaterThan(0);
+    expect(rootSnapshot.entries.map((entry) => entry.name)).toEqual(['docs']);
+    expect(docsSnapshot.entries.map((entry) => entry.name)).toEqual(['plan.txt']);
+    expect(preview.content).toContain('snapshot state');
+    await expect(runtime.volumeService.previewFile(volume.id, '/later.txt')).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+  });
+
+  it('requires overwrite to restore over an existing volume and rolls live changes back to the backup state', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Rollback Drill' });
+    const backupRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-rollback-'));
+    sandboxes.push(backupRoot);
+    const backupPath = path.join(backupRoot, 'rollback-drill.sqlite');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/baseline.txt', 'before restore');
+    await runtime.volumeService.backupVolume(volume.id, backupPath);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/baseline.txt', 'after restore point');
+    await runtime.volumeService.writeTextFile(volume.id, '/extra.txt', 'extra file');
+
+    await expect(runtime.volumeService.restoreVolumeBackup(backupPath)).rejects.toMatchObject({
+      code: 'ALREADY_EXISTS',
+    });
+
+    const restoreResult = await runtime.volumeService.restoreVolumeBackup(backupPath, {
+      overwrite: true,
+    });
+    const rootSnapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+    const preview = await runtime.volumeService.previewFile(volume.id, '/baseline.txt');
+
+    expect(restoreResult).toMatchObject({
+      volumeId: volume.id,
+      volumeName: 'Rollback Drill',
+      backupPath: path.resolve(backupPath),
+      revision: 2,
+    });
+    expect(rootSnapshot.entries.map((entry) => entry.name)).toEqual(['baseline.txt']);
+    expect(preview.content).toContain('before restore');
+    await expect(runtime.volumeService.previewFile(volume.id, '/extra.txt')).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+  });
+
   it('reports missing and orphaned blobs through storage doctor diagnostics', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Doctor' });

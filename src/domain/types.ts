@@ -136,6 +136,28 @@ export interface MoveEntryInput {
   newName?: string;
 }
 
+export interface VolumeBackupResult {
+  volumeId: string;
+  volumeName: string;
+  revision: number;
+  backupPath: string;
+  bytesWritten: number;
+  createdAt: string;
+}
+
+export interface RestoreVolumeBackupOptions {
+  overwrite?: boolean;
+}
+
+export interface VolumeRestoreResult {
+  volumeId: string;
+  volumeName: string;
+  revision: number;
+  backupPath: string;
+  bytesRestored: number;
+  restoredAt: string;
+}
+
 export interface StorageDoctorIssue {
   code:
     | 'BROKEN_ROOT'

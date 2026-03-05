@@ -9,6 +9,7 @@ import type {
   CreateVolumeInput,
   DirectoryEntry,
   FileEntry,
+  RestoreVolumeBackupOptions,
   StorageDoctorIssue,
   StorageDoctorReport,
   StorageDoctorVolumeReport,
@@ -16,8 +17,10 @@ import type {
   StorageRepairReport,
   StorageRepairVolumeReport,
   VolumeEntry,
+  VolumeBackupResult,
   VolumeManifest,
   VolumeRecord,
+  VolumeRestoreResult,
   VolumeState,
 } from '../domain/types.js';
 import { ensureDirectory, pathExists, readJsonFile } from '../utils/fs.js';
@@ -38,6 +41,8 @@ interface RepositoryConfig {
 interface LoadVolumeOptions {
   preferCache?: boolean;
 }
+
+const escapeSqliteStringLiteral = (value: string): string => value.replaceAll("'", "''");
 
 export class VolumeRepository {
   private readonly volumeCache = new Map<string, VolumeRecord>();
@@ -459,14 +464,166 @@ export class VolumeRepository {
     };
   }
 
+  public async backupVolume(
+    volumeId: string,
+    destinationPath: string,
+    options: { overwrite?: boolean } = {},
+  ): Promise<VolumeBackupResult> {
+    const databasePath = this.getVolumeDatabasePath(volumeId);
+    if (!(await pathExists(databasePath))) {
+      throw new VolumeError('NOT_FOUND', `Volume ${volumeId} does not exist.`, {
+        volumeId,
+      });
+    }
+
+    const absoluteDestinationPath = path.resolve(destinationPath);
+    const destinationExists = await pathExists(absoluteDestinationPath);
+
+    if (destinationExists && !options.overwrite) {
+      throw new VolumeError(
+        'ALREADY_EXISTS',
+        `Backup destination already exists: ${absoluteDestinationPath}`,
+        {
+          destinationPath: absoluteDestinationPath,
+        },
+      );
+    }
+
+    await ensureDirectory(path.dirname(absoluteDestinationPath));
+    if (destinationExists) {
+      await this.deleteDatabaseArtifacts(absoluteDestinationPath);
+    }
+
+    const manifest = await withVolumeDatabase(databasePath, async (database) => {
+      const manifestRow = await this.requireManifestRow(database, volumeId);
+
+      await database.get('PRAGMA wal_checkpoint(TRUNCATE)');
+      await database.exec(
+        `VACUUM INTO '${escapeSqliteStringLiteral(absoluteDestinationPath)}'`,
+      );
+
+      return this.toManifest(manifestRow);
+    });
+
+    const backupStats = await fs.stat(absoluteDestinationPath);
+    const result: VolumeBackupResult = {
+      volumeId: manifest.id,
+      volumeName: manifest.name,
+      revision: manifest.revision,
+      backupPath: absoluteDestinationPath,
+      bytesWritten: backupStats.size,
+      createdAt: new Date().toISOString(),
+    };
+
+    this.logger.info(
+      {
+        volumeId: manifest.id,
+        backupPath: absoluteDestinationPath,
+        bytesWritten: backupStats.size,
+        revision: manifest.revision,
+      },
+      'Volume backup created.',
+    );
+
+    return result;
+  }
+
+  public async restoreVolumeBackup(
+    backupPath: string,
+    options: RestoreVolumeBackupOptions = {},
+  ): Promise<VolumeRestoreResult> {
+    const absoluteBackupPath = path.resolve(backupPath);
+    if (!(await pathExists(absoluteBackupPath))) {
+      throw new VolumeError('NOT_FOUND', `Backup file does not exist: ${absoluteBackupPath}`, {
+        backupPath: absoluteBackupPath,
+      });
+    }
+
+    const volumesDirectory = this.getVolumesDirectory();
+    await ensureDirectory(volumesDirectory);
+
+    const temporaryRestorePath = path.join(
+      volumesDirectory,
+      `restore_${process.pid}_${Date.now()}_${nanoid(6)}${VOLUME_DATABASE_EXTENSION}`,
+    );
+    let restoredVolumeId: string | null = null;
+
+    try {
+      await fs.copyFile(absoluteBackupPath, temporaryRestorePath);
+
+      const manifest = await withVolumeDatabase(temporaryRestorePath, async (database) =>
+        this.toManifest(await this.requireManifestRow(database, 'backup')),
+      );
+      restoredVolumeId = manifest.id;
+
+      const targetDatabasePath = this.getVolumeDatabasePath(manifest.id);
+      if (path.resolve(targetDatabasePath) === absoluteBackupPath) {
+        throw new VolumeError(
+          'INVALID_OPERATION',
+          'Cannot restore a backup directly over its own source file.',
+          {
+            backupPath: absoluteBackupPath,
+            volumeId: manifest.id,
+          },
+        );
+      }
+
+      const targetExists = await pathExists(targetDatabasePath);
+      if (targetExists && !options.overwrite) {
+        throw new VolumeError(
+          'ALREADY_EXISTS',
+          `Volume ${manifest.id} already exists. Use overwrite to replace it from backup.`,
+          {
+            volumeId: manifest.id,
+            backupPath: absoluteBackupPath,
+          },
+        );
+      }
+
+      if (targetExists) {
+        await this.deleteDatabaseArtifacts(targetDatabasePath);
+      }
+
+      await fs.rename(temporaryRestorePath, targetDatabasePath);
+      this.volumeCache.delete(manifest.id);
+
+      const restoredManifest = (await this.loadVolume(manifest.id)).manifest;
+      const restoredStats = await fs.stat(targetDatabasePath);
+      const result: VolumeRestoreResult = {
+        volumeId: restoredManifest.id,
+        volumeName: restoredManifest.name,
+        revision: restoredManifest.revision,
+        backupPath: absoluteBackupPath,
+        bytesRestored: restoredStats.size,
+        restoredAt: new Date().toISOString(),
+      };
+
+      this.logger.info(
+        {
+          volumeId: restoredManifest.id,
+          backupPath: absoluteBackupPath,
+          bytesRestored: restoredStats.size,
+          overwrite: options.overwrite ?? false,
+          revision: restoredManifest.revision,
+        },
+        'Volume restored from backup.',
+      );
+
+      return result;
+    } catch (error) {
+      await this.deleteDatabaseArtifacts(temporaryRestorePath).catch(() => undefined);
+
+      if (restoredVolumeId) {
+        this.volumeCache.delete(restoredVolumeId);
+      }
+
+      throw error;
+    }
+  }
+
   public async deleteVolume(volumeId: string): Promise<void> {
     const databasePath = this.getVolumeDatabasePath(volumeId);
-    await Promise.all([
-      fs.rm(databasePath, { force: true }),
-      fs.rm(`${databasePath}-journal`, { force: true }),
-      fs.rm(`${databasePath}-wal`, { force: true }),
-      fs.rm(`${databasePath}-shm`, { force: true }),
-    ]);
+    await this.deleteDatabaseArtifacts(databasePath);
     this.volumeCache.delete(volumeId);
     this.logger.info({ volumeId }, 'Volume deleted.');
   }
@@ -489,6 +646,34 @@ export class VolumeRepository {
     }, 0);
   }
 
+  private async requireManifestRow(
+    database: SqliteVolumeDatabase,
+    volumeId: string,
+  ): Promise<VolumeManifestRow> {
+    const manifestRow = await database.get<VolumeManifestRow>(
+      `SELECT
+         id,
+         name,
+         description,
+         quota_bytes,
+         logical_used_bytes,
+         entry_count,
+         revision,
+         created_at,
+         updated_at
+       FROM manifest
+       LIMIT 1`,
+    );
+
+    if (!manifestRow) {
+      throw new VolumeError('NOT_FOUND', `Volume ${volumeId} does not exist.`, {
+        volumeId,
+      });
+    }
+
+    return manifestRow;
+  }
+
   private toManifest(row: VolumeManifestRow): VolumeManifest {
     return {
       id: row.id,
@@ -501,6 +686,15 @@ export class VolumeRepository {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
+  }
+
+  private async deleteDatabaseArtifacts(databasePath: string): Promise<void> {
+    await Promise.all([
+      fs.rm(databasePath, { force: true }),
+      fs.rm(`${databasePath}-journal`, { force: true }),
+      fs.rm(`${databasePath}-wal`, { force: true }),
+      fs.rm(`${databasePath}-shm`, { force: true }),
+    ]);
   }
 
   private toState(entryRows: VolumeEntryRow[], volumeId: string): VolumeState {

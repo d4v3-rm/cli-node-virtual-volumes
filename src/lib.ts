@@ -9,18 +9,21 @@ export type {
   DirectoryListingItem,
   ExplorerSnapshot,
   ExplorerSnapshotOptions,
-  ImportProgress,
   FilePreview,
   ImportHostPathsInput,
+  ImportProgress,
   ImportSummary,
   MoveEntryInput,
+  RestoreVolumeBackupOptions,
   StorageDoctorIssue,
   StorageDoctorReport,
   StorageDoctorVolumeReport,
   StorageRepairAction,
   StorageRepairReport,
   StorageRepairVolumeReport,
+  VolumeBackupResult,
   VolumeManifest,
+  VolumeRestoreResult,
 } from './domain/types.js';
 export { formatBytes, formatDateTime } from './utils/formatters.js';
 export { parseHostPathBatchInput } from './utils/host-input.js';
