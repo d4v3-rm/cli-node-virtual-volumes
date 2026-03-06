@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createRuntime } from '../src/bootstrap/create-runtime.js';
 import { BlobStore } from '../src/storage/blob-store.js';
@@ -640,6 +640,61 @@ describe('VolumeService', () => {
     expect(preview.content).toContain('before restore');
     await expect(runtime.volumeService.previewFile(volume.id, '/extra.txt')).rejects.toMatchObject({
       code: 'NOT_FOUND',
+    });
+  });
+
+  it('rolls back to the live target volume when overwrite restore swap fails mid-flight', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Rollback Safety' });
+    const backupRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-restore-failure-'));
+    sandboxes.push(backupRoot);
+    const backupPath = path.join(backupRoot, 'rollback-safety.sqlite');
+    const targetDatabasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+    const realRename = fs.rename.bind(fs);
+    let targetRenameAttempts = 0;
+
+    await runtime.volumeService.writeTextFile(volume.id, '/baseline.txt', 'backup state');
+    await runtime.volumeService.backupVolume(volume.id, backupPath);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/baseline.txt', 'live state');
+    await runtime.volumeService.writeTextFile(volume.id, '/extra.txt', 'must survive');
+
+    const renameSpy = vi
+      .spyOn(fs, 'rename')
+      .mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+        const [, destinationPath] = args;
+        const destinationPathText =
+          typeof destinationPath === 'string'
+            ? destinationPath
+            : destinationPath.toString();
+        if (
+          path.resolve(destinationPathText) === path.resolve(targetDatabasePath) &&
+          targetRenameAttempts === 0
+        ) {
+          targetRenameAttempts += 1;
+          throw new Error('Simulated restore swap failure.');
+        }
+
+        return realRename(...args);
+      });
+
+    await expect(
+      runtime.volumeService.restoreVolumeBackup(backupPath, { overwrite: true }),
+    ).rejects.toThrow('Simulated restore swap failure.');
+
+    renameSpy.mockRestore();
+
+    const rootSnapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+    const preview = await runtime.volumeService.previewFile(volume.id, '/baseline.txt');
+
+    expect(rootSnapshot.entries.map((entry) => entry.name)).toEqual([
+      'baseline.txt',
+      'extra.txt',
+    ]);
+    expect(preview.content).toContain('live state');
+    await expect(runtime.volumeService.previewFile(volume.id, '/extra.txt')).resolves.toMatchObject({
+      kind: 'text',
+      content: 'must survive',
     });
   });
 
