@@ -160,6 +160,7 @@ export interface VolumeRestoreResult {
 
 export interface StorageDoctorIssue {
   code:
+    | 'DATABASE_OPEN_FAILED'
     | 'BROKEN_ROOT'
     | 'DUPLICATE_CHILD_NAME'
     | 'MANIFEST_ENTRY_COUNT_MISMATCH'
@@ -168,7 +169,9 @@ export interface StorageDoctorIssue {
     | 'MISSING_CONTENT_REF'
     | 'MISSING_PARENT'
     | 'ORPHAN_BLOB'
-    | 'PARENT_NOT_DIRECTORY';
+    | 'PARENT_NOT_DIRECTORY'
+    | 'SQLITE_FOREIGN_KEY_VIOLATION'
+    | 'SQLITE_INTEGRITY_CHECK_FAILED';
   severity: 'error' | 'warn';
   message: string;
   contentRef?: string;

@@ -694,6 +694,80 @@ describe('VolumeService', () => {
     ).toBe(true);
   });
 
+  it('reports sqlite foreign key violations alongside logical storage issues', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'SQLite FK Doctor' });
+    const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+    const timestamp = new Date().toISOString();
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      await database.exec('PRAGMA foreign_keys = OFF');
+
+      try {
+        await database.run(
+          `INSERT INTO entries (
+             id,
+             kind,
+             name,
+             parent_id,
+             created_at,
+             updated_at,
+             size,
+             content_ref,
+             imported_from_host_path
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+          'file_fk_violation',
+          'file',
+          'ghost.txt',
+          'missing_parent',
+          timestamp,
+          timestamp,
+          12,
+          'missing_blob_ref',
+        );
+      } finally {
+        await database.exec('PRAGMA foreign_keys = ON');
+      }
+    });
+
+    const report = await runtime.volumeService.runDoctor(volume.id);
+    const issueCodes = report.volumes[0]?.issues.map((issue) => issue.code) ?? [];
+
+    expect(report.healthy).toBe(false);
+    expect(issueCodes).toContain('SQLITE_FOREIGN_KEY_VIOLATION');
+    expect(issueCodes).toContain('MISSING_PARENT');
+    expect(issueCodes).toContain('MISSING_BLOB');
+  });
+
+  it('reports unreadable sqlite volume files instead of silently skipping them', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Healthy Volume' });
+    const unreadableVolumeId = 'vol_brokenfile';
+    const unreadableDatabasePath = getVolumeDatabasePath(runtime.config.dataDir, unreadableVolumeId);
+
+    await fs.mkdir(path.dirname(unreadableDatabasePath), { recursive: true });
+    await fs.writeFile(unreadableDatabasePath, 'not a sqlite database', 'utf8');
+
+    const report = await runtime.volumeService.runDoctor();
+    const brokenVolumeReport = report.volumes.find(
+      (volumeReport) => volumeReport.volumeId === unreadableVolumeId,
+    );
+    const healthyVolumeReport = report.volumes.find(
+      (volumeReport) => volumeReport.volumeId === volume.id,
+    );
+
+    expect(report.checkedVolumes).toBe(2);
+    expect(report.healthy).toBe(false);
+    expect(healthyVolumeReport?.healthy).toBe(true);
+    expect(brokenVolumeReport?.healthy).toBe(false);
+    expect(brokenVolumeReport?.issues).toHaveLength(1);
+    expect(brokenVolumeReport?.issues[0]?.code).toBe('DATABASE_OPEN_FAILED');
+    expect(brokenVolumeReport?.issues[0]?.severity).toBe('error');
+    expect(brokenVolumeReport?.issues[0]?.message).toContain(
+      `Volume ${unreadableVolumeId} could not be inspected`,
+    );
+  });
+
   it('repairs orphan blobs and manifest counter mismatches safely', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Repair' });
