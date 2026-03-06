@@ -136,11 +136,25 @@ export interface MoveEntryInput {
   newName?: string;
 }
 
-export interface VolumeBackupResult {
+export interface VolumeBackupManifest {
+  formatVersion: 1;
   volumeId: string;
   volumeName: string;
   revision: number;
+  schemaVersion: number;
+  bytesWritten: number;
+  checksumSha256: string;
+  createdAt: string;
+}
+
+export interface VolumeBackupResult extends VolumeBackupManifest {
+  volumeId: string;
+  volumeName: string;
+  revision: number;
+  schemaVersion: number;
   backupPath: string;
+  manifestPath: string;
+  checksumSha256: string;
   bytesWritten: number;
   createdAt: string;
 }
@@ -153,9 +167,13 @@ export interface VolumeRestoreResult {
   volumeId: string;
   volumeName: string;
   revision: number;
+  schemaVersion: number;
   backupPath: string;
+  manifestPath: string | null;
+  checksumSha256: string;
   bytesRestored: number;
   restoredAt: string;
+  validatedWithManifest: boolean;
 }
 
 export interface StorageDoctorIssue {

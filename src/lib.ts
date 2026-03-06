@@ -15,6 +15,7 @@ export type {
   ImportSummary,
   MoveEntryInput,
   RestoreVolumeBackupOptions,
+  VolumeBackupManifest,
   StorageDoctorIssue,
   StorageDoctorReport,
   StorageDoctorVolumeReport,

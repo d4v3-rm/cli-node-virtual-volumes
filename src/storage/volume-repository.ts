@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -16,6 +18,7 @@ import type {
   StorageRepairAction,
   StorageRepairReport,
   StorageRepairVolumeReport,
+  VolumeBackupManifest,
   VolumeEntry,
   VolumeBackupResult,
   VolumeManifest,
@@ -23,7 +26,12 @@ import type {
   VolumeRestoreResult,
   VolumeState,
 } from '../domain/types.js';
-import { ensureDirectory, pathExists, readJsonFile } from '../utils/fs.js';
+import {
+  ensureDirectory,
+  pathExists,
+  readJsonFile,
+  writeJsonAtomic,
+} from '../utils/fs.js';
 import { BlobStore } from './blob-store.js';
 import {
   type SqliteVolumeDatabase,
@@ -49,7 +57,14 @@ interface SqliteForeignKeyCheckRow {
   table: string;
 }
 
+interface VolumeDatabaseSnapshot {
+  manifest: VolumeManifest;
+  schemaVersion: number;
+}
+
 const escapeSqliteStringLiteral = (value: string): string => value.replaceAll("'", "''");
+const BACKUP_MANIFEST_SUFFIX = '.manifest.json';
+const BACKUP_MANIFEST_FORMAT_VERSION = 1 as const;
 
 export class VolumeRepository {
   private readonly volumeCache = new Map<string, VolumeRecord>();
@@ -474,7 +489,7 @@ export class VolumeRepository {
   public async backupVolume(
     volumeId: string,
     destinationPath: string,
-    options: { overwrite?: boolean } = {},
+  options: { overwrite?: boolean } = {},
   ): Promise<VolumeBackupResult> {
     const databasePath = this.getVolumeDatabasePath(volumeId);
     if (!(await pathExists(databasePath))) {
@@ -484,6 +499,16 @@ export class VolumeRepository {
     }
 
     const absoluteDestinationPath = path.resolve(destinationPath);
+    if (path.resolve(databasePath) === absoluteDestinationPath) {
+      throw new VolumeError(
+        'INVALID_OPERATION',
+        'Cannot write a backup directly over the live volume database.',
+        {
+          volumeId,
+          destinationPath: absoluteDestinationPath,
+        },
+      );
+    }
     const destinationExists = await pathExists(absoluteDestinationPath);
 
     if (destinationExists && !options.overwrite) {
@@ -497,33 +522,56 @@ export class VolumeRepository {
     }
 
     await ensureDirectory(path.dirname(absoluteDestinationPath));
-    const manifest = await this.snapshotVolumeDatabase(
-      databasePath,
-      absoluteDestinationPath,
-      volumeId,
-    );
+    const backupManifestPath = this.getBackupManifestPath(absoluteDestinationPath);
 
-    const backupStats = await fs.stat(absoluteDestinationPath);
-    const result: VolumeBackupResult = {
-      volumeId: manifest.id,
-      volumeName: manifest.name,
-      revision: manifest.revision,
-      backupPath: absoluteDestinationPath,
-      bytesWritten: backupStats.size,
-      createdAt: new Date().toISOString(),
-    };
+    try {
+      const snapshot = await this.snapshotVolumeDatabase(
+        databasePath,
+        absoluteDestinationPath,
+        volumeId,
+      );
 
-    this.logger.info(
-      {
-        volumeId: manifest.id,
-        backupPath: absoluteDestinationPath,
+      const backupStats = await fs.stat(absoluteDestinationPath);
+      const checksumSha256 = await this.computeFileSha256(absoluteDestinationPath);
+      const backupManifest: VolumeBackupManifest = {
+        formatVersion: BACKUP_MANIFEST_FORMAT_VERSION,
+        volumeId: snapshot.manifest.id,
+        volumeName: snapshot.manifest.name,
+        revision: snapshot.manifest.revision,
+        schemaVersion: snapshot.schemaVersion,
         bytesWritten: backupStats.size,
-        revision: manifest.revision,
-      },
-      'Volume backup created.',
-    );
+        checksumSha256,
+        createdAt: new Date().toISOString(),
+      };
+      await writeJsonAtomic(backupManifestPath, backupManifest);
 
-    return result;
+      const result: VolumeBackupResult = {
+        ...backupManifest,
+        backupPath: absoluteDestinationPath,
+        manifestPath: backupManifestPath,
+      };
+
+      this.logger.info(
+        {
+          volumeId: snapshot.manifest.id,
+          backupPath: absoluteDestinationPath,
+          manifestPath: backupManifestPath,
+          bytesWritten: backupStats.size,
+          checksumSha256,
+          schemaVersion: snapshot.schemaVersion,
+          revision: snapshot.manifest.revision,
+        },
+        'Volume backup created.',
+      );
+
+      return result;
+    } catch (error) {
+      await Promise.all([
+        this.deleteDatabaseArtifacts(absoluteDestinationPath).catch(() => undefined),
+        fs.rm(backupManifestPath, { force: true }).catch(() => undefined),
+      ]);
+      throw error;
+    }
   }
 
   public async restoreVolumeBackup(
@@ -536,6 +584,10 @@ export class VolumeRepository {
         backupPath: absoluteBackupPath,
       });
     }
+    const backupManifestPath = this.getBackupManifestPath(absoluteBackupPath);
+    const backupManifest = await this.readBackupManifest(backupManifestPath);
+    const backupArtifactStats = await fs.stat(absoluteBackupPath);
+    const backupChecksumSha256 = await this.computeFileSha256(absoluteBackupPath);
 
     const volumesDirectory = this.getVolumesDirectory();
     await ensureDirectory(volumesDirectory);
@@ -550,9 +602,19 @@ export class VolumeRepository {
     try {
       await fs.copyFile(absoluteBackupPath, temporaryRestorePath);
 
-      const manifest = await withVolumeDatabase(temporaryRestorePath, async (database) =>
-        this.toManifest(await this.requireManifestRow(database, 'backup')),
-      );
+      const snapshot = await this.inspectVolumeDatabase(temporaryRestorePath, 'backup');
+      const manifest = snapshot.manifest;
+
+      if (backupManifest) {
+        this.assertBackupManifestMatchesArtifact(
+          backupManifest,
+          snapshot,
+          backupArtifactStats.size,
+          backupChecksumSha256,
+          absoluteBackupPath,
+          backupManifestPath,
+        );
+      }
       restoredVolumeId = manifest.id;
 
       const targetDatabasePath = this.getVolumeDatabasePath(manifest.id);
@@ -627,16 +689,24 @@ export class VolumeRepository {
           volumeId: restoredManifest.id,
           volumeName: restoredManifest.name,
           revision: restoredManifest.revision,
+          schemaVersion: snapshot.schemaVersion,
           backupPath: absoluteBackupPath,
+          manifestPath: backupManifest ? backupManifestPath : null,
+          checksumSha256: backupChecksumSha256,
           bytesRestored: restoredStats.size,
           restoredAt: new Date().toISOString(),
+          validatedWithManifest: backupManifest !== null,
         };
 
         this.logger.info(
           {
             volumeId: restoredManifest.id,
             backupPath: absoluteBackupPath,
+            manifestPath: backupManifest ? backupManifestPath : null,
             bytesRestored: restoredStats.size,
+            checksumSha256: backupChecksumSha256,
+            schemaVersion: snapshot.schemaVersion,
+            validatedWithManifest: backupManifest !== null,
             overwrite: options.overwrite ?? false,
             revision: restoredManifest.revision,
           },
@@ -764,7 +834,7 @@ export class VolumeRepository {
     sourceDatabasePath: string,
     destinationPath: string,
     volumeId: string,
-  ): Promise<VolumeManifest> {
+  ): Promise<VolumeDatabaseSnapshot> {
     await ensureDirectory(path.dirname(destinationPath));
     if (await pathExists(destinationPath)) {
       await this.deleteDatabaseArtifacts(destinationPath);
@@ -772,13 +842,17 @@ export class VolumeRepository {
 
     return withVolumeDatabase(sourceDatabasePath, async (database) => {
       const manifestRow = await this.requireManifestRow(database, volumeId);
+      const schemaVersion = await this.getSchemaVersion(database);
 
       await database.get('PRAGMA wal_checkpoint(TRUNCATE)');
       await database.exec(
         `VACUUM INTO '${escapeSqliteStringLiteral(destinationPath)}'`,
       );
 
-      return this.toManifest(manifestRow);
+      return {
+        manifest: this.toManifest(manifestRow),
+        schemaVersion,
+      };
     });
   }
 
@@ -805,6 +879,151 @@ export class VolumeRepository {
         'Automatic restore rollback failed.',
       );
       return rollbackError;
+    }
+  }
+
+  private getBackupManifestPath(backupPath: string): string {
+    return `${backupPath}${BACKUP_MANIFEST_SUFFIX}`;
+  }
+
+  private async readBackupManifest(
+    manifestPath: string,
+  ): Promise<VolumeBackupManifest | null> {
+    if (!(await pathExists(manifestPath))) {
+      return null;
+    }
+
+    try {
+      const payload = await readJsonFile<unknown>(manifestPath);
+
+      if (!this.isVolumeBackupManifest(payload)) {
+        throw new VolumeError(
+          'INVALID_OPERATION',
+          `Backup manifest is invalid: ${manifestPath}`,
+          {
+            manifestPath,
+          },
+        );
+      }
+
+      return payload;
+    } catch (error) {
+      if (error instanceof VolumeError) {
+        throw error;
+      }
+
+      throw new VolumeError(
+        'INVALID_OPERATION',
+        `Backup manifest could not be read: ${manifestPath}`,
+        {
+          manifestPath,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
+    }
+  }
+
+  private isVolumeBackupManifest(value: unknown): value is VolumeBackupManifest {
+    if (typeof value !== 'object' || value === null) {
+      return false;
+    }
+
+    const candidate = value as Partial<VolumeBackupManifest>;
+
+    return (
+      candidate.formatVersion === BACKUP_MANIFEST_FORMAT_VERSION &&
+      typeof candidate.volumeId === 'string' &&
+      candidate.volumeId.length > 0 &&
+      typeof candidate.volumeName === 'string' &&
+      typeof candidate.revision === 'number' &&
+      Number.isInteger(candidate.revision) &&
+      typeof candidate.schemaVersion === 'number' &&
+      Number.isInteger(candidate.schemaVersion) &&
+      typeof candidate.bytesWritten === 'number' &&
+      Number.isInteger(candidate.bytesWritten) &&
+      candidate.bytesWritten >= 0 &&
+      typeof candidate.checksumSha256 === 'string' &&
+      /^[0-9a-f]{64}$/u.test(candidate.checksumSha256) &&
+      typeof candidate.createdAt === 'string' &&
+      !Number.isNaN(Date.parse(candidate.createdAt))
+    );
+  }
+
+  private async inspectVolumeDatabase(
+    databasePath: string,
+    volumeId: string,
+  ): Promise<VolumeDatabaseSnapshot> {
+    return withVolumeDatabase(databasePath, async (database) => ({
+      manifest: this.toManifest(await this.requireManifestRow(database, volumeId)),
+      schemaVersion: await this.getSchemaVersion(database),
+    }));
+  }
+
+  private async getSchemaVersion(database: SqliteVolumeDatabase): Promise<number> {
+    const row = await database.get<{ value: string }>(
+      `SELECT value
+         FROM schema_metadata
+        WHERE key = 'schema_version'`,
+    );
+
+    const parsedVersion = Number.parseInt(row?.value ?? '0', 10);
+    return Number.isNaN(parsedVersion) ? 0 : parsedVersion;
+  }
+
+  private async computeFileSha256(filePath: string): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      const hash = createHash('sha256');
+      const stream = createReadStream(filePath);
+
+      stream.on('data', (chunk: Buffer) => {
+        hash.update(chunk);
+      });
+      stream.once('end', () => {
+        resolve(hash.digest('hex'));
+      });
+      stream.once('error', reject);
+    });
+  }
+
+  private assertBackupManifestMatchesArtifact(
+    backupManifest: VolumeBackupManifest,
+    snapshot: VolumeDatabaseSnapshot,
+    bytesWritten: number,
+    checksumSha256: string,
+    backupPath: string,
+    manifestPath: string,
+  ): void {
+    const mismatches: string[] = [];
+
+    if (backupManifest.volumeId !== snapshot.manifest.id) {
+      mismatches.push('volumeId');
+    }
+    if (backupManifest.volumeName !== snapshot.manifest.name) {
+      mismatches.push('volumeName');
+    }
+    if (backupManifest.revision !== snapshot.manifest.revision) {
+      mismatches.push('revision');
+    }
+    if (backupManifest.schemaVersion !== snapshot.schemaVersion) {
+      mismatches.push('schemaVersion');
+    }
+    if (backupManifest.bytesWritten !== bytesWritten) {
+      mismatches.push('bytesWritten');
+    }
+    if (backupManifest.checksumSha256 !== checksumSha256) {
+      mismatches.push('checksumSha256');
+    }
+
+    if (mismatches.length > 0) {
+      throw new VolumeError(
+        'INVALID_OPERATION',
+        `Backup manifest does not match the backup artifact: ${backupPath}`,
+        {
+          backupPath,
+          manifestPath,
+          mismatches,
+        },
+      );
     }
   }
 
