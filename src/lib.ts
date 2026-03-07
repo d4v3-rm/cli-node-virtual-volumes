@@ -16,6 +16,7 @@ export type {
   MoveEntryInput,
   RestoreVolumeBackupOptions,
   VolumeBackupManifest,
+  VolumeBackupInspectionResult,
   StorageDoctorIssue,
   StorageDoctorReport,
   StorageDoctorVolumeReport,

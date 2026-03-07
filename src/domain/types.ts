@@ -163,6 +163,20 @@ export interface RestoreVolumeBackupOptions {
   overwrite?: boolean;
 }
 
+export interface VolumeBackupInspectionResult {
+  volumeId: string;
+  volumeName: string;
+  revision: number;
+  schemaVersion: number;
+  backupPath: string;
+  manifestPath: string | null;
+  formatVersion: 1 | null;
+  checksumSha256: string;
+  bytesWritten: number;
+  createdAt: string | null;
+  validatedWithManifest: boolean;
+}
+
 export interface VolumeRestoreResult {
   volumeId: string;
   volumeName: string;

@@ -1,7 +1,11 @@
 import { Command } from 'commander';
 
 import { createRuntime } from './bootstrap/create-runtime.js';
-import { formatBackupResult, formatRestoreResult } from './cli/backup.js';
+import {
+  formatBackupInspectionResult,
+  formatBackupResult,
+  formatRestoreResult,
+} from './cli/backup.js';
 import { formatDoctorReport, formatRepairReport } from './cli/doctor.js';
 import { TerminalApp } from './ui/terminal-app.js';
 
@@ -92,6 +96,27 @@ const main = async (): Promise<void> => {
           console.log(JSON.stringify(result, null, 2));
         } else {
           console.log(formatRestoreResult(result));
+        }
+      },
+    );
+
+  program
+    .command('inspect-backup')
+    .description('Inspect a backup artifact and validate its manifest when present.')
+    .argument('<backupPath>', 'Inspect a backup snapshot previously created by the CLI')
+    .option('--json', 'Output the result as JSON')
+    .action(
+      async (
+        backupPath: string,
+        options: { json?: boolean },
+      ) => {
+        const runtime = await createRuntime(getRuntimeOverrides());
+        const result = await runtime.volumeService.inspectVolumeBackup(backupPath);
+
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          console.log(formatBackupInspectionResult(result));
         }
       },
     );

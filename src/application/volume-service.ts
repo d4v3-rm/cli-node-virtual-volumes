@@ -24,6 +24,7 @@ import type {
   RestoreVolumeBackupOptions,
   StorageDoctorReport,
   StorageRepairReport,
+  VolumeBackupInspectionResult,
   VolumeEntry,
   VolumeBackupResult,
   VolumeManifest,
@@ -100,6 +101,12 @@ export class VolumeService {
     options: RestoreVolumeBackupOptions = {},
   ): Promise<VolumeRestoreResult> {
     return this.repository.restoreVolumeBackup(backupPath, options);
+  }
+
+  public async inspectVolumeBackup(
+    backupPath: string,
+  ): Promise<VolumeBackupInspectionResult> {
+    return this.repository.inspectVolumeBackup(backupPath);
   }
 
   public async runDoctor(volumeId?: string): Promise<StorageDoctorReport> {
