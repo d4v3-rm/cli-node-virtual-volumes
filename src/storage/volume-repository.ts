@@ -6,6 +6,11 @@ import path from 'node:path';
 import { nanoid } from 'nanoid';
 import type { Logger } from 'pino';
 
+import {
+  APP_VERSION,
+  isCompatibleBackupRuntimeVersion,
+  parseSemanticVersion,
+} from '../config/app-metadata.js';
 import { VolumeError } from '../domain/errors.js';
 import type {
   CreateVolumeInput,
@@ -36,6 +41,7 @@ import {
 import { BlobStore } from './blob-store.js';
 import {
   type SqliteVolumeDatabase,
+  SUPPORTED_VOLUME_SCHEMA_VERSION,
   VOLUME_DATABASE_EXTENSION,
   type VolumeEntryRow,
   type VolumeManifestRow,
@@ -548,6 +554,7 @@ export class VolumeRepository {
         volumeName: snapshot.manifest.name,
         revision: snapshot.manifest.revision,
         schemaVersion: snapshot.schemaVersion,
+        createdWithVersion: APP_VERSION,
         bytesWritten: backupStats.size,
         checksumSha256,
         createdAt: new Date().toISOString(),
@@ -566,6 +573,7 @@ export class VolumeRepository {
           backupPath: absoluteDestinationPath,
           manifestPath: backupManifestPath,
           bytesWritten: backupStats.size,
+          createdWithVersion: APP_VERSION,
           checksumSha256,
           schemaVersion: snapshot.schemaVersion,
           revision: snapshot.manifest.revision,
@@ -615,6 +623,7 @@ export class VolumeRepository {
         backupPath: absoluteBackupPath,
         manifestPath: artifact.backupManifest ? artifact.backupManifestPath : null,
         formatVersion: artifact.backupManifest?.formatVersion ?? null,
+        createdWithVersion: artifact.backupManifest?.createdWithVersion ?? null,
         checksumSha256: artifact.checksumSha256,
         bytesWritten: artifact.bytesWritten,
         createdAt: artifact.backupManifest?.createdAt ?? null,
@@ -728,6 +737,7 @@ export class VolumeRepository {
           schemaVersion: artifact.snapshot.schemaVersion,
           backupPath: absoluteBackupPath,
           manifestPath: artifact.backupManifest ? artifact.backupManifestPath : null,
+          createdWithVersion: artifact.backupManifest?.createdWithVersion ?? null,
           checksumSha256: artifact.checksumSha256,
           bytesRestored: restoredStats.size,
           restoredAt: new Date().toISOString(),
@@ -740,6 +750,7 @@ export class VolumeRepository {
             backupPath: absoluteBackupPath,
             manifestPath: artifact.backupManifest ? artifact.backupManifestPath : null,
             bytesRestored: restoredStats.size,
+            createdWithVersion: artifact.backupManifest?.createdWithVersion ?? null,
             checksumSha256: artifact.checksumSha256,
             schemaVersion: artifact.snapshot.schemaVersion,
             validatedWithManifest: artifact.backupManifest !== null,
@@ -944,6 +955,11 @@ export class VolumeRepository {
         absoluteBackupPath,
         backupManifestPath,
       );
+      this.assertBackupRuntimeCompatibility(
+        backupManifest,
+        absoluteBackupPath,
+        backupManifestPath,
+      );
     }
 
     return {
@@ -1008,6 +1024,8 @@ export class VolumeRepository {
       Number.isInteger(candidate.revision) &&
       typeof candidate.schemaVersion === 'number' &&
       Number.isInteger(candidate.schemaVersion) &&
+      typeof candidate.createdWithVersion === 'string' &&
+      parseSemanticVersion(candidate.createdWithVersion) !== null &&
       typeof candidate.bytesWritten === 'number' &&
       Number.isInteger(candidate.bytesWritten) &&
       candidate.bytesWritten >= 0 &&
@@ -1052,6 +1070,43 @@ export class VolumeRepository {
       });
       stream.once('error', reject);
     });
+  }
+
+  private assertBackupRuntimeCompatibility(
+    backupManifest: VolumeBackupManifest,
+    backupPath: string,
+    manifestPath: string,
+  ): void {
+    if (
+      !isCompatibleBackupRuntimeVersion(
+        backupManifest.createdWithVersion,
+        APP_VERSION,
+      )
+    ) {
+      throw new VolumeError(
+        'INVALID_OPERATION',
+        `Backup ${backupPath} was created by CLI version ${backupManifest.createdWithVersion}, which is newer than the current runtime ${APP_VERSION}.`,
+        {
+          backupPath,
+          manifestPath,
+          backupCreatedWithVersion: backupManifest.createdWithVersion,
+          currentRuntimeVersion: APP_VERSION,
+        },
+      );
+    }
+
+    if (backupManifest.schemaVersion > SUPPORTED_VOLUME_SCHEMA_VERSION) {
+      throw new VolumeError(
+        'INVALID_OPERATION',
+        `Backup ${backupPath} requires schema version ${backupManifest.schemaVersion}, but this runtime only supports schema version ${SUPPORTED_VOLUME_SCHEMA_VERSION}.`,
+        {
+          backupPath,
+          manifestPath,
+          backupSchemaVersion: backupManifest.schemaVersion,
+          supportedSchemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
+        },
+      );
+    }
   }
 
   private assertBackupManifestMatchesArtifact(

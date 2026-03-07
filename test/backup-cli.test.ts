@@ -10,6 +10,7 @@ import type {
   VolumeBackupResult,
   VolumeRestoreResult,
 } from '../src/domain/types.js';
+import { APP_VERSION } from '../src/config/app-metadata.js';
 import { formatDateTime } from '../src/utils/formatters.js';
 
 describe('backup cli formatters', () => {
@@ -20,6 +21,7 @@ describe('backup cli formatters', () => {
       volumeName: 'Finance',
       revision: 7,
       schemaVersion: 3,
+      createdWithVersion: APP_VERSION,
       backupPath: 'C:\\backups\\finance.sqlite',
       manifestPath: 'C:\\backups\\finance.sqlite.manifest.json',
       checksumSha256:
@@ -34,6 +36,7 @@ describe('backup cli formatters', () => {
         'Volume: Finance (volume-1)',
         'Revision: 7',
         'Schema version: 3',
+        `Created with: ${APP_VERSION}`,
         'Backup path: C:\\backups\\finance.sqlite',
         'Artifact manifest: C:\\backups\\finance.sqlite.manifest.json',
         'SHA-256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -51,6 +54,7 @@ describe('backup cli formatters', () => {
       schemaVersion: 3,
       backupPath: 'C:\\backups\\finance.sqlite',
       manifestPath: 'C:\\backups\\finance.sqlite.manifest.json',
+      createdWithVersion: APP_VERSION,
       checksumSha256:
         'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
       bytesRestored: 16384,
@@ -64,6 +68,7 @@ describe('backup cli formatters', () => {
         'Volume: Finance (volume-1)',
         'Revision: 7',
         'Schema version: 3',
+        `Created with: ${APP_VERSION}`,
         'Backup path: C:\\backups\\finance.sqlite',
         'Artifact manifest: C:\\backups\\finance.sqlite.manifest.json',
         'Artifact validation: PASSED',
@@ -82,6 +87,7 @@ describe('backup cli formatters', () => {
       schemaVersion: 3,
       backupPath: 'C:\\backups\\finance.sqlite',
       manifestPath: null,
+      createdWithVersion: null,
       checksumSha256:
         'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
       bytesRestored: 16384,
@@ -95,6 +101,7 @@ describe('backup cli formatters', () => {
         'Volume: Finance (volume-1)',
         'Revision: 7',
         'Schema version: 3',
+        'Created with: unknown (legacy backup)',
         'Backup path: C:\\backups\\finance.sqlite',
         'Artifact manifest: not present (legacy backup)',
         'Artifact validation: SKIPPED',
@@ -114,6 +121,7 @@ describe('backup cli formatters', () => {
       backupPath: 'C:\\backups\\finance.sqlite',
       manifestPath: 'C:\\backups\\finance.sqlite.manifest.json',
       formatVersion: 1,
+      createdWithVersion: APP_VERSION,
       checksumSha256:
         'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
       bytesWritten: 16384,
@@ -127,6 +135,7 @@ describe('backup cli formatters', () => {
         'Volume: Finance (volume-1)',
         'Revision: 7',
         'Schema version: 3',
+        `Created with: ${APP_VERSION}`,
         'Backup path: C:\\backups\\finance.sqlite',
         'Artifact manifest: C:\\backups\\finance.sqlite.manifest.json',
         'Artifact validation: PASSED',

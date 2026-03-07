@@ -142,6 +142,7 @@ export interface VolumeBackupManifest {
   volumeName: string;
   revision: number;
   schemaVersion: number;
+  createdWithVersion: string;
   bytesWritten: number;
   checksumSha256: string;
   createdAt: string;
@@ -171,6 +172,7 @@ export interface VolumeBackupInspectionResult {
   backupPath: string;
   manifestPath: string | null;
   formatVersion: 1 | null;
+  createdWithVersion: string | null;
   checksumSha256: string;
   bytesWritten: number;
   createdAt: string | null;
@@ -184,6 +186,7 @@ export interface VolumeRestoreResult {
   schemaVersion: number;
   backupPath: string;
   manifestPath: string | null;
+  createdWithVersion: string | null;
   checksumSha256: string;
   bytesRestored: number;
   restoredAt: string;

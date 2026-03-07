@@ -8,6 +8,7 @@ import { VolumeError } from '../domain/errors.js';
 import { ensureDirectory } from '../utils/fs.js';
 
 export const VOLUME_DATABASE_EXTENSION = '.sqlite';
+export const SUPPORTED_VOLUME_SCHEMA_VERSION = 3;
 
 export type SqliteVolumeDatabase = Database<sqlite3.Database, sqlite3.Statement>;
 
@@ -128,8 +129,6 @@ const metadataSchema = `
     applied_at TEXT NOT NULL
   );
 `;
-
-const LATEST_SCHEMA_VERSION = 3;
 
 const getTableColumns = async (
   database: SqliteVolumeDatabase,
@@ -442,6 +441,17 @@ const applySchemaMigrations = async (
 
     const currentVersion = await getSchemaVersion(database);
 
+    if (currentVersion > SUPPORTED_VOLUME_SCHEMA_VERSION) {
+      throw new VolumeError(
+        'INVALID_OPERATION',
+        `Database schema version ${currentVersion} is newer than the supported runtime schema ${SUPPORTED_VOLUME_SCHEMA_VERSION}.`,
+        {
+          currentSchemaVersion: currentVersion,
+          supportedSchemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
+        },
+      );
+    }
+
     if (currentVersion < 1) {
       await recordSchemaMigration(database, 1, 'bootstrap-volume-schema');
     }
@@ -461,7 +471,7 @@ const applySchemaMigrations = async (
       `INSERT INTO schema_metadata (key, value)
        VALUES ('schema_version', ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      String(LATEST_SCHEMA_VERSION),
+      String(SUPPORTED_VOLUME_SCHEMA_VERSION),
     );
 
     await database.exec('COMMIT');
