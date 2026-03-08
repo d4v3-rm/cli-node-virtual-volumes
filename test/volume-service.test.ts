@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -101,6 +102,108 @@ describe('VolumeService', () => {
     const databaseStats = await fs.stat(databasePath);
 
     expect(databaseStats.isFile()).toBe(true);
+    await expect(fs.stat(legacyDirectoryPath)).rejects.toBeTruthy();
+  });
+
+  it('migrates legacy directory-based volumes into sqlite files', async () => {
+    const sandboxRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'cli-node-virtual-volumes-legacy-'),
+    );
+    sandboxes.push(sandboxRoot);
+
+    const dataDir = path.join(sandboxRoot, 'data');
+    const logDir = path.join(sandboxRoot, 'logs');
+    const legacyVolumeId = 'vol_legacy001';
+    const legacyDirectoryPath = path.join(dataDir, 'volumes', legacyVolumeId);
+    const legacyContent = Buffer.from('legacy content', 'utf8');
+    const legacyContentRef = createHash('sha256').update(legacyContent).digest('hex');
+    const timestamp = new Date().toISOString();
+
+    await fs.mkdir(
+      path.join(
+        legacyDirectoryPath,
+        'blobs',
+        legacyContentRef.slice(0, 2),
+      ),
+      { recursive: true },
+    );
+    await fs.writeFile(
+      path.join(
+        legacyDirectoryPath,
+        'blobs',
+        legacyContentRef.slice(0, 2),
+        legacyContentRef.slice(2),
+      ),
+      legacyContent,
+    );
+    await fs.writeFile(
+      path.join(legacyDirectoryPath, 'manifest.json'),
+      JSON.stringify(
+        {
+          id: legacyVolumeId,
+          name: 'Legacy Volume',
+          description: 'Directory-based volume',
+          quotaBytes: 1024 * 1024,
+          logicalUsedBytes: legacyContent.byteLength,
+          entryCount: 2,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+    await fs.writeFile(
+      path.join(legacyDirectoryPath, 'state.json'),
+      JSON.stringify(
+        {
+          version: 1,
+          rootId: 'root',
+          entries: {
+            root: {
+              id: 'root',
+              kind: 'directory',
+              name: '/',
+              parentId: null,
+              childIds: ['file_legacy'],
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            },
+            file_legacy: {
+              id: 'file_legacy',
+              kind: 'file',
+              name: 'legacy.txt',
+              parentId: 'root',
+              createdAt: timestamp,
+              updatedAt: timestamp,
+              size: legacyContent.byteLength,
+              contentRef: legacyContentRef,
+              importedFromHostPath: null,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+
+    const runtime = await createRuntime({
+      dataDir,
+      logDir,
+      logLevel: 'silent',
+      logToStdout: false,
+    });
+
+    const volumes = await runtime.volumeService.listVolumes();
+    const preview = await runtime.volumeService.previewFile(legacyVolumeId, '/legacy.txt');
+    const migratedDatabasePath = getVolumeDatabasePath(dataDir, legacyVolumeId);
+    const migratedDatabaseStats = await fs.stat(migratedDatabasePath);
+
+    expect(volumes.map((volume) => volume.id)).toContain(legacyVolumeId);
+    expect(preview.content).toContain('legacy content');
+    expect(migratedDatabaseStats.isFile()).toBe(true);
     await expect(fs.stat(legacyDirectoryPath)).rejects.toBeTruthy();
   });
 
