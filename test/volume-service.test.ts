@@ -229,6 +229,137 @@ describe('VolumeService', () => {
     await expect(fs.stat(legacyDirectoryPath)).rejects.toBeTruthy();
   });
 
+  it('rolls legacy blob imports back when metadata migration fails', async () => {
+    const sandboxRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'cli-node-virtual-volumes-legacy-failure-'),
+    );
+    sandboxes.push(sandboxRoot);
+
+    const dataDir = path.join(sandboxRoot, 'data');
+    const logDir = path.join(sandboxRoot, 'logs');
+    const legacyVolumeId = 'vol_legacy_fail01';
+    const legacyDirectoryPath = path.join(dataDir, 'volumes', legacyVolumeId);
+    const firstContent = Buffer.from('first legacy payload', 'utf8');
+    const secondContent = Buffer.from('second legacy payload', 'utf8');
+    const firstContentRef = createHash('sha256').update(firstContent).digest('hex');
+    const secondContentRef = createHash('sha256').update(secondContent).digest('hex');
+    const timestamp = new Date().toISOString();
+
+    await fs.mkdir(
+      path.join(
+        legacyDirectoryPath,
+        'blobs',
+        firstContentRef.slice(0, 2),
+      ),
+      { recursive: true },
+    );
+    await fs.mkdir(
+      path.join(
+        legacyDirectoryPath,
+        'blobs',
+        secondContentRef.slice(0, 2),
+      ),
+      { recursive: true },
+    );
+    await fs.writeFile(
+      path.join(
+        legacyDirectoryPath,
+        'blobs',
+        firstContentRef.slice(0, 2),
+        firstContentRef.slice(2),
+      ),
+      firstContent,
+    );
+    await fs.writeFile(
+      path.join(
+        legacyDirectoryPath,
+        'blobs',
+        secondContentRef.slice(0, 2),
+        secondContentRef.slice(2),
+      ),
+      secondContent,
+    );
+    await fs.writeFile(
+      path.join(legacyDirectoryPath, 'manifest.json'),
+      JSON.stringify(
+        {
+          id: legacyVolumeId,
+          name: 'Broken Legacy Volume',
+          description: 'Should roll back on migration failure',
+          quotaBytes: 1024 * 1024,
+          logicalUsedBytes: firstContent.byteLength + secondContent.byteLength,
+          entryCount: 3,
+          revision: 0,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+    await fs.writeFile(
+      path.join(legacyDirectoryPath, 'state.json'),
+      JSON.stringify(
+        {
+          version: 1,
+          rootId: 'root',
+          entries: {
+            root: {
+              id: 'root',
+              kind: 'directory',
+              name: '/',
+              parentId: null,
+              childIds: ['file_a', 'file_b'],
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            },
+            file_a: {
+              id: 'file_a',
+              kind: 'file',
+              name: 'duplicate.txt',
+              parentId: 'root',
+              createdAt: timestamp,
+              updatedAt: timestamp,
+              size: firstContent.byteLength,
+              contentRef: firstContentRef,
+              importedFromHostPath: null,
+            },
+            file_b: {
+              id: 'file_b',
+              kind: 'file',
+              name: 'duplicate.txt',
+              parentId: 'root',
+              createdAt: timestamp,
+              updatedAt: timestamp,
+              size: secondContent.byteLength,
+              contentRef: secondContentRef,
+              importedFromHostPath: null,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+
+    const runtime = await createRuntime({
+      dataDir,
+      logDir,
+      logLevel: 'silent',
+      logToStdout: false,
+    });
+
+    const volumes = await runtime.volumeService.listVolumes();
+    const migratedDatabasePath = getVolumeDatabasePath(dataDir, legacyVolumeId);
+    const legacyDirectoryStats = await fs.stat(legacyDirectoryPath);
+
+    expect(volumes.map((volume) => volume.id)).not.toContain(legacyVolumeId);
+    await expect(fs.stat(migratedDatabasePath)).rejects.toBeTruthy();
+    expect(legacyDirectoryStats.isDirectory()).toBe(true);
+  });
+
   it('imports host files and directories in batch and resolves name conflicts', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Imports' });
