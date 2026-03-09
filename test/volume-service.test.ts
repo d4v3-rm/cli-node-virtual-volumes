@@ -103,6 +103,64 @@ describe('VolumeService', () => {
     expect(snapshot.entries[0]?.name).toBe('todo.txt');
   });
 
+  it('rolls writeTextFile back when file entry creation fails after blob storage', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Write Rollback' });
+
+    const createFileEntrySpy = vi
+      .spyOn(
+        runtime.volumeService as unknown as {
+          createFileEntry: (...args: unknown[]) => unknown;
+        },
+        'createFileEntry',
+      )
+      .mockImplementation(() => {
+        throw new Error('Simulated file entry creation failure.');
+      });
+
+    await expect(
+      runtime.volumeService.writeTextFile(volume.id, '/failed.txt', 'should roll back'),
+    ).rejects.toThrow('Simulated file entry creation failure.');
+
+    createFileEntrySpy.mockRestore();
+
+    const snapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+
+    expect(snapshot.entries).toHaveLength(0);
+    await expect(countPersistedBlobs(runtime.config.dataDir, volume.id)).resolves.toBe(0);
+  });
+
+  it('rolls writeTextFile overwrites back when orphan cleanup fails after metadata mutation', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Overwrite Rollback' });
+
+    await runtime.volumeService.writeTextFile(volume.id, '/tracked.txt', 'baseline content');
+
+    const cleanupSpy = vi
+      .spyOn(
+        runtime.volumeService as unknown as {
+          deleteOrphanedBlobsInDatabase: (...args: unknown[]) => Promise<void>;
+        },
+        'deleteOrphanedBlobsInDatabase',
+      )
+      .mockImplementation(
+        () => Promise.reject(new Error('Simulated orphan cleanup failure.')),
+      );
+
+    await expect(
+      runtime.volumeService.writeTextFile(volume.id, '/tracked.txt', 'new content'),
+    ).rejects.toThrow('Simulated orphan cleanup failure.');
+
+    cleanupSpy.mockRestore();
+
+    const preview = await runtime.volumeService.previewFile(volume.id, '/tracked.txt');
+    const snapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+
+    expect(preview.content).toContain('baseline content');
+    expect(snapshot.entries.map((entry) => entry.name)).toEqual(['tracked.txt']);
+    await expect(countPersistedBlobs(runtime.config.dataDir, volume.id)).resolves.toBe(1);
+  });
+
   it('removes orphaned blobs after overwriting and deleting files', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Blob Cleanup' });
@@ -358,6 +416,52 @@ describe('VolumeService', () => {
     expect(volumes.map((volume) => volume.id)).not.toContain(legacyVolumeId);
     await expect(fs.stat(migratedDatabasePath)).rejects.toBeTruthy();
     expect(legacyDirectoryStats.isDirectory()).toBe(true);
+  });
+
+  it('rolls batched host imports back when a later file fails after earlier blobs were staged', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Import Rollback' });
+    const hostRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-import-rollback-'));
+    sandboxes.push(hostRoot);
+
+    await fs.writeFile(path.join(hostRoot, 'alpha.txt'), 'alpha');
+    await fs.writeFile(path.join(hostRoot, 'beta.txt'), 'beta');
+
+    const originalCreateFileEntry = (
+      runtime.volumeService as unknown as {
+        createFileEntry: (...args: unknown[]) => unknown;
+      }
+    ).createFileEntry.bind(runtime.volumeService);
+
+    const createFileEntrySpy = vi
+      .spyOn(
+        runtime.volumeService as unknown as {
+          createFileEntry: (...args: unknown[]) => unknown;
+        },
+        'createFileEntry',
+      )
+      .mockImplementation((...args: unknown[]) => {
+        const [, , name] = args;
+        if (name === 'beta.txt') {
+          throw new Error('Simulated batched import failure.');
+        }
+
+        return originalCreateFileEntry(...args);
+      });
+
+    await expect(
+      runtime.volumeService.importHostPaths(volume.id, {
+        destinationPath: '/',
+        hostPaths: [path.join(hostRoot, 'alpha.txt'), path.join(hostRoot, 'beta.txt')],
+      }),
+    ).rejects.toThrow('Simulated batched import failure.');
+
+    createFileEntrySpy.mockRestore();
+
+    const snapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+
+    expect(snapshot.entries).toHaveLength(0);
+    await expect(countPersistedBlobs(runtime.config.dataDir, volume.id)).resolves.toBe(0);
   });
 
   it('imports host files and directories in batch and resolves name conflicts', async () => {
