@@ -1,4 +1,4 @@
-# 📦 CLI Node Virtual Volumes
+# CLI Node Virtual Volumes
 
 <p align="center">
   <strong>Custom virtual volumes for Node.js, with a keyboard-first terminal file manager.</strong>
@@ -13,406 +13,370 @@
 </p>
 
 <p align="center">
-  <img alt="Tags" src="https://img.shields.io/badge/tags-nodejs%2Ctypescript%2Ccli%2Ctui%2Cfilesystem%2Cvirtual--volume-111827.svg" />
-</p>
-
-<p align="center">
   <img alt="CLI Node Virtual Volumes TUI" src="./assets/screen.png" width="100%" />
 </p>
 
-> `cli-node-virtual-volumes` e' un file system virtuale custom, persistente e Node-only, progettato per creare volumi logici separati dalla macchina host e gestirli da una TUI ricca, veloce e orientata alle scorciatoie da tastiera.
+`cli-node-virtual-volumes` is a persistent, Node-only virtual filesystem designed to keep logical volumes isolated from the host OS while exposing a rich TUI and a programmable TypeScript API.
 
-## ✨ Perche' esiste
+## Index
 
-Questo progetto nasce per offrire un ambiente di storage virtuale che:
+1. [Overview](#overview)
+2. [Features](#features)
+3. [Architecture](#architecture)
+4. [Installation](#installation)
+5. [Quick Start](#quick-start)
+6. [Configuration](#configuration)
+7. [TUI Controls](#tui-controls)
+8. [Import And Export](#import-and-export)
+9. [Backup, Inspect And Restore](#backup-inspect-and-restore)
+10. [Node.js API](#nodejs-api)
+11. [Development](#development)
+12. [Packaging And Release](#packaging-and-release)
+13. [Troubleshooting](#troubleshooting)
+14. [Roadmap](#roadmap)
+15. [License](#license)
 
-- non monta dischi reali a livello OS
-- non espone un file system nativo accessibile da altri programmi
-- vive all'interno di un runtime Node.js
-- salva ogni volume in un singolo file SQLite
-- permette import/export da e verso la macchina host
-- offre una UX da terminale curata, con navigator, modali e progress feedback reali
+## Overview
 
-In pratica ottieni volumi virtuali persistenti, con spazio logico configurabile, navigabili come un piccolo file manager in terminale.
+This project provides:
 
-## 🧭 Indice
+- persistent virtual volumes stored as single SQLite files
+- a keyboard-first terminal file manager
+- host import and export flows with integrity checks
+- a Node.js API for automation and embedding
+- operational commands for doctor, repair, backup, inspect, and restore
 
-1. [Panoramica](#-panoramica)
-2. [Funzionalita'](#-funzionalita)
-3. [Architettura](#-architettura)
-4. [Installazione](#-installazione)
-5. [Avvio rapido](#-avvio-rapido)
-6. [Configurazione](#-configurazione)
-7. [Controlli TUI](#-controlli-tui)
-8. [Import ed export](#-import-ed-export)
-9. [API Node.js](#-api-nodejs)
-10. [Sviluppo](#-sviluppo)
-11. [Packaging e release](#-packaging-e-release)
-12. [Troubleshooting](#-troubleshooting)
-13. [Roadmap](#-roadmap)
-14. [Licenza](#-licenza)
+## Features
 
-## 🚀 Panoramica
+### Core Storage
 
-| Area | Cosa offre |
-| --- | --- |
-| Storage virtuale | Volumi persistenti con struttura file/cartelle custom |
-| UX terminale | TUI keyboard-first con frecce, modali, status e progress |
-| Integrazione host | Import massivo da host e export verso host |
-| Runtime Node-only | Utilizzabile via CLI e via API JavaScript/TypeScript |
-| Enterprise quality | Configurazione validata, logging su file, test automatici, packaging npm |
+- Create and delete virtual volumes.
+- Configure a logical quota per volume.
+- Manage folders and files in a custom virtual filesystem.
+- Preview text files directly from the virtual volume.
+- Persist metadata and file content in a single `.sqlite` file per volume.
+- Store large file payloads in chunked SQLite blobs.
+- Protect writes with revisions and transactional mutations.
 
-## 🧩 Funzionalita'
+### Terminal Experience
 
-### Core storage
+- Volume dashboard.
+- Explorer for volume contents.
+- Host filesystem browser for import and export.
+- Prompt, confirm, preview, and help overlays.
+- Inspector and status panel with progress feedback.
+- Keyboard-first workflows end to end.
 
-- Creazione e rimozione di volumi virtuali.
-- Quota logica configurabile per ogni volume.
-- Gestione di cartelle e file in un file system virtuale custom.
-- Supporto a move, rename, delete e navigazione gerarchica.
-- Preview rapida dei file di testo.
-- Persistenza dei contenuti e dei metadata.
-- Un file `.sqlite` dedicato per ogni volume virtuale.
-- Backup e restore consistenti dei volumi SQLite.
+### Operational Tooling
 
-### Terminal experience
+- `.env`-driven configuration.
+- Structured file logging.
+- `doctor` and safe `repair` flows.
+- Consistent `backup`, `inspect-backup`, and `restore` commands.
+- TypeScript build with `tsup`.
+- Test suite with `vitest`.
+- Cross-platform CI and release packaging.
 
-- Dashboard dei volumi.
-- Explorer del contenuto del volume.
-- Browser del file system host per import ed export.
-- Modali dedicate per input, conferma e selezione.
-- Inspector contestuale.
-- Sidebar con shortcut leggibili e verticali.
-- Barra di stato con spinner, progress bar, esito operazioni e contesto.
+## Architecture
 
-### Operazioni host ↔ volume
-
-- Import di singoli file.
-- Import di cartelle complete.
-- Import massivo con selezione multipla via checkbox.
-- Export di file dal volume alla macchina host.
-- Export ricorsivo di directory.
-- Feedback di avanzamento durante transfer lunghi.
-- Transfer di file grandi tramite chunk persistiti in SQLite.
-- Verifica di integrita' automatica su import ed export.
-
-### Tooling
-
-- Configurazione via `.env`.
-- Logging strutturato su file.
-- Comandi CLI per doctor, repair, backup e restore.
-- Build TypeScript con `tsup`.
-- Test con `vitest`.
-- Linting con `eslint`.
-- Packaging installabile globalmente con npm.
-
-## 🏗️ Architettura
-
-Il progetto e' organizzato per responsabilita', con separazione chiara tra dominio, application layer, storage e UI:
+The codebase is organized by responsibility:
 
 ```text
 src/
-  application/   -> orchestration dei casi d'uso
-  config/        -> env, defaults e validazione config
-  domain/        -> tipi, DTO e primitive del virtual filesystem
-  logging/       -> logger Pino e gestione output
-  storage/       -> repository, blob store e persistenza
-  ui/            -> terminal shell, browser host, status helpers
-  utils/         -> helper generici
+  application/   -> use-case orchestration
+  config/        -> runtime metadata and env validation
+  domain/        -> types, DTOs, and primitives
+  logging/       -> logger setup
+  storage/       -> repository, blob store, sqlite integration
+  ui/            -> TUI runtime and presenters
+  utils/         -> general helpers
 ```
 
-### Componenti principali
+Main modules:
 
-| Modulo | Ruolo |
-| --- | --- |
-| `VolumeService` | Regola i flussi applicativi di volumi, file, import ed export |
-| `VolumeRepository` | Gestisce metadata e stato dei volumi nel file SQLite del volume |
-| `BlobStore` | Conserva il contenuto reale dei file virtuali nello stesso SQLite del volume |
-| `TerminalApp` | Costruisce la TUI e orchestra la UX runtime |
-| `env` config | Traduce `.env`, flag CLI e default applicativi |
-| `logger` | Registra eventi, errori e trace su file system |
+- `VolumeService`: application flows for volumes, files, import, export, and recovery.
+- `VolumeRepository`: metadata persistence, transactional mutations, doctor, repair, backup, restore.
+- `BlobStore`: blob persistence and integrity verification inside SQLite.
+- `TerminalApp`: TUI runtime.
 
-## 📥 Installazione
+## Installation
 
-### Requisiti
+Requirements:
 
 - Node.js `>= 20`
 - npm
-- terminale con supporto TUI
+- a terminal with TUI support
 
-### Installazione locale
+Local install:
 
 ```bash
 npm install
 ```
 
-### Installazione globale da tarball
-
-```bash
-npm pack
-npm install -g ./cli-node-virtual-volumes-1.1.0.tgz
-```
-
-Dopo l'installazione globale il comando disponibile e':
-
-```bash
-virtual-volumes
-```
-
-## ⚡ Avvio rapido
-
-### Modalita' sviluppo
-
-```bash
-npm run dev
-```
-
-### Build di produzione
+Build and run:
 
 ```bash
 npm run build
 npm start
 ```
 
-### Flusso base
+Create a tarball:
 
-1. Avvia la TUI.
-2. Crea un volume.
-3. Entra nel volume con `Enter` o `Right`.
-4. Importa file/cartelle dal file system host.
-5. Naviga con le frecce.
-6. Esporta verso host quando serve.
+```bash
+npm pack
+npm install -g ./cli-node-virtual-volumes-1.1.0.tgz
+```
 
-## ⚙️ Configurazione
+## Quick Start
 
-Il progetto legge la configurazione da `.env`, flag CLI e default interni. E' disponibile un template in [.env.example](./.env.example).
+Development mode:
 
-### Variabili principali
+```bash
+npm run dev
+```
 
-| Variabile | Descrizione |
+Basic flow:
+
+1. Start the TUI with `virtual-volumes`.
+2. Create a volume.
+3. Enter the volume with `Enter` or `Right`.
+4. Import files or folders from the host.
+5. Navigate, preview, move, or delete entries.
+6. Export data back to the host when needed.
+
+## Configuration
+
+The runtime reads configuration from `.env`, CLI flags, and internal defaults. A template is available in [.env.example](./.env.example).
+
+Main variables:
+
+| Variable | Description |
 | --- | --- |
-| `VOLUME_DATA_DIR` | Root persistente dei volumi virtuali |
-| `VOLUME_LOG_DIR` | Directory dei log runtime |
-| `VOLUME_DEFAULT_QUOTA_BYTES` | Quota di default per i nuovi volumi |
-| `VOLUME_LOG_LEVEL` | Livello log: `fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent` |
-| `VOLUME_LOG_TO_STDOUT` | Duplica i log anche sul terminale |
-| `VOLUME_PREVIEW_BYTES` | Dimensione massima preview file |
+| `VOLUME_DATA_DIR` | Persistent root for virtual volumes |
+| `VOLUME_LOG_DIR` | Runtime log directory |
+| `VOLUME_DEFAULT_QUOTA_BYTES` | Default quota for new volumes |
+| `VOLUME_LOG_LEVEL` | `fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent` |
+| `VOLUME_LOG_TO_STDOUT` | Mirrors logs to stdout |
+| `VOLUME_PREVIEW_BYTES` | Max preview size for file previews |
 
-### Note operative
+Operational notes:
 
-- Di default i volumi vengono salvati nella directory corrente da cui lanci il programma, a meno che tu non sovrascriva il path via config.
-- Dentro `VOLUME_DATA_DIR/volumes` ogni volume viene persistito come file singolo `.sqlite`.
-- I contenuti file grandi vengono salvati a chunk all'interno dello stesso database SQLite del volume.
-- I log sono pensati per stare su file; l'output su terminale e' utile in debug, ma puo' interferire con la TUI fullscreen.
+- If `VOLUME_DATA_DIR` is not set, the runtime uses the current working directory.
+- Volumes are persisted under `VOLUME_DATA_DIR/volumes`.
+- Large file contents stay inside the same SQLite database as chunked blobs.
+- File logging is recommended while using the fullscreen TUI.
 
-## ⌨️ Controlli TUI
-
-La UI e' pensata per essere usata quasi completamente da tastiera.
+## TUI Controls
 
 ### Dashboard
 
-| Tasto | Azione |
+| Key | Action |
 | --- | --- |
-| `Up / Down` | Cambia selezione |
-| `PageUp / PageDown` | Scorre velocemente |
-| `Home / End` | Primo / ultimo volume |
-| `Right`, `Enter`, `O` | Apre il volume selezionato |
-| `N` | Crea un nuovo volume |
-| `X` | Elimina il volume selezionato |
+| `Up / Down` | Change selection |
+| `PageUp / PageDown` | Scroll faster |
+| `Home / End` | First / last volume |
+| `Right`, `Enter`, `O` | Open selected volume |
+| `N` | Create volume |
+| `X` | Delete selected volume |
 | `R` | Refresh |
 | `?` | Help |
-| `Q` | Esce |
+| `Q` | Quit |
 
 ### Explorer
 
-| Tasto | Azione |
+| Key | Action |
 | --- | --- |
-| `Up / Down` | Cambia selezione |
-| `PageUp / PageDown` | Scorre di pagina |
-| `Home / End` | Primo / ultimo elemento |
-| `Right`, `Enter` | Entra in cartella o apre preview file |
-| `Left`, `Backspace`, `B` | Torna indietro |
-| `C` | Crea cartella |
-| `I` | Apre il browser host per l'import |
-| `E` | Apre il browser host per l'export |
+| `Up / Down` | Change selection |
+| `PageUp / PageDown` | Page navigation |
+| `Home / End` | First / last entry |
+| `Right`, `Enter` | Enter folder or preview file |
+| `Left`, `Backspace`, `B` | Go back |
+| `C` | Create folder |
+| `I` | Open import browser |
+| `E` | Open export browser |
 | `M` | Move / rename |
 | `D` | Delete |
 | `P` | Preview |
 | `R` | Refresh |
 | `?` | Help |
 
-### Browser host per import
+### Host Browser
 
-| Tasto | Azione |
+| Key | Action |
 | --- | --- |
-| `Up / Down` | Cambia selezione |
-| `Right` | Entra in cartella o drive |
-| `Left` | Risale alla cartella padre |
-| `Space` | Seleziona o deseleziona checkbox |
-| `A` | Seleziona o deseleziona gli elementi visibili |
-| `Enter`, `I` | Conferma l'import |
-| `Esc`, `Q` | Chiude la modale |
+| `Up / Down` | Change selection |
+| `Right` | Enter folder or drive |
+| `Left` | Go to parent |
+| `Space` | Toggle selection in import mode |
+| `A` | Toggle visible selections in import mode |
+| `Enter` | Confirm import or export |
+| `Esc`, `Q` | Close overlay |
 
-### Browser host per export
+## Import And Export
 
-| Tasto | Azione |
+Import flow:
+
+- open the import overlay with `I`
+- navigate the host filesystem
+- select files or folders with `Space`
+- confirm with `Enter`
+
+Export flow:
+
+- select a file or folder in the virtual volume
+- press `E`
+- pick the destination host folder
+- confirm the export
+
+Both flows expose progress feedback and integrity verification.
+
+## Backup, Inspect And Restore
+
+The CLI exposes a full recovery workflow:
+
+| Command | Purpose |
 | --- | --- |
-| `Up / Down` | Cambia selezione |
-| `Right` | Entra in cartella o drive |
-| `Left` | Risale alla cartella padre |
-| `Enter`, `E` | Esporta nella cartella corrente |
-| `Esc`, `Q` | Chiude la modale |
+| `virtual-volumes backup <volumeId> <destinationPath>` | Create a consistent SQLite snapshot |
+| `virtual-volumes inspect-backup <backupPath>` | Validate the backup artifact before restore |
+| `virtual-volumes restore <backupPath>` | Restore a volume from backup |
+| `virtual-volumes restore <backupPath> --force` | Replace an existing volume with rollback protection |
+| `virtual-volumes doctor [volumeId]` | Run consistency checks after restore |
 
-## 🔄 Import ed export
+Recommended flow:
 
-### Import
+```bash
+virtual-volumes backup vol_finance_01 ./backups/finance.sqlite
+virtual-volumes inspect-backup ./backups/finance.sqlite
+virtual-volumes restore ./backups/finance.sqlite
+virtual-volumes doctor vol_finance_01
+```
 
-L'import non richiede di digitare manualmente un path host:
+Each standard backup produces:
 
-- apri la modale import con `I`
-- navighi il file system host con le frecce
-- selezioni piu' file o directory con `Space`
-- confermi con `Enter` o `I`
+- a `.sqlite` file
+- a `.sqlite.manifest.json` sidecar
 
-Durante l'operazione la status area mostra:
+`inspect-backup` validates:
 
-- operazione attiva
-- spinner
-- progress bar
-- messaggio contestuale
-- esito finale `SUCCESS` o `ERROR`
-- verifica di integrita' sui file importati
+- artifact readability
+- SHA-256 checksum
+- sidecar consistency
+- `createdWithVersion` compatibility
+- `schemaVersion` compatibility
 
-### Export
+For the full operational procedure, drills, and audit checklist, see [docs/BACKUP-RESTORE-RUNBOOK.md](./docs/BACKUP-RESTORE-RUNBOOK.md).
 
-L'export funziona in modo speculare:
+## Node.js API
 
-- selezioni il file o la cartella nel volume virtuale
-- premi `E`
-- scegli la destinazione host
-- confermi l'operazione
-
-L'export supporta sia file singoli sia directory ricorsive.
-Al termine dell'export viene eseguita anche una verifica di integrita' del file scritto sulla macchina host.
-
-## 🧠 API Node.js
-
-Oltre alla TUI, il progetto espone una API utilizzabile da codice:
+The same runtime is available programmatically:
 
 ```ts
 import { createRuntime } from 'cli-node-virtual-volumes';
 
 const runtime = await createRuntime({
   dataDir: 'C:/cli-node-virtual-volumes/data',
-  logLevel: 'info'
+  logLevel: 'info',
 });
 
 const volume = await runtime.volumeService.createVolume({
-  name: 'Secure Docs'
+  name: 'Secure Docs',
 });
 
 await runtime.volumeService.writeTextFile(
   volume.id,
   '/hello.txt',
-  'ciao dal filesystem virtuale'
+  'hello from the virtual filesystem',
 );
 
 const preview = await runtime.volumeService.previewFile(volume.id, '/hello.txt');
-
 console.log(preview.content);
 ```
 
-## 🛠️ Sviluppo
+Useful API methods:
 
-### Script disponibili
+- `runtime.volumeService.backupVolume(...)`
+- `runtime.volumeService.inspectVolumeBackup(...)`
+- `runtime.volumeService.restoreVolumeBackup(...)`
+- `runtime.volumeService.runDoctor(...)`
+- `runtime.volumeService.runRepair(...)`
 
-| Script | Descrizione |
+## Development
+
+Available scripts:
+
+| Script | Description |
 | --- | --- |
-| `npm run dev` | Avvia la CLI in sviluppo |
-| `npm run build` | Compila il progetto |
-| `npm run start` | Esegue la build compilata |
-| `npm run lint` | Esegue ESLint |
-| `npm run typecheck` | Esegue TypeScript in modalita' no emit |
-| `npm run test` | Esegue i test con coverage |
-| `npm run verify` | Esegue verifiche complete |
-| `npm run pack:local` | Genera il tarball npm locale |
+| `npm run dev` | Start the CLI in development |
+| `npm run build` | Build the project |
+| `npm start` | Run the compiled build |
+| `npm run lint` | Run ESLint |
+| `npm run typecheck` | Run TypeScript with no emit |
+| `npm run test` | Run tests with coverage |
+| `npm run verify` | Run full verification and build |
+| `npm run pack:local` | Build and generate a local tarball |
 
-### Qualita'
+The current quality bar includes:
 
-La codebase punta a una struttura pulita e mantenibile:
+- strict TypeScript
+- layered modules by responsibility
+- recovery, integrity, and rollback tests
+- packaging aligned with the shipped artifact
 
-- TypeScript tipizzato end-to-end
-- moduli separati per responsabilita'
-- test su casi core e regressioni
-- tooling npm allineato al packaging reale
+## Packaging And Release
 
-## 📦 Packaging e release
-
-Il pacchetto e' pensato per essere distribuito via npm o come tarball:
+Generate a local package:
 
 ```bash
 npm run pack:local
 ```
 
-Output atteso:
+Typical release assets:
 
-- file `.tgz` del pacchetto
-- build `dist/`
-- metadata completi per installazione globale
-
-Le release locali possono essere accompagnate da:
-
+- `dist/`
+- `.tgz` package artifact
 - `CHANGELOG.md`
-- commit in stile Conventional Commits
-- workflow GitHub Actions per build e publish artefatti
+- GitHub Actions build outputs
 
-## 🧪 Test e verifica
+Additional planning and maturity work is tracked in [docs/ENTERPRISE-ROADMAP.md](./docs/ENTERPRISE-ROADMAP.md).
 
-```bash
-npm run lint
-npm run typecheck
-npm run test
-npm run verify
-```
+## Troubleshooting
 
-La suite copre:
+### The TUI flickers or gets noisy
 
-- virtual filesystem core
-- import massivo e export
-- progress callback
-- parsing env
-- logica di navigazione TUI
-- regressioni su modali e workflow principali
+- avoid `VOLUME_LOG_TO_STDOUT=true` while using the fullscreen UI
+- use a terminal with solid escape-sequence support
+- make sure you are on Node.js 20 or newer
 
-## 🩺 Troubleshooting
+### Import or export feels slow
 
-### La TUI si sporca o lampeggia
+- large files still need time even with progress feedback
+- host disk performance has a direct impact on transfer speed
 
-- evita `VOLUME_LOG_TO_STDOUT=true` durante l'uso fullscreen
-- usa un terminale con supporto completo alle escape sequence
-- verifica di essere su Node.js 20 o superiore
+### You cannot find the volumes
 
-### Import/export lenti
+- check `VOLUME_DATA_DIR`
+- if it is not configured, the runtime uses the current working directory
 
-- file molto grandi mostrano progress avanzato, ma possono comunque richiedere tempo
-- verifica la velocita' del disco host e la dimensione dei transfer
+### Restore is rejected
 
-### Non trovi i volumi
+- run `virtual-volumes inspect-backup <backupPath>` first
+- verify that the backup was not created by a newer CLI major version
+- verify that `schemaVersion` and `createdWithVersion` are compatible with the current runtime
+- use `--force` only when you intentionally want to overwrite an existing volume
 
-- controlla `VOLUME_DATA_DIR`
-- se non impostato, usa la directory corrente da cui hai lanciato il comando
+## Roadmap
 
-## 🗺️ Roadmap
+Current direction:
 
-- miglioramento continuo della shell TUI
-- ulteriore riduzione dei crash e delle condizioni di freeze
-- affinamento delle release automation
-- evoluzione del backend di persistenza per scenari ancora piu' grandi
+- continue hardening storage recovery and consistency
+- keep reducing TUI monolith complexity
+- improve enterprise operability and release safety
+- extend automated test coverage around real failure modes
 
-## 👤 Autore
+## Author
 
-Creato e mantenuto da **Salvatore Scarano**.
+Created and maintained by **Salvatore Scarano**.
 
-## 📄 Licenza
+## License
 
-Questo progetto e' distribuito con licenza [MIT](./LICENSE).
+This project is distributed under the [MIT](./LICENSE) license.
