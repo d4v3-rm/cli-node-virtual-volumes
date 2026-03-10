@@ -70,7 +70,7 @@ const main = async (): Promise<void> => {
           overwrite: options.force,
         });
         const artifactPath = options.output
-          ? await writeCliJsonArtifact(result, options.output)
+          ? await writeCliJsonArtifact('backup', result, options.output)
           : null;
 
         console.log(
@@ -99,7 +99,7 @@ const main = async (): Promise<void> => {
           overwrite: options.force,
         });
         const artifactPath = options.output
-          ? await writeCliJsonArtifact(result, options.output)
+          ? await writeCliJsonArtifact('restore', result, options.output)
           : null;
 
         console.log(
@@ -125,7 +125,7 @@ const main = async (): Promise<void> => {
         const runtime = await createRuntime(getRuntimeOverrides());
         const result = await runtime.volumeService.inspectVolumeBackup(backupPath);
         const artifactPath = options.output
-          ? await writeCliJsonArtifact(result, options.output)
+          ? await writeCliJsonArtifact('inspect-backup', result, options.output)
           : null;
 
         console.log(
@@ -153,7 +153,7 @@ const main = async (): Promise<void> => {
       if (options.fix) {
         const report = await runtime.volumeService.runRepair(volumeId);
         const artifactPath = options.output
-          ? await writeCliJsonArtifact(report, options.output)
+          ? await writeCliJsonArtifact('doctor --fix', report, options.output)
           : null;
 
         console.log(
@@ -169,7 +169,7 @@ const main = async (): Promise<void> => {
       } else {
         const report = await runtime.volumeService.runDoctor(volumeId);
         const artifactPath = options.output
-          ? await writeCliJsonArtifact(report, options.output)
+          ? await writeCliJsonArtifact('doctor', report, options.output)
           : null;
 
         console.log(

@@ -123,15 +123,17 @@ Per un backup di routine:
 
 1. Esegui `virtual-volumes backup`.
 2. Esegui subito `virtual-volumes inspect-backup`.
-3. Conserva insieme `.sqlite` e `.manifest.json`.
+3. Se serve audit operativo, aggiungi `--output <path>` per salvare l'artifact JSON del comando.
+4. Conserva insieme `.sqlite` e `.manifest.json`.
 
 Per un restore di emergenza:
 
 1. Esegui `virtual-volumes inspect-backup`.
 2. Esegui `virtual-volumes doctor` sul sistema corrente se il volume esiste ancora.
 3. Esegui `virtual-volumes restore` oppure `virtual-volumes restore --force`.
-4. Esegui `virtual-volumes doctor <volumeId>` dopo il ripristino.
-5. Apri il volume e valida almeno un file noto o una directory chiave.
+4. Se devi tracciare l'operazione, usa `--output <path>` sui comandi eseguiti.
+5. Esegui `virtual-volumes doctor <volumeId>` dopo il ripristino.
+6. Apri il volume e valida almeno un file noto o una directory chiave.
 
 ## Restore drill periodico
 
@@ -148,6 +150,8 @@ Per alzare davvero la readiness operativa, pianifica un drill regolare:
 Per ogni backup e restore conserva almeno:
 
 - timestamp operazione
+- comando eseguito
+- versione CLI che ha generato il report
 - `volumeId`
 - `revision`
 - `schemaVersion`
