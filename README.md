@@ -251,6 +251,8 @@ virtual-volumes restore ./backups/finance.sqlite
 virtual-volumes doctor vol_finance_01
 ```
 
+For audit and automation, operational commands also support `--output <path>` to persist the structured JSON payload to disk while keeping the normal CLI output on stdout.
+
 Each standard backup produces:
 
 - a `.sqlite` file

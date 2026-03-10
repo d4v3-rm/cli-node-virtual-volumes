@@ -7,6 +7,7 @@ import {
   formatRestoreResult,
 } from './cli/backup.js';
 import { formatDoctorReport, formatRepairReport } from './cli/doctor.js';
+import { renderCliResult, writeCliJsonArtifact } from './cli/output.js';
 import { TerminalApp } from './ui/terminal-app.js';
 
 const main = async (): Promise<void> => {
@@ -56,23 +57,28 @@ const main = async (): Promise<void> => {
     .argument('<volumeId>', 'Back up a specific volume by id')
     .argument('<destinationPath>', 'Write the backup snapshot to this path')
     .option('--json', 'Output the result as JSON')
+    .option('--output <path>', 'Write the structured JSON result to this file')
     .option('--force', 'Overwrite the destination file if it already exists')
     .action(
       async (
         volumeId: string,
         destinationPath: string,
-        options: { json?: boolean; force?: boolean },
+        options: { json?: boolean; output?: string; force?: boolean },
       ) => {
         const runtime = await createRuntime(getRuntimeOverrides());
         const result = await runtime.volumeService.backupVolume(volumeId, destinationPath, {
           overwrite: options.force,
         });
+        const artifactPath = options.output
+          ? await writeCliJsonArtifact(result, options.output)
+          : null;
 
-        if (options.json) {
-          console.log(JSON.stringify(result, null, 2));
-        } else {
-          console.log(formatBackupResult(result));
-        }
+        console.log(
+          renderCliResult(result, formatBackupResult, {
+            artifactPath,
+            json: options.json,
+          }),
+        );
       },
     );
 
@@ -81,22 +87,27 @@ const main = async (): Promise<void> => {
     .description('Restore a volume SQLite backup into the managed data directory.')
     .argument('<backupPath>', 'Restore a backup snapshot previously created by the CLI')
     .option('--json', 'Output the result as JSON')
+    .option('--output <path>', 'Write the structured JSON result to this file')
     .option('--force', 'Overwrite an existing volume with the same id')
     .action(
       async (
         backupPath: string,
-        options: { json?: boolean; force?: boolean },
+        options: { json?: boolean; output?: string; force?: boolean },
       ) => {
         const runtime = await createRuntime(getRuntimeOverrides());
         const result = await runtime.volumeService.restoreVolumeBackup(backupPath, {
           overwrite: options.force,
         });
+        const artifactPath = options.output
+          ? await writeCliJsonArtifact(result, options.output)
+          : null;
 
-        if (options.json) {
-          console.log(JSON.stringify(result, null, 2));
-        } else {
-          console.log(formatRestoreResult(result));
-        }
+        console.log(
+          renderCliResult(result, formatRestoreResult, {
+            artifactPath,
+            json: options.json,
+          }),
+        );
       },
     );
 
@@ -105,19 +116,24 @@ const main = async (): Promise<void> => {
     .description('Inspect a backup artifact and validate its manifest when present.')
     .argument('<backupPath>', 'Inspect a backup snapshot previously created by the CLI')
     .option('--json', 'Output the result as JSON')
+    .option('--output <path>', 'Write the structured JSON result to this file')
     .action(
       async (
         backupPath: string,
-        options: { json?: boolean },
+        options: { json?: boolean; output?: string },
       ) => {
         const runtime = await createRuntime(getRuntimeOverrides());
         const result = await runtime.volumeService.inspectVolumeBackup(backupPath);
+        const artifactPath = options.output
+          ? await writeCliJsonArtifact(result, options.output)
+          : null;
 
-        if (options.json) {
-          console.log(JSON.stringify(result, null, 2));
-        } else {
-          console.log(formatBackupInspectionResult(result));
-        }
+        console.log(
+          renderCliResult(result, formatBackupInspectionResult, {
+            artifactPath,
+            json: options.json,
+          }),
+        );
       },
     );
 
@@ -126,33 +142,42 @@ const main = async (): Promise<void> => {
     .description('Run storage diagnostics across all volumes or a specific volume.')
     .argument('[volumeId]', 'Diagnose a specific volume by id')
     .option('--json', 'Output the report as JSON')
+    .option('--output <path>', 'Write the structured JSON report to this file')
     .option('--fix', 'Apply safe automatic repairs for supported issues')
     .action(
       async (
         volumeId: string | undefined,
-        options: { json?: boolean; fix?: boolean },
+        options: { json?: boolean; output?: string; fix?: boolean },
       ) => {
       const runtime = await createRuntime(getRuntimeOverrides());
       if (options.fix) {
         const report = await runtime.volumeService.runRepair(volumeId);
+        const artifactPath = options.output
+          ? await writeCliJsonArtifact(report, options.output)
+          : null;
 
-        if (options.json) {
-          console.log(JSON.stringify(report, null, 2));
-        } else {
-          console.log(formatRepairReport(report));
-        }
+        console.log(
+          renderCliResult(report, formatRepairReport, {
+            artifactPath,
+            json: options.json,
+          }),
+        );
 
         if (!report.healthy) {
           process.exitCode = 1;
         }
       } else {
         const report = await runtime.volumeService.runDoctor(volumeId);
+        const artifactPath = options.output
+          ? await writeCliJsonArtifact(report, options.output)
+          : null;
 
-        if (options.json) {
-          console.log(JSON.stringify(report, null, 2));
-        } else {
-          console.log(formatDoctorReport(report));
-        }
+        console.log(
+          renderCliResult(report, formatDoctorReport, {
+            artifactPath,
+            json: options.json,
+          }),
+        );
 
         if (!report.healthy) {
           process.exitCode = 1;

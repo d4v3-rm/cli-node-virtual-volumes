@@ -25,6 +25,7 @@ describe('doctor cli formatters', () => {
     expect(formatDoctorReport(report)).toBe(
       [
         'Storage doctor: HEALTHY',
+        'Generated at: 2026-04-15T10:00:00.000Z',
         'Checked volumes: 1',
         'Total issues: 0',
         '',
@@ -77,6 +78,7 @@ describe('doctor cli formatters', () => {
     expect(formatRepairReport(report)).toBe(
       [
         'Storage repair: ISSUES REMAIN',
+        'Generated at: 2026-04-15T10:05:00.000Z',
         'Checked volumes: 1',
         'Repaired volumes: 1',
         'Actions applied: 2',
