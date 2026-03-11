@@ -164,6 +164,13 @@ export interface RestoreVolumeBackupOptions {
   overwrite?: boolean;
 }
 
+export interface CreateSupportBundleInput {
+  destinationPath: string;
+  volumeId?: string;
+  backupPath?: string;
+  overwrite?: boolean;
+}
+
 export interface VolumeBackupInspectionResult {
   volumeId: string;
   volumeName: string;
@@ -255,4 +262,40 @@ export interface StorageRepairReport {
   repairedVolumes: number;
   actionsApplied: number;
   volumes: StorageRepairVolumeReport[];
+}
+
+export interface SupportBundleConfigSnapshot {
+  dataDir: string;
+  logDir: string;
+  logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
+  logToStdout: boolean;
+  defaultQuotaBytes: number;
+  previewBytes: number;
+}
+
+export interface SupportBundleEnvironmentSnapshot {
+  platform: string;
+  arch: string;
+  nodeVersion: string;
+  hostname: string;
+  cwd: string;
+}
+
+export interface SupportBundleResult {
+  bundleVersion: 1;
+  cliVersion: string;
+  generatedAt: string;
+  supportedVolumeSchemaVersion: number;
+  volumeId: string | null;
+  backupPath: string | null;
+  healthy: boolean;
+  checkedVolumes: number;
+  issueCount: number;
+  bundlePath: string;
+  manifestPath: string;
+  doctorReportPath: string;
+  backupInspectionReportPath: string | null;
+  logSnapshotPath: string | null;
+  config: SupportBundleConfigSnapshot;
+  environment: SupportBundleEnvironmentSnapshot;
 }

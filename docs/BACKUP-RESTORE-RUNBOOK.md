@@ -135,6 +135,12 @@ Per un restore di emergenza:
 5. Esegui `virtual-volumes doctor <volumeId>` dopo il ripristino.
 6. Apri il volume e valida almeno un file noto o una directory chiave.
 
+Per escalation o handoff verso supporto tecnico:
+
+1. Esegui `virtual-volumes support-bundle <destinationPath> [volumeId]`.
+2. Se stai lavorando su un restore o un backup sospetto, aggiungi `--backup-path <backupPath>`.
+3. Condividi la cartella generata, che include `manifest.json`, `doctor-report.json`, eventuale `backup-inspection.json` e snapshot del log corrente.
+
 ## Restore drill periodico
 
 Per alzare davvero la readiness operativa, pianifica un drill regolare:

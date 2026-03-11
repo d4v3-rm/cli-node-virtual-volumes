@@ -241,6 +241,7 @@ The CLI exposes a full recovery workflow:
 | `virtual-volumes restore <backupPath>` | Restore a volume from backup |
 | `virtual-volumes restore <backupPath> --force` | Replace an existing volume with rollback protection |
 | `virtual-volumes doctor [volumeId]` | Run consistency checks after restore |
+| `virtual-volumes support-bundle <destinationPath> [volumeId]` | Export doctor data, runtime metadata, and log snapshot for support |
 
 Recommended flow:
 
@@ -249,6 +250,7 @@ virtual-volumes backup vol_finance_01 ./backups/finance.sqlite
 virtual-volumes inspect-backup ./backups/finance.sqlite
 virtual-volumes restore ./backups/finance.sqlite
 virtual-volumes doctor vol_finance_01
+virtual-volumes support-bundle ./reports/finance-support vol_finance_01 --backup-path ./backups/finance.sqlite
 ```
 
 For audit and automation, operational commands also support `--output <path>` to persist a structured JSON artifact with `command`, `cliVersion`, `generatedAt`, and `payload`, while keeping the normal CLI output on stdout.
@@ -301,6 +303,7 @@ Useful API methods:
 - `runtime.volumeService.restoreVolumeBackup(...)`
 - `runtime.volumeService.runDoctor(...)`
 - `runtime.volumeService.runRepair(...)`
+- `createSupportBundle(runtime, {...})`
 
 ## Development
 

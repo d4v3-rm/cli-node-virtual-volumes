@@ -4,7 +4,9 @@ export type { AppRuntime } from './bootstrap/create-runtime.js';
 export { loadAppConfig } from './config/env.js';
 export type { AppConfig, RuntimeOverrides } from './config/env.js';
 export { VolumeError, isVolumeError } from './domain/errors.js';
+export { createSupportBundle } from './ops/support-bundle.js';
 export type {
+  CreateSupportBundleInput,
   CreateVolumeInput,
   DirectoryListingItem,
   ExplorerSnapshot,
@@ -23,6 +25,9 @@ export type {
   StorageRepairAction,
   StorageRepairReport,
   StorageRepairVolumeReport,
+  SupportBundleConfigSnapshot,
+  SupportBundleEnvironmentSnapshot,
+  SupportBundleResult,
   VolumeBackupResult,
   VolumeManifest,
   VolumeRestoreResult,
