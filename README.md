@@ -315,6 +315,7 @@ Available scripts:
 | `npm run typecheck` | Run TypeScript with no emit |
 | `npm run test` | Run tests with coverage |
 | `npm run smoke:ops` | Run a compiled CLI smoke for backup, inspect, restore, and doctor |
+| `npm run smoke:package` | Install the local tarball and smoke the packaged library and CLI |
 | `npm run verify` | Run full verification, build, and the operational smoke |
 | `npm run pack:local` | Build and generate a local tarball |
 

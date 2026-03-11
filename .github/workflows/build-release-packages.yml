@@ -43,6 +43,9 @@ jobs:
       - name: Build npm package
         run: npm run pack:local
 
+      - name: Verify packaged install
+        run: npm run smoke:package
+
       - name: Prepare package artifact directory
         shell: bash
         run: |
