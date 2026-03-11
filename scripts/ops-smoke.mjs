@@ -1,0 +1,276 @@
+#!/usr/bin/env node
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import process from 'node:process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const distCliPath = path.join(rootDir, 'dist', 'index.js');
+const distLibPath = path.join(rootDir, 'dist', 'lib.js');
+const packageJsonPath = path.join(rootDir, 'package.json');
+
+const assert = (condition, message) => {
+  if (!condition) {
+    throw new Error(message);
+  }
+};
+
+const pathExists = async (targetPath) => {
+  try {
+    await fs.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const readJson = async (filePath) =>
+  JSON.parse(await fs.readFile(filePath, 'utf8'));
+
+const runCli = (args, runtimePaths) => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      distCliPath,
+      '--data-dir',
+      runtimePaths.dataDir,
+      '--log-dir',
+      runtimePaths.logDir,
+      '--log-level',
+      'silent',
+      ...args,
+    ],
+    {
+      cwd: rootDir,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        NO_COLOR: '1',
+      },
+    },
+  );
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  if (result.status !== 0) {
+    throw new Error(
+      [
+        `CLI command failed: virtual-volumes ${args.join(' ')}`,
+        result.stdout.trim(),
+        result.stderr.trim(),
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    );
+  }
+
+  return {
+    stdout: result.stdout.trim(),
+    stderr: result.stderr.trim(),
+  };
+};
+
+const assertArtifactEnvelope = (artifact, expectedCommand, expectedVersion) => {
+  assert(
+    artifact && typeof artifact === 'object',
+    `Artifact for ${expectedCommand} must be a JSON object.`,
+  );
+  assert(
+    artifact.command === expectedCommand,
+    `Artifact command mismatch for ${expectedCommand}.`,
+  );
+  assert(
+    artifact.cliVersion === expectedVersion,
+    `Artifact CLI version mismatch for ${expectedCommand}.`,
+  );
+  assert(
+    typeof artifact.generatedAt === 'string' &&
+      !Number.isNaN(Date.parse(artifact.generatedAt)),
+    `Artifact generatedAt is invalid for ${expectedCommand}.`,
+  );
+  assert(
+    Object.hasOwn(artifact, 'payload'),
+    `Artifact payload missing for ${expectedCommand}.`,
+  );
+};
+
+let sandboxRoot = null;
+
+try {
+  const packageJson = await readJson(packageJsonPath);
+  assert(
+    (await pathExists(distCliPath)) && (await pathExists(distLibPath)),
+    'Run npm run build before npm run smoke:ops.',
+  );
+
+  const { createRuntime } = await import(pathToFileURL(distLibPath).href);
+
+  sandboxRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'virtual-volumes-ops-smoke-'),
+  );
+
+  const runtimePaths = {
+    dataDir: path.join(sandboxRoot, 'data'),
+    logDir: path.join(sandboxRoot, 'logs'),
+  };
+  const backupsDir = path.join(sandboxRoot, 'backups');
+  const reportsDir = path.join(sandboxRoot, 'reports');
+
+  await fs.mkdir(backupsDir, { recursive: true });
+  await fs.mkdir(reportsDir, { recursive: true });
+
+  const runtime = await createRuntime({
+    dataDir: runtimePaths.dataDir,
+    logDir: runtimePaths.logDir,
+    logLevel: 'silent',
+  });
+
+  const volume = await runtime.volumeService.createVolume({
+    name: 'Recovery Smoke',
+    description: 'Operational smoke test for backup and restore flows.',
+  });
+  await runtime.volumeService.writeTextFile(
+    volume.id,
+    '/baseline.txt',
+    'enterprise smoke baseline',
+  );
+
+  const backupPath = path.join(backupsDir, 'recovery-smoke.sqlite');
+  const backupReportPath = path.join(reportsDir, 'backup-report.json');
+  const backupRun = runCli(
+    ['backup', volume.id, backupPath, '--json', '--output', backupReportPath],
+    runtimePaths,
+  );
+  const backupResult = JSON.parse(backupRun.stdout);
+  const backupArtifact = await readJson(backupReportPath);
+  const backupManifestPath = `${path.resolve(backupPath)}.manifest.json`;
+
+  assert(
+    backupResult.volumeId === volume.id,
+    'Backup stdout payload should include the requested volume id.',
+  );
+  assert(
+    !Object.hasOwn(backupResult, 'command'),
+    'Backup stdout payload must remain the raw result object.',
+  );
+  assertArtifactEnvelope(backupArtifact, 'backup', packageJson.version);
+  assert(
+    backupArtifact.payload.backupPath === path.resolve(backupPath),
+    'Backup artifact should point to the snapshot path.',
+  );
+  assert(await pathExists(backupPath), 'Backup snapshot was not created.');
+  assert(
+    await pathExists(backupManifestPath),
+    'Backup manifest sidecar was not created.',
+  );
+
+  const inspectReportPath = path.join(reportsDir, 'inspect-report.json');
+  const inspectRun = runCli(
+    ['inspect-backup', backupPath, '--json', '--output', inspectReportPath],
+    runtimePaths,
+  );
+  const inspectResult = JSON.parse(inspectRun.stdout);
+  const inspectArtifact = await readJson(inspectReportPath);
+
+  assert(
+    inspectResult.validatedWithManifest === true,
+    'Backup inspection should validate the sidecar manifest.',
+  );
+  assertArtifactEnvelope(
+    inspectArtifact,
+    'inspect-backup',
+    packageJson.version,
+  );
+  assert(
+    inspectArtifact.payload.checksumSha256 === backupArtifact.payload.checksumSha256,
+    'Inspection artifact should match the backup checksum.',
+  );
+
+  await runtime.volumeService.deleteVolume(volume.id);
+
+  const restoreReportPath = path.join(reportsDir, 'restore-report.json');
+  const restoreRun = runCli(
+    ['restore', backupPath, '--json', '--output', restoreReportPath],
+    runtimePaths,
+  );
+  const restoreResult = JSON.parse(restoreRun.stdout);
+  const restoreArtifact = await readJson(restoreReportPath);
+
+  assert(
+    restoreResult.volumeId === volume.id,
+    'Restore stdout payload should recreate the same volume id.',
+  );
+  assertArtifactEnvelope(restoreArtifact, 'restore', packageJson.version);
+  assert(
+    restoreArtifact.payload.validatedWithManifest === true,
+    'Restore artifact should record manifest validation.',
+  );
+
+  const validationRuntime = await createRuntime({
+    dataDir: runtimePaths.dataDir,
+    logDir: runtimePaths.logDir,
+    logLevel: 'silent',
+  });
+  const preview = await validationRuntime.volumeService.previewFile(
+    volume.id,
+    '/baseline.txt',
+  );
+  assert(
+    preview.content.includes('enterprise smoke baseline'),
+    'Restored volume content did not match the backup snapshot.',
+  );
+
+  const doctorReportPath = path.join(reportsDir, 'doctor-report.json');
+  const doctorRun = runCli(
+    ['doctor', volume.id, '--output', doctorReportPath],
+    runtimePaths,
+  );
+  const doctorArtifact = await readJson(doctorReportPath);
+
+  assert(
+    doctorRun.stdout.includes('Storage doctor: HEALTHY'),
+    'Doctor human output should report a healthy volume.',
+  );
+  assert(
+    doctorRun.stdout.includes(`Artifact path: ${path.resolve(doctorReportPath)}`),
+    'Doctor human output should mention the artifact path.',
+  );
+  assertArtifactEnvelope(doctorArtifact, 'doctor', packageJson.version);
+  assert(
+    doctorArtifact.payload.healthy === true,
+    'Doctor artifact should report a healthy volume.',
+  );
+
+  const repairReportPath = path.join(reportsDir, 'repair-report.json');
+  const repairRun = runCli(
+    ['doctor', volume.id, '--fix', '--json', '--output', repairReportPath],
+    runtimePaths,
+  );
+  const repairResult = JSON.parse(repairRun.stdout);
+  const repairArtifact = await readJson(repairReportPath);
+
+  assert(
+    repairResult.healthy === true,
+    'Doctor --fix should remain healthy on a clean volume.',
+  );
+  assertArtifactEnvelope(repairArtifact, 'doctor --fix', packageJson.version);
+
+  process.stdout.write(
+    `[ops-smoke] verified backup, inspect, restore, and doctor flows for ${volume.id}\n`,
+  );
+} catch (error) {
+  const message = error instanceof Error ? error.message : 'Unknown smoke failure.';
+  if (sandboxRoot) {
+    process.stderr.write(`[ops-smoke] sandbox preserved at ${sandboxRoot}\n`);
+  }
+  process.stderr.write(`${message}\n`);
+  process.exitCode = 1;
+} finally {
+  if (sandboxRoot) {
+    await fs.rm(sandboxRoot, { recursive: true, force: true }).catch(() => undefined);
+  }
+}

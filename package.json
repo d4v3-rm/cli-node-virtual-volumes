@@ -35,8 +35,9 @@
     "lint": "eslint .",
     "test": "vitest run --coverage",
     "test:watch": "vitest",
+    "smoke:ops": "node ./scripts/ops-smoke.mjs",
     "check": "npm run lint && npm run typecheck && npm run test",
-    "verify": "npm run check && npm run build",
+    "verify": "npm run check && npm run build && npm run smoke:ops",
     "pack:local": "npm run clean:package-artifacts && npm pack",
     "set:version": "node ./scripts/set-version.mjs",
     "prepack": "npm run build"
