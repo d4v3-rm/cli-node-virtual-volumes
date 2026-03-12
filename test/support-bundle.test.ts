@@ -8,6 +8,10 @@ import { createRuntime } from '../src/bootstrap/create-runtime.js';
 import { APP_VERSION } from '../src/config/app-metadata.js';
 import { resolveAppLogFilePath } from '../src/logging/logger.js';
 import { createSupportBundle } from '../src/ops/support-bundle.js';
+import type {
+  SupportBundleChecksumManifest,
+  SupportBundleFileRecord,
+} from '../src/domain/types.js';
 
 const sandboxes: string[] = [];
 
@@ -24,6 +28,12 @@ const createIsolatedRuntime = async () => {
     logToStdout: false,
   });
 };
+
+const findBundleFileRecord = (
+  files: SupportBundleFileRecord[],
+  role: SupportBundleFileRecord['role'],
+): SupportBundleFileRecord | undefined =>
+  files.find((file) => file.role === role);
 
 afterEach(async () => {
   await Promise.all(
@@ -70,6 +80,15 @@ describe('support bundle', () => {
       checksumSha256: string;
       validatedWithManifest: boolean;
     };
+    const checksumManifest = JSON.parse(
+      await fs.readFile(result.checksumsPath, 'utf8'),
+    ) as SupportBundleChecksumManifest;
+    const copiedBackupManifest = JSON.parse(
+      await fs.readFile(result.backupManifestCopyPath!, 'utf8'),
+    ) as {
+      volumeId: string;
+      checksumSha256: string;
+    };
 
     expect(result.bundleVersion).toBe(1);
     expect(result.cliVersion).toBe(APP_VERSION);
@@ -79,6 +98,10 @@ describe('support bundle', () => {
     expect(result.checkedVolumes).toBe(1);
     expect(result.issueCount).toBe(0);
     expect(result.backupInspectionReportPath).not.toBeNull();
+    expect(result.backupManifestCopyPath).not.toBeNull();
+    expect(result.checksumsPath).toBe(
+      path.join(path.resolve(bundlePath), 'checksums.json'),
+    );
     expect(result.logSnapshotPath).not.toBeNull();
     expect(await fs.readFile(result.logSnapshotPath!, 'utf8')).toContain(
       'support bundle log',
@@ -95,6 +118,47 @@ describe('support bundle', () => {
       checksumSha256: backupResult.checksumSha256,
       validatedWithManifest: true,
     });
+    expect(copiedBackupManifest).toMatchObject({
+      volumeId: volume.id,
+      checksumSha256: backupResult.checksumSha256,
+    });
+    expect(checksumManifest.bundlePath).toBe(path.resolve(bundlePath));
+    expect(checksumManifest.files).toHaveLength(5);
+    const manifestRecord = findBundleFileRecord(checksumManifest.files, 'manifest');
+    const doctorRecord = findBundleFileRecord(checksumManifest.files, 'doctor-report');
+    const inspectionRecord = findBundleFileRecord(
+      checksumManifest.files,
+      'backup-inspection',
+    );
+    const backupManifestRecord = findBundleFileRecord(
+      checksumManifest.files,
+      'backup-manifest',
+    );
+    const logRecord = findBundleFileRecord(checksumManifest.files, 'log-snapshot');
+
+    expect(manifestRecord).toMatchObject({
+      relativePath: 'manifest.json',
+    });
+    expect(manifestRecord?.checksumSha256).toMatch(/^[0-9a-f]{64}$/u);
+    expect(doctorRecord).toMatchObject({
+      relativePath: 'doctor-report.json',
+    });
+    expect(doctorRecord?.checksumSha256).toMatch(/^[0-9a-f]{64}$/u);
+    expect(inspectionRecord).toMatchObject({
+      relativePath: 'backup-inspection.json',
+    });
+    expect(inspectionRecord?.checksumSha256).toMatch(/^[0-9a-f]{64}$/u);
+    expect(backupManifestRecord).toMatchObject({
+      relativePath: 'backup-artifact.manifest.json',
+    });
+    expect(backupManifestRecord?.checksumSha256).toMatch(/^[0-9a-f]{64}$/u);
+    expect(logRecord).toMatchObject({
+      relativePath: path.join(
+        'logs',
+        path.basename(resolveAppLogFilePath(runtime.config)),
+      ),
+    });
+    expect(logRecord?.checksumSha256).toMatch(/^[0-9a-f]{64}$/u);
   });
 
   it('rejects existing bundle destinations without overwrite', async () => {
@@ -126,6 +190,7 @@ describe('support bundle', () => {
 
     await expect(fs.access(path.join(bundlePath, 'stale.txt'))).rejects.toThrow();
     await expect(fs.access(result.manifestPath)).resolves.toBeUndefined();
+    await expect(fs.access(result.checksumsPath)).resolves.toBeUndefined();
     expect(result.bundlePath).toBe(path.resolve(bundlePath));
   });
 });

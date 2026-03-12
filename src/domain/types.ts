@@ -171,6 +171,13 @@ export interface CreateSupportBundleInput {
   overwrite?: boolean;
 }
 
+export type SupportBundleFileRole =
+  | 'backup-inspection'
+  | 'backup-manifest'
+  | 'doctor-report'
+  | 'log-snapshot'
+  | 'manifest';
+
 export interface VolumeBackupInspectionResult {
   volumeId: string;
   volumeName: string;
@@ -281,6 +288,22 @@ export interface SupportBundleEnvironmentSnapshot {
   cwd: string;
 }
 
+export interface SupportBundleFileRecord {
+  role: SupportBundleFileRole;
+  path: string;
+  relativePath: string;
+  bytes: number;
+  checksumSha256: string;
+  sourcePath: string | null;
+}
+
+export interface SupportBundleChecksumManifest {
+  bundleVersion: 1;
+  generatedAt: string;
+  bundlePath: string;
+  files: SupportBundleFileRecord[];
+}
+
 export interface SupportBundleResult {
   bundleVersion: 1;
   cliVersion: string;
@@ -295,6 +318,8 @@ export interface SupportBundleResult {
   manifestPath: string;
   doctorReportPath: string;
   backupInspectionReportPath: string | null;
+  backupManifestCopyPath: string | null;
+  checksumsPath: string;
   logSnapshotPath: string | null;
   config: SupportBundleConfigSnapshot;
   environment: SupportBundleEnvironmentSnapshot;
