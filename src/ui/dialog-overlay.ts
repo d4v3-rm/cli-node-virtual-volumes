@@ -14,6 +14,14 @@ export interface PromptOverlayOptions {
   footer: string;
 }
 
+export interface ChoiceOverlayOptions {
+  title: string;
+  description: string;
+  choices: string[];
+  initialIndex: number;
+  footer: string;
+}
+
 export interface ConfirmOverlayOptions {
   title: string;
   body: string;
@@ -34,6 +42,15 @@ export interface PromptOverlayView extends PromptOverlayOptions {
   borderTone: 'accentWarm';
   height: number;
   mode: 'input';
+  width: string;
+}
+
+export interface ChoiceOverlayView extends Omit<ChoiceOverlayOptions, 'choices' | 'initialIndex'> {
+  borderTone: 'accentWarm';
+  choicesContent: string;
+  height: number;
+  mode: 'choice';
+  selectedIndex: number;
   width: string;
 }
 
@@ -108,6 +125,50 @@ export const buildPromptOverlayView = (
   mode: 'input',
   width: '68%',
 });
+
+export const cycleChoiceIndex = (
+  selectedIndex: number,
+  choicesLength: number,
+  direction: number,
+): number => {
+  if (choicesLength <= 0) {
+    return 0;
+  }
+
+  const normalizedStart =
+    ((selectedIndex % choicesLength) + choicesLength) % choicesLength;
+  return ((normalizedStart + direction) % choicesLength + choicesLength) % choicesLength;
+};
+
+export const buildChoiceButtonRow = (
+  choices: string[],
+  selectedIndex: number,
+): string =>
+  choices
+    .map((choice, index) => (index === selectedIndex ? `[ ${choice} ]` : `  ${choice}  `))
+    .join('   ');
+
+export const buildChoiceOverlayView = (
+  options: ChoiceOverlayOptions,
+  selectedIndex: number,
+): ChoiceOverlayView => {
+  const resolvedIndex =
+    options.choices.length === 0
+      ? 0
+      : cycleChoiceIndex(selectedIndex, options.choices.length, 0);
+
+  return {
+    borderTone: 'accentWarm',
+    choicesContent: buildChoiceButtonRow(options.choices, resolvedIndex),
+    description: options.description,
+    footer: options.footer,
+    height: 9,
+    mode: 'choice',
+    selectedIndex: resolvedIndex,
+    title: options.title,
+    width: '68%',
+  };
+};
 
 export const resolvePromptValue = (
   submittedValue: string | null | undefined,

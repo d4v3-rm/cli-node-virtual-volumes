@@ -10,13 +10,13 @@ import { formatBytes, formatDateTime, truncate } from '../utils/formatters.js';
 import type { HostBrowserEntry } from './host-browser.js';
 
 export const TERMINAL_ICONS = {
-  checkboxOff: 'â–¡',
-  checkboxOn: 'â– ',
-  drive: 'â—‰',
-  file: 'â–ª',
-  folder: 'â–¸',
-  parent: 'â†°',
-  volume: 'â—ˆ',
+  checkboxOff: '[ ]',
+  checkboxOn: '[x]',
+  drive: '=',
+  file: '-',
+  folder: '>',
+  parent: '<',
+  volume: '*',
 } as const;
 
 export const fitSingleLine = (value: string, width: number): string => {
