@@ -242,6 +242,7 @@ The CLI exposes a full recovery workflow:
 | `virtual-volumes restore <backupPath> --force` | Replace an existing volume with rollback protection |
 | `virtual-volumes doctor [volumeId]` | Run consistency checks after restore |
 | `virtual-volumes support-bundle <destinationPath> [volumeId]` | Export doctor data, checksum inventory, runtime metadata, and log snapshot for support |
+| `virtual-volumes inspect-support-bundle <bundlePath>` | Verify support bundle metadata, required files, and checksums |
 
 Recommended flow:
 
@@ -251,6 +252,7 @@ virtual-volumes inspect-backup ./backups/finance.sqlite
 virtual-volumes restore ./backups/finance.sqlite
 virtual-volumes doctor vol_finance_01
 virtual-volumes support-bundle ./reports/finance-support vol_finance_01 --backup-path ./backups/finance.sqlite
+virtual-volumes inspect-support-bundle ./reports/finance-support
 ```
 
 For audit and automation, operational commands also support `--output <path>` to persist a structured JSON artifact with `command`, `cliVersion`, `generatedAt`, and `payload`, while keeping the normal CLI output on stdout.
@@ -278,6 +280,13 @@ Each support bundle includes:
 - optional `backup-inspection.json`
 - optional `backup-artifact.manifest.json` when `--backup-path` points to a manifest-backed backup
 - optional current log snapshot
+
+`inspect-support-bundle` validates:
+
+- required metadata files
+- manifest path consistency
+- checksum inventory structure
+- file size and SHA-256 integrity for the tracked files
 
 ## Node.js API
 
@@ -313,6 +322,7 @@ Useful API methods:
 - `runtime.volumeService.runDoctor(...)`
 - `runtime.volumeService.runRepair(...)`
 - `createSupportBundle(runtime, {...})`
+- `inspectSupportBundle(bundlePath)`
 
 ## Development
 

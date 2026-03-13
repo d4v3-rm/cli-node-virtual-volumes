@@ -304,6 +304,39 @@ export interface SupportBundleChecksumManifest {
   files: SupportBundleFileRecord[];
 }
 
+export interface SupportBundleInspectionIssue {
+  code:
+    | 'CHECKSUM_MISMATCH'
+    | 'FILE_SIZE_MISMATCH'
+    | 'INVALID_BUNDLE_MANIFEST'
+    | 'INVALID_CHECKSUM_MANIFEST'
+    | 'MANIFEST_PATH_MISMATCH'
+    | 'MISSING_BUNDLE_FILE'
+    | 'MISSING_CHECKSUM_RECORD'
+    | 'UNSUPPORTED_BUNDLE_VERSION';
+  severity: 'error' | 'warn';
+  message: string;
+  path?: string;
+  relativePath?: string;
+  role?: SupportBundleFileRole;
+}
+
+export interface SupportBundleInspectionResult {
+  generatedAt: string;
+  healthy: boolean;
+  bundlePath: string;
+  manifestPath: string;
+  checksumsPath: string;
+  bundleVersion: number | null;
+  bundleCliVersion: string | null;
+  bundleCreatedAt: string | null;
+  volumeId: string | null;
+  issueCount: number;
+  expectedFiles: number;
+  verifiedFiles: number;
+  issues: SupportBundleInspectionIssue[];
+}
+
 export interface SupportBundleResult {
   bundleVersion: 1;
   cliVersion: string;

@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import { APP_VERSION } from '../src/config/app-metadata.js';
-import type { SupportBundleResult } from '../src/domain/types.js';
-import { formatSupportBundleResult } from '../src/cli/support-bundle.js';
+import type {
+  SupportBundleInspectionResult,
+  SupportBundleResult,
+} from '../src/domain/types.js';
+import {
+  formatSupportBundleInspectionResult,
+  formatSupportBundleResult,
+} from '../src/cli/support-bundle.js';
 import { formatDateTime } from '../src/utils/formatters.js';
 
 describe('support bundle cli formatter', () => {
@@ -107,5 +113,86 @@ describe('support bundle cli formatter', () => {
       'Backup manifest copy: not included',
     );
     expect(formatSupportBundleResult(result)).toContain('Log snapshot: not included');
+  });
+
+  it('formats healthy support bundle inspections', () => {
+    const result: SupportBundleInspectionResult = {
+      generatedAt: '2026-04-15T21:30:00.000Z',
+      healthy: true,
+      bundlePath: 'C:\\reports\\support-bundle',
+      manifestPath: 'C:\\reports\\support-bundle\\manifest.json',
+      checksumsPath: 'C:\\reports\\support-bundle\\checksums.json',
+      bundleVersion: 1,
+      bundleCliVersion: APP_VERSION,
+      bundleCreatedAt: '2026-04-15T21:20:00.000Z',
+      volumeId: 'volume-1',
+      issueCount: 0,
+      expectedFiles: 5,
+      verifiedFiles: 5,
+      issues: [],
+    };
+
+    expect(formatSupportBundleInspectionResult(result)).toBe(
+      [
+        'Support bundle: HEALTHY',
+        'Bundle path: C:\\reports\\support-bundle',
+        'Manifest: C:\\reports\\support-bundle\\manifest.json',
+        'Checksums: C:\\reports\\support-bundle\\checksums.json',
+        'Bundle version: 1',
+        `Created with: ${APP_VERSION}`,
+        `Bundle created at: ${formatDateTime(result.bundleCreatedAt!)}`,
+        'Scope: volume-1',
+        'Verified files: 5/5',
+        'Issues: 0',
+        `Inspected at: ${formatDateTime(result.generatedAt)}`,
+      ].join('\n'),
+    );
+  });
+
+  it('formats unhealthy support bundle inspections with findings', () => {
+    const result: SupportBundleInspectionResult = {
+      generatedAt: '2026-04-15T21:30:00.000Z',
+      healthy: false,
+      bundlePath: '/tmp/support-bundle',
+      manifestPath: '/tmp/support-bundle/manifest.json',
+      checksumsPath: '/tmp/support-bundle/checksums.json',
+      bundleVersion: null,
+      bundleCliVersion: null,
+      bundleCreatedAt: null,
+      volumeId: null,
+      issueCount: 2,
+      expectedFiles: 4,
+      verifiedFiles: 3,
+      issues: [
+        {
+          code: 'MISSING_BUNDLE_FILE',
+          severity: 'error',
+          message: 'Support bundle file is missing: doctor-report.json.',
+          relativePath: 'doctor-report.json',
+        },
+        {
+          code: 'CHECKSUM_MISMATCH',
+          severity: 'error',
+          message: 'Support bundle checksum does not match inventory for manifest.json.',
+          relativePath: 'manifest.json',
+        },
+      ],
+    };
+
+    expect(formatSupportBundleInspectionResult(result)).toContain(
+      'Support bundle: UNHEALTHY',
+    );
+    expect(formatSupportBundleInspectionResult(result)).toContain(
+      'Created with: unknown',
+    );
+    expect(formatSupportBundleInspectionResult(result)).toContain(
+      'Bundle created at: unknown',
+    );
+    expect(formatSupportBundleInspectionResult(result)).toContain(
+      '- [MISSING_BUNDLE_FILE] Support bundle file is missing: doctor-report.json.',
+    );
+    expect(formatSupportBundleInspectionResult(result)).toContain(
+      '- [CHECKSUM_MISMATCH] Support bundle checksum does not match inventory for manifest.json.',
+    );
   });
 });

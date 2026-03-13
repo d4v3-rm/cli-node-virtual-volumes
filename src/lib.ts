@@ -4,7 +4,7 @@ export type { AppRuntime } from './bootstrap/create-runtime.js';
 export { loadAppConfig } from './config/env.js';
 export type { AppConfig, RuntimeOverrides } from './config/env.js';
 export { VolumeError, isVolumeError } from './domain/errors.js';
-export { createSupportBundle } from './ops/support-bundle.js';
+export { createSupportBundle, inspectSupportBundle } from './ops/support-bundle.js';
 export type {
   CreateSupportBundleInput,
   CreateVolumeInput,
@@ -30,6 +30,8 @@ export type {
   SupportBundleEnvironmentSnapshot,
   SupportBundleFileRecord,
   SupportBundleFileRole,
+  SupportBundleInspectionIssue,
+  SupportBundleInspectionResult,
   SupportBundleResult,
   VolumeBackupResult,
   VolumeManifest,

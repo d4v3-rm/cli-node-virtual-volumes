@@ -7,10 +7,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createRuntime } from '../src/bootstrap/create-runtime.js';
 import { APP_VERSION } from '../src/config/app-metadata.js';
 import { resolveAppLogFilePath } from '../src/logging/logger.js';
-import { createSupportBundle } from '../src/ops/support-bundle.js';
+import { createSupportBundle, inspectSupportBundle } from '../src/ops/support-bundle.js';
 import type {
   SupportBundleChecksumManifest,
   SupportBundleFileRecord,
+  SupportBundleInspectionIssue,
 } from '../src/domain/types.js';
 
 const sandboxes: string[] = [];
@@ -192,5 +193,72 @@ describe('support bundle', () => {
     await expect(fs.access(result.manifestPath)).resolves.toBeUndefined();
     await expect(fs.access(result.checksumsPath)).resolves.toBeUndefined();
     expect(result.bundlePath).toBe(path.resolve(bundlePath));
+  });
+
+  it('inspects healthy support bundles and verifies their inventory', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Inspect Bundle' });
+    const bundlePath = path.join(runtime.config.dataDir, '..', 'inspected-support-bundle');
+    const backupPath = path.join(runtime.config.dataDir, '..', 'inspected.sqlite');
+    const currentLogPath = resolveAppLogFilePath(runtime.config);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/hello.txt', 'inspect me');
+    await runtime.volumeService.backupVolume(volume.id, backupPath);
+    await fs.mkdir(path.dirname(currentLogPath), { recursive: true });
+    await fs.writeFile(currentLogPath, 'inspect support bundle log\n', 'utf8');
+
+    await createSupportBundle(runtime, {
+      destinationPath: bundlePath,
+      volumeId: volume.id,
+      backupPath,
+    });
+
+    const inspection = await inspectSupportBundle(bundlePath);
+
+    expect(inspection).toMatchObject({
+      healthy: true,
+      bundlePath: path.resolve(bundlePath),
+      manifestPath: path.join(path.resolve(bundlePath), 'manifest.json'),
+      checksumsPath: path.join(path.resolve(bundlePath), 'checksums.json'),
+      bundleVersion: 1,
+      bundleCliVersion: APP_VERSION,
+      volumeId: volume.id,
+      issueCount: 0,
+      expectedFiles: 5,
+      verifiedFiles: 5,
+      issues: [],
+    });
+    expect(Date.parse(inspection.bundleCreatedAt ?? '')).not.toBeNaN();
+    expect(Date.parse(inspection.generatedAt)).not.toBeNaN();
+  });
+
+  it('reports checksum mismatches and missing files when a support bundle is tampered with', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Tampered Bundle' });
+    const bundlePath = path.join(runtime.config.dataDir, '..', 'tampered-support-bundle');
+    const currentLogPath = resolveAppLogFilePath(runtime.config);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/hello.txt', 'tamper target');
+    await fs.mkdir(path.dirname(currentLogPath), { recursive: true });
+    await fs.writeFile(currentLogPath, 'tampered support bundle log\n', 'utf8');
+
+    const bundle = await createSupportBundle(runtime, {
+      destinationPath: bundlePath,
+      volumeId: volume.id,
+    });
+
+    await fs.appendFile(bundle.doctorReportPath, '\ncorrupted', 'utf8');
+    await fs.rm(bundle.logSnapshotPath!, { force: true });
+
+    const inspection = await inspectSupportBundle(bundlePath);
+    const issueCodes = inspection.issues.map(
+      (issue: SupportBundleInspectionIssue) => issue.code,
+    );
+
+    expect(inspection.healthy).toBe(false);
+    expect(inspection.expectedFiles).toBe(3);
+    expect(inspection.verifiedFiles).toBe(2);
+    expect(issueCodes).toContain('CHECKSUM_MISMATCH');
+    expect(issueCodes).toContain('MISSING_BUNDLE_FILE');
   });
 });

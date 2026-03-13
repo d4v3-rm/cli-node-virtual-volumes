@@ -123,6 +123,14 @@ try {
   const logDir = path.join(runtimeRoot, 'logs');
   const doctorArtifactPath = path.join(runtimeRoot, 'doctor-report.json');
   const supportBundlePath = path.join(runtimeRoot, 'support-bundle');
+  const supportBundleSummaryPath = path.join(
+    runtimeRoot,
+    'support-bundle-summary.json',
+  );
+  const supportBundleInspectionArtifactPath = path.join(
+    runtimeRoot,
+    'support-bundle-inspection.json',
+  );
 
   await fs.mkdir(consumerRoot, { recursive: true });
 
@@ -231,10 +239,13 @@ try {
       supportBundlePath,
       volumeId,
       '--json',
+      '--output',
+      supportBundleSummaryPath,
     ],
     { cwd: consumerRoot },
   );
   const supportBundlePayload = JSON.parse(supportBundleRun.stdout);
+  const supportBundleArtifact = await readJson(supportBundleSummaryPath);
   const supportBundleManifest = await readJson(
     path.join(supportBundlePath, 'manifest.json'),
   );
@@ -243,6 +254,14 @@ try {
   assert(
     supportBundlePayload.bundlePath === path.resolve(supportBundlePath),
     'Installed CLI support-bundle command should point to the generated bundle path.',
+  );
+  assert(
+    supportBundleArtifact.command === 'support-bundle',
+    'Installed CLI support-bundle artifact should include the command metadata.',
+  );
+  assert(
+    supportBundleArtifact.payload.bundlePath === path.resolve(supportBundlePath),
+    'Installed CLI support-bundle artifact should include the bundle path.',
   );
   assert(
     supportBundleManifest.doctorReportPath ===
@@ -263,8 +282,38 @@ try {
     'Installed CLI support bundle should include checksum records.',
   );
 
+  const supportBundleInspectRun = runCommand(
+    process.execPath,
+    [
+      installedCliPath,
+      'inspect-support-bundle',
+      supportBundlePath,
+      '--json',
+      '--output',
+      supportBundleInspectionArtifactPath,
+    ],
+    { cwd: consumerRoot },
+  );
+  const supportBundleInspection = JSON.parse(supportBundleInspectRun.stdout);
+  const supportBundleInspectionArtifact = await readJson(
+    supportBundleInspectionArtifactPath,
+  );
+
+  assert(
+    supportBundleInspection.healthy === true,
+    'Installed CLI inspect-support-bundle command should report a healthy bundle.',
+  );
+  assert(
+    supportBundleInspectionArtifact.command === 'inspect-support-bundle',
+    'Installed CLI support-bundle inspection artifact should include the command metadata.',
+  );
+  assert(
+    supportBundleInspectionArtifact.payload.verifiedFiles >= 2,
+    'Installed CLI support-bundle inspection artifact should report verified files.',
+  );
+
   process.stdout.write(
-    `[package-smoke] installed ${path.basename(tarballPath)} and verified package import + CLI doctor + support bundle flows\n`,
+    `[package-smoke] installed ${path.basename(tarballPath)} and verified package import + CLI doctor + support bundle + support bundle inspection flows\n`,
   );
 } catch (error) {
   const message =

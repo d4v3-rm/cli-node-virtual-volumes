@@ -267,6 +267,10 @@ try {
   await fs.writeFile(currentLogPath, 'ops smoke log\n', { flag: 'a' });
 
   const supportBundlePath = path.join(sandboxRoot, 'support-bundle');
+  const supportBundleSummaryPath = path.join(
+    reportsDir,
+    'support-bundle-summary.json',
+  );
   const supportBundleRun = runCli(
     [
       'support-bundle',
@@ -275,6 +279,8 @@ try {
       '--backup-path',
       backupPath,
       '--json',
+      '--output',
+      supportBundleSummaryPath,
     ],
     runtimePaths,
   );
@@ -282,10 +288,21 @@ try {
   const supportBundleManifest = await readJson(
     path.join(supportBundlePath, 'manifest.json'),
   );
+  const supportBundleArtifact = await readJson(supportBundleSummaryPath);
 
   assert(
     supportBundleResult.bundlePath === path.resolve(supportBundlePath),
     'Support bundle stdout should point to the generated bundle path.',
+  );
+  assertArtifactEnvelope(
+    supportBundleArtifact,
+    'support-bundle',
+    packageJson.version,
+  );
+  assert(
+    supportBundleArtifact.payload.checksumsPath ===
+      path.join(path.resolve(supportBundlePath), 'checksums.json'),
+    'Support bundle artifact should include the checksum inventory path.',
   );
   assert(
     supportBundleManifest.doctorReportPath ===
@@ -342,8 +359,41 @@ try {
     'Support bundle checksum inventory should include the generated bundle files.',
   );
 
+  const supportBundleInspectionPath = path.join(
+    reportsDir,
+    'support-bundle-inspection.json',
+  );
+  const supportBundleInspectRun = runCli(
+    [
+      'inspect-support-bundle',
+      supportBundlePath,
+      '--json',
+      '--output',
+      supportBundleInspectionPath,
+    ],
+    runtimePaths,
+  );
+  const supportBundleInspection = JSON.parse(supportBundleInspectRun.stdout);
+  const supportBundleInspectionArtifact = await readJson(
+    supportBundleInspectionPath,
+  );
+
+  assert(
+    supportBundleInspection.healthy === true,
+    'Support bundle inspection should report a healthy bundle.',
+  );
+  assertArtifactEnvelope(
+    supportBundleInspectionArtifact,
+    'inspect-support-bundle',
+    packageJson.version,
+  );
+  assert(
+    supportBundleInspectionArtifact.payload.verifiedFiles >= 5,
+    'Support bundle inspection artifact should report verified bundle files.',
+  );
+
   process.stdout.write(
-    `[ops-smoke] verified backup, inspect, restore, doctor, and support bundle flows for ${volume.id}\n`,
+    `[ops-smoke] verified backup, inspect, restore, doctor, support bundle, and support bundle inspection flows for ${volume.id}\n`,
   );
 } catch (error) {
   const message = error instanceof Error ? error.message : 'Unknown smoke failure.';

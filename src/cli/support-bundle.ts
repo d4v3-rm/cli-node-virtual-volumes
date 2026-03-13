@@ -1,4 +1,7 @@
-import type { SupportBundleResult } from '../domain/types.js';
+import type {
+  SupportBundleInspectionResult,
+  SupportBundleResult,
+} from '../domain/types.js';
 import { formatDateTime } from '../utils/formatters.js';
 
 export const formatSupportBundleResult = (
@@ -23,6 +26,35 @@ export const formatSupportBundleResult = (
 
   if (result.backupPath) {
     lines.splice(7, 0, `Backup path: ${result.backupPath}`);
+  }
+
+  return lines.join('\n');
+};
+
+export const formatSupportBundleInspectionResult = (
+  result: SupportBundleInspectionResult,
+): string => {
+  const lines = [
+    `Support bundle: ${result.healthy ? 'HEALTHY' : 'UNHEALTHY'}`,
+    `Bundle path: ${result.bundlePath}`,
+    `Manifest: ${result.manifestPath}`,
+    `Checksums: ${result.checksumsPath}`,
+    `Bundle version: ${result.bundleVersion ?? 'unknown'}`,
+    `Created with: ${result.bundleCliVersion ?? 'unknown'}`,
+    `Bundle created at: ${
+      result.bundleCreatedAt ? formatDateTime(result.bundleCreatedAt) : 'unknown'
+    }`,
+    `Scope: ${result.volumeId ?? 'all volumes'}`,
+    `Verified files: ${result.verifiedFiles}/${result.expectedFiles}`,
+    `Issues: ${result.issueCount}`,
+    `Inspected at: ${formatDateTime(result.generatedAt)}`,
+  ];
+
+  if (result.issues.length > 0) {
+    lines.push('Findings:');
+    lines.push(
+      ...result.issues.map((issue) => `- [${issue.code}] ${issue.message}`),
+    );
   }
 
   return lines.join('\n');
