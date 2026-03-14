@@ -172,6 +172,7 @@ export interface CreateSupportBundleInput {
 }
 
 export type SupportBundleFileRole =
+  | 'audit-log-snapshot'
   | 'backup-inspection'
   | 'backup-manifest'
   | 'doctor-report'
@@ -272,6 +273,8 @@ export interface StorageRepairReport {
 }
 
 export interface SupportBundleConfigSnapshot {
+  auditLogDir: string;
+  auditLogLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
   dataDir: string;
   hostAllowPaths: string[];
   hostDenyPaths: string[];
@@ -355,6 +358,7 @@ export interface SupportBundleResult {
   backupInspectionReportPath: string | null;
   backupManifestCopyPath: string | null;
   checksumsPath: string;
+  auditLogSnapshotPath: string | null;
   logSnapshotPath: string | null;
   config: SupportBundleConfigSnapshot;
   environment: SupportBundleEnvironmentSnapshot;

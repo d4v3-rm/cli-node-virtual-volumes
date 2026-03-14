@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { createRuntime } from '../src/bootstrap/create-runtime.js';
 import { APP_VERSION } from '../src/config/app-metadata.js';
-import { resolveAppLogFilePath } from '../src/logging/logger.js';
+import { resolveAppLogFilePath, resolveAuditLogFilePath } from '../src/logging/logger.js';
 import { createSupportBundle, inspectSupportBundle } from '../src/ops/support-bundle.js';
 import type {
   SupportBundleChecksumManifest,
@@ -54,6 +54,7 @@ describe('support bundle', () => {
     await runtime.volumeService.writeTextFile(volume.id, '/hello.txt', 'support bundle');
     const backupResult = await runtime.volumeService.backupVolume(volume.id, backupPath);
     const currentLogPath = resolveAppLogFilePath(runtime.config);
+    const currentAuditLogPath = resolveAuditLogFilePath(runtime.config);
 
     await fs.mkdir(path.dirname(currentLogPath), { recursive: true });
     await fs.writeFile(currentLogPath, 'support bundle log\n', 'utf8');
@@ -103,7 +104,11 @@ describe('support bundle', () => {
     expect(result.checksumsPath).toBe(
       path.join(path.resolve(bundlePath), 'checksums.json'),
     );
+    expect(result.auditLogSnapshotPath).not.toBeNull();
     expect(result.logSnapshotPath).not.toBeNull();
+    expect(await fs.readFile(result.auditLogSnapshotPath!, 'utf8')).toContain(
+      '"eventType":"volume.create"',
+    );
     expect(await fs.readFile(result.logSnapshotPath!, 'utf8')).toContain(
       'support bundle log',
     );
@@ -124,7 +129,7 @@ describe('support bundle', () => {
       checksumSha256: backupResult.checksumSha256,
     });
     expect(checksumManifest.bundlePath).toBe(path.resolve(bundlePath));
-    expect(checksumManifest.files).toHaveLength(5);
+    expect(checksumManifest.files).toHaveLength(6);
     const manifestRecord = findBundleFileRecord(checksumManifest.files, 'manifest');
     const doctorRecord = findBundleFileRecord(checksumManifest.files, 'doctor-report');
     const inspectionRecord = findBundleFileRecord(
@@ -134,6 +139,10 @@ describe('support bundle', () => {
     const backupManifestRecord = findBundleFileRecord(
       checksumManifest.files,
       'backup-manifest',
+    );
+    const auditLogRecord = findBundleFileRecord(
+      checksumManifest.files,
+      'audit-log-snapshot',
     );
     const logRecord = findBundleFileRecord(checksumManifest.files, 'log-snapshot');
 
@@ -153,6 +162,14 @@ describe('support bundle', () => {
       relativePath: 'backup-artifact.manifest.json',
     });
     expect(backupManifestRecord?.checksumSha256).toMatch(/^[0-9a-f]{64}$/u);
+    expect(auditLogRecord).toMatchObject({
+      relativePath: path.join(
+        'audit',
+        path.basename(resolveAuditLogFilePath(runtime.config)),
+      ),
+      sourcePath: currentAuditLogPath,
+    });
+    expect(auditLogRecord?.checksumSha256).toMatch(/^[0-9a-f]{64}$/u);
     expect(logRecord).toMatchObject({
       relativePath: path.join(
         'logs',
@@ -224,8 +241,8 @@ describe('support bundle', () => {
       bundleCliVersion: APP_VERSION,
       volumeId: volume.id,
       issueCount: 0,
-      expectedFiles: 5,
-      verifiedFiles: 5,
+      expectedFiles: 6,
+      verifiedFiles: 6,
       issues: [],
     });
     expect(Date.parse(inspection.bundleCreatedAt ?? '')).not.toBeNaN();
@@ -248,7 +265,7 @@ describe('support bundle', () => {
     });
 
     await fs.appendFile(bundle.doctorReportPath, '\ncorrupted', 'utf8');
-    await fs.rm(bundle.logSnapshotPath!, { force: true });
+    await fs.rm(bundle.auditLogSnapshotPath!, { force: true });
 
     const inspection = await inspectSupportBundle(bundlePath);
     const issueCodes = inspection.issues.map(
@@ -256,8 +273,8 @@ describe('support bundle', () => {
     );
 
     expect(inspection.healthy).toBe(false);
-    expect(inspection.expectedFiles).toBe(3);
-    expect(inspection.verifiedFiles).toBe(2);
+    expect(inspection.expectedFiles).toBe(4);
+    expect(inspection.verifiedFiles).toBe(3);
     expect(issueCodes).toContain('CHECKSUM_MISMATCH');
     expect(issueCodes).toContain('MISSING_BUNDLE_FILE');
   });

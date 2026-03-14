@@ -274,11 +274,24 @@ try {
     'Installed CLI support bundle should include a checksum manifest path.',
   );
   assert(
+    supportBundleManifest.auditLogSnapshotPath ===
+      path.join(
+        path.resolve(supportBundlePath),
+        'audit',
+        `cli-node-virtual-volumes-audit-${new Date().toISOString().slice(0, 10)}.log`,
+      ),
+    'Installed CLI support bundle should include an audit log snapshot path.',
+  );
+  assert(
+    await pathExists(supportBundleManifest.auditLogSnapshotPath),
+    'Installed CLI support bundle should include a copied audit log snapshot.',
+  );
+  assert(
     supportBundleManifest.backupManifestCopyPath === null,
     'Installed CLI support bundle should not include a backup manifest copy without a backup path.',
   );
   assert(
-    Array.isArray(checksumManifest.files) && checksumManifest.files.length >= 2,
+    Array.isArray(checksumManifest.files) && checksumManifest.files.length >= 3,
     'Installed CLI support bundle should include checksum records.',
   );
 
@@ -308,7 +321,7 @@ try {
     'Installed CLI support-bundle inspection artifact should include the command metadata.',
   );
   assert(
-    supportBundleInspectionArtifact.payload.verifiedFiles >= 2,
+    supportBundleInspectionArtifact.payload.verifiedFiles >= 3,
     'Installed CLI support-bundle inspection artifact should report verified files.',
   );
 

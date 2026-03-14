@@ -62,6 +62,11 @@ const pathListStringToValue = (value: unknown): unknown => {
 
 const envSchema = z.object({
   VOLUME_DATA_DIR: z.preprocess(emptyStringToUndefined, z.string().optional()),
+  VOLUME_AUDIT_LOG_DIR: z.preprocess(emptyStringToUndefined, z.string().optional()),
+  VOLUME_AUDIT_LOG_LEVEL: z.preprocess(
+    emptyStringToUndefined,
+    z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
+  ),
   VOLUME_HOST_ALLOW_PATHS: z.preprocess(
     pathListStringToValue,
     z.array(z.string()).default([]),
@@ -90,6 +95,8 @@ const envSchema = z.object({
 });
 
 export interface RuntimeOverrides {
+  auditLogDir?: string;
+  auditLogLevel?: AppConfig['auditLogLevel'];
   dataDir?: string;
   hostAllowPaths?: string[];
   hostDenyPaths?: string[];
@@ -99,6 +106,8 @@ export interface RuntimeOverrides {
 }
 
 export interface AppConfig {
+  auditLogDir: string;
+  auditLogLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
   dataDir: string;
   hostAllowPaths: string[];
   hostDenyPaths: string[];
@@ -121,6 +130,9 @@ export const loadAppConfig = (
 
   const parsed = envSchema.parse({
     ...inputEnvironment,
+    VOLUME_AUDIT_LOG_DIR: overrides.auditLogDir ?? inputEnvironment.VOLUME_AUDIT_LOG_DIR,
+    VOLUME_AUDIT_LOG_LEVEL:
+      overrides.auditLogLevel ?? inputEnvironment.VOLUME_AUDIT_LOG_LEVEL,
     VOLUME_DATA_DIR: overrides.dataDir ?? inputEnvironment.VOLUME_DATA_DIR,
     VOLUME_HOST_ALLOW_PATHS:
       overrides.hostAllowPaths ?? inputEnvironment.VOLUME_HOST_ALLOW_PATHS,
@@ -140,8 +152,11 @@ export const loadAppConfig = (
     new Set(parsed.VOLUME_HOST_DENY_PATHS.map((entry) => path.resolve(entry))),
   );
   const logDir = path.resolve(parsed.VOLUME_LOG_DIR ?? path.join(dataDir, 'logs'));
+  const auditLogDir = path.resolve(parsed.VOLUME_AUDIT_LOG_DIR ?? path.join(logDir, 'audit'));
 
   return {
+    auditLogDir,
+    auditLogLevel: parsed.VOLUME_AUDIT_LOG_LEVEL,
     dataDir,
     hostAllowPaths,
     hostDenyPaths,

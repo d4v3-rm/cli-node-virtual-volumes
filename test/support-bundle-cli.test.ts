@@ -31,8 +31,11 @@ describe('support bundle cli formatter', () => {
         'C:\\reports\\support-bundle\\backup-inspection.json',
       backupManifestCopyPath:
         'C:\\reports\\support-bundle\\backup-artifact.manifest.json',
+      auditLogSnapshotPath: 'C:\\reports\\support-bundle\\audit\\audit.log',
       logSnapshotPath: 'C:\\reports\\support-bundle\\logs\\app.log',
       config: {
+        auditLogDir: 'C:\\audit',
+        auditLogLevel: 'info',
         dataDir: 'C:\\data',
         hostAllowPaths: ['C:\\allowed'],
         hostDenyPaths: ['C:\\allowed\\blocked'],
@@ -64,6 +67,7 @@ describe('support bundle cli formatter', () => {
         'Doctor report: C:\\reports\\support-bundle\\doctor-report.json',
         'Backup inspection: C:\\reports\\support-bundle\\backup-inspection.json',
         'Backup manifest copy: C:\\reports\\support-bundle\\backup-artifact.manifest.json',
+        'Audit log snapshot: C:\\reports\\support-bundle\\audit\\audit.log',
         'Log snapshot: C:\\reports\\support-bundle\\logs\\app.log',
         `CLI version: ${APP_VERSION}`,
         'Supported schema: 3',
@@ -89,8 +93,11 @@ describe('support bundle cli formatter', () => {
       doctorReportPath: '/tmp/support-bundle/doctor-report.json',
       backupInspectionReportPath: null,
       backupManifestCopyPath: null,
+      auditLogSnapshotPath: null,
       logSnapshotPath: null,
       config: {
+        auditLogDir: '/tmp/audit',
+        auditLogLevel: 'info',
         dataDir: '/tmp/data',
         hostAllowPaths: [],
         hostDenyPaths: [],
@@ -115,6 +122,9 @@ describe('support bundle cli formatter', () => {
     );
     expect(formatSupportBundleResult(result)).toContain(
       'Backup manifest copy: not included',
+    );
+    expect(formatSupportBundleResult(result)).toContain(
+      'Audit log snapshot: not included',
     );
     expect(formatSupportBundleResult(result)).toContain('Log snapshot: not included');
   });
