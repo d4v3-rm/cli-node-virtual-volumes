@@ -273,6 +273,8 @@ export interface StorageRepairReport {
 
 export interface SupportBundleConfigSnapshot {
   dataDir: string;
+  hostAllowPaths: string[];
+  hostDenyPaths: string[];
   logDir: string;
   logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
   logToStdout: boolean;

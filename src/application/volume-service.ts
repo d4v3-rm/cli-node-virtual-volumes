@@ -45,6 +45,8 @@ import {
 
 interface ServiceConfig {
   defaultQuotaBytes: AppConfig['defaultQuotaBytes'];
+  hostAllowPaths: AppConfig['hostAllowPaths'];
+  hostDenyPaths: AppConfig['hostDenyPaths'];
   previewBytes: AppConfig['previewBytes'];
 }
 
@@ -220,6 +222,7 @@ export class VolumeService {
 
         for (const rawHostPath of input.hostPaths) {
           const absoluteHostPath = path.resolve(rawHostPath);
+          this.assertHostPathAllowed(absoluteHostPath, 'import');
           await this.importHostPath(
             database,
             record,
@@ -249,6 +252,8 @@ export class VolumeService {
     const record = await this.repository.loadVolume(volumeId);
     const normalizedSourcePath = normalizeVirtualPath(input.sourcePath);
     const destinationHostDirectory = path.resolve(input.destinationHostDirectory);
+
+    this.assertHostPathAllowed(destinationHostDirectory, 'export');
     const destinationStats = await fs.stat(destinationHostDirectory).catch(() => null);
 
     if (destinationStats && !destinationStats.isDirectory()) {
@@ -541,6 +546,7 @@ export class VolumeService {
     summary: ImportSummary,
     traversalContext: ImportTraversalContext,
   ): Promise<void> {
+    this.assertHostPathAllowed(absoluteHostPath, 'import');
     const hostEntryStats = await fs.lstat(absoluteHostPath);
 
     if (hostEntryStats.isSymbolicLink()) {
@@ -1206,5 +1212,59 @@ export class VolumeService {
     }
 
     return suspiciousBytes / buffer.byteLength < 0.2;
+  }
+
+  private assertHostPathAllowed(
+    absoluteHostPath: string,
+    operation: 'export' | 'import',
+  ): void {
+    const normalizedPath = this.normalizeHostPolicyPath(absoluteHostPath);
+
+    const blockedRoot = this.config.hostDenyPaths.find((rootPath) =>
+      this.isPathWithinHostRoot(normalizedPath, rootPath),
+    );
+    if (blockedRoot) {
+      throw new VolumeError(
+        'INVALID_OPERATION',
+        `${operation === 'import' ? 'Import' : 'Export'} path is blocked by configured host denylist: ${absoluteHostPath}`,
+        {
+          deniedRoot: blockedRoot,
+          hostPath: absoluteHostPath,
+          operation,
+        },
+      );
+    }
+
+    if (
+      this.config.hostAllowPaths.length > 0 &&
+      !this.config.hostAllowPaths.some((rootPath) =>
+        this.isPathWithinHostRoot(normalizedPath, rootPath),
+      )
+    ) {
+      throw new VolumeError(
+        'INVALID_OPERATION',
+        `${operation === 'import' ? 'Import' : 'Export'} path is outside the configured host allowlist: ${absoluteHostPath}`,
+        {
+          allowedRoots: [...this.config.hostAllowPaths],
+          hostPath: absoluteHostPath,
+          operation,
+        },
+      );
+    }
+  }
+
+  private isPathWithinHostRoot(targetPath: string, rootPath: string): boolean {
+    const normalizedRoot = this.normalizeHostPolicyPath(rootPath);
+    const relativePath = path.relative(normalizedRoot, targetPath);
+
+    return (
+      relativePath.length === 0 ||
+      (!relativePath.startsWith('..') && !path.isAbsolute(relativePath))
+    );
+  }
+
+  private normalizeHostPolicyPath(targetPath: string): string {
+    const resolvedPath = path.resolve(targetPath);
+    return process.platform === 'win32' ? resolvedPath.toLowerCase() : resolvedPath;
   }
 }

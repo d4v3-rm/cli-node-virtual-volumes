@@ -112,6 +112,10 @@ const isSupportBundleResult = (value: unknown): value is SupportBundleResult => 
     typeof value.checksumsPath === 'string' &&
     isStringOrNull(value.logSnapshotPath) &&
     typeof value.config.dataDir === 'string' &&
+    Array.isArray(value.config.hostAllowPaths) &&
+    value.config.hostAllowPaths.every((entry) => typeof entry === 'string') &&
+    Array.isArray(value.config.hostDenyPaths) &&
+    value.config.hostDenyPaths.every((entry) => typeof entry === 'string') &&
     typeof value.config.logDir === 'string' &&
     typeof value.config.logLevel === 'string' &&
     typeof value.config.logToStdout === 'boolean' &&
@@ -311,6 +315,8 @@ export const createSupportBundle = async (
       logSnapshotPath,
       config: {
         dataDir: runtime.config.dataDir,
+        hostAllowPaths: [...runtime.config.hostAllowPaths],
+        hostDenyPaths: [...runtime.config.hostDenyPaths],
         logDir: runtime.config.logDir,
         logLevel: runtime.config.logLevel,
         logToStdout: runtime.config.logToStdout,

@@ -34,6 +34,8 @@ describe('support bundle cli formatter', () => {
       logSnapshotPath: 'C:\\reports\\support-bundle\\logs\\app.log',
       config: {
         dataDir: 'C:\\data',
+        hostAllowPaths: ['C:\\allowed'],
+        hostDenyPaths: ['C:\\allowed\\blocked'],
         logDir: 'C:\\logs',
         logLevel: 'info',
         logToStdout: false,
@@ -90,6 +92,8 @@ describe('support bundle cli formatter', () => {
       logSnapshotPath: null,
       config: {
         dataDir: '/tmp/data',
+        hostAllowPaths: [],
+        hostDenyPaths: [],
         logDir: '/tmp/logs',
         logLevel: 'silent',
         logToStdout: false,
