@@ -97,6 +97,7 @@ const envSchema = z.object({
 export interface RuntimeOverrides {
   auditLogDir?: string;
   auditLogLevel?: AppConfig['auditLogLevel'];
+  correlationId?: string;
   dataDir?: string;
   hostAllowPaths?: string[];
   hostDenyPaths?: string[];

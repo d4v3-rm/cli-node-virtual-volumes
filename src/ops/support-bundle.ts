@@ -98,6 +98,7 @@ const isSupportBundleResult = (value: unknown): value is SupportBundleResult => 
   return (
     value.bundleVersion === SUPPORT_BUNDLE_VERSION &&
     typeof value.cliVersion === 'string' &&
+    typeof value.correlationId === 'string' &&
     typeof value.generatedAt === 'string' &&
     isNonNegativeNumber(value.supportedVolumeSchemaVersion) &&
     isStringOrNull(value.volumeId) &&
@@ -324,6 +325,7 @@ export const createSupportBundle = async (
     const result: SupportBundleResult = {
       bundleVersion: SUPPORT_BUNDLE_VERSION,
       cliVersion: APP_VERSION,
+      correlationId: runtime.correlationId,
       generatedAt,
       supportedVolumeSchemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
       volumeId: input.volumeId ?? null,
@@ -689,6 +691,7 @@ export const inspectSupportBundle = async (
     checksumsPath,
     bundleVersion: manifest?.bundleVersion ?? checksumManifest?.bundleVersion ?? null,
     bundleCliVersion: manifest?.cliVersion ?? null,
+    bundleCorrelationId: manifest?.correlationId ?? null,
     bundleCreatedAt: manifest?.generatedAt ?? checksumManifest?.generatedAt ?? null,
     volumeId: manifest?.volumeId ?? null,
     issueCount: issues.length,

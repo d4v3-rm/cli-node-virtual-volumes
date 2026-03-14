@@ -12,6 +12,7 @@ export const formatSupportBundleResult = (
     `Bundle path: ${result.bundlePath}`,
     `Manifest: ${result.manifestPath}`,
     `Checksums: ${result.checksumsPath}`,
+    `Correlation ID: ${result.correlationId}`,
     `Scope: ${result.volumeId ?? 'all volumes'}`,
     `Volumes checked: ${result.checkedVolumes}`,
     `Issues detected: ${result.issueCount}`,
@@ -26,7 +27,7 @@ export const formatSupportBundleResult = (
   ];
 
   if (result.backupPath) {
-    lines.splice(7, 0, `Backup path: ${result.backupPath}`);
+    lines.splice(8, 0, `Backup path: ${result.backupPath}`);
   }
 
   return lines.join('\n');
@@ -42,6 +43,7 @@ export const formatSupportBundleInspectionResult = (
     `Checksums: ${result.checksumsPath}`,
     `Bundle version: ${result.bundleVersion ?? 'unknown'}`,
     `Created with: ${result.bundleCliVersion ?? 'unknown'}`,
+    `Bundle correlation ID: ${result.bundleCorrelationId ?? 'unknown'}`,
     `Bundle created at: ${
       result.bundleCreatedAt ? formatDateTime(result.bundleCreatedAt) : 'unknown'
     }`,

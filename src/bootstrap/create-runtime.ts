@@ -5,10 +5,12 @@ import type { AppConfig, RuntimeOverrides } from '../config/env.js';
 import { loadAppConfig } from '../config/env.js';
 import { createAppLogger, createAuditLogger } from '../logging/logger.js';
 import { VolumeRepository } from '../storage/volume-repository.js';
+import { createCorrelationId } from '../utils/correlation.js';
 
 export interface AppRuntime {
   auditLogger: Logger;
   config: AppConfig;
+  correlationId: string;
   logger: Logger;
   volumeService: VolumeService;
 }
@@ -17,8 +19,12 @@ export const createRuntime = async (
   overrides: RuntimeOverrides = {},
 ): Promise<AppRuntime> => {
   const config = loadAppConfig(overrides);
-  const logger = createAppLogger(config);
-  const auditLogger = createAuditLogger(config);
+  const correlationId =
+    overrides.correlationId?.trim().length
+      ? overrides.correlationId.trim()
+      : createCorrelationId();
+  const logger = createAppLogger(config, { correlationId });
+  const auditLogger = createAuditLogger(config, { correlationId });
   const repository = new VolumeRepository(config, logger.child({ scope: 'repository' }));
 
   await repository.initialize();
@@ -38,6 +44,7 @@ export const createRuntime = async (
   return {
     auditLogger,
     config,
+    correlationId,
     logger,
     volumeService,
   };

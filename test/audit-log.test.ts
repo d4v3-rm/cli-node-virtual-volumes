@@ -5,11 +5,13 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createRuntime } from '../src/bootstrap/create-runtime.js';
-import { resolveAuditLogFilePath } from '../src/logging/logger.js';
+import { resolveAppLogFilePath, resolveAuditLogFilePath } from '../src/logging/logger.js';
 
 const sandboxes: string[] = [];
 
-const createIsolatedRuntime = async () => {
+const createIsolatedRuntime = async (
+  overrides: Parameters<typeof createRuntime>[0] = {},
+) => {
   const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cli-node-virtual-volumes-audit-'));
   sandboxes.push(sandboxRoot);
 
@@ -19,11 +21,12 @@ const createIsolatedRuntime = async () => {
     logLevel: 'silent',
     auditLogLevel: 'info',
     logToStdout: false,
+    ...overrides,
   });
 };
 
-const readAuditEntries = async (auditLogPath: string): Promise<Record<string, unknown>[]> => {
-  const raw = await fs.readFile(auditLogPath, 'utf8');
+const readJsonLogEntries = async (logPath: string): Promise<Record<string, unknown>[]> => {
+  const raw = await fs.readFile(logPath, 'utf8');
 
   return raw
     .split(/\r?\n/u)
@@ -71,7 +74,7 @@ describe('audit log', () => {
     await runtime.volumeService.deleteVolume(volume.id);
 
     const auditLogPath = resolveAuditLogFilePath(runtime.config);
-    const entries = await readAuditEntries(auditLogPath);
+    const entries = await readJsonLogEntries(auditLogPath);
     const successEventTypes = entries
       .filter((entry) => entry.outcome === 'success')
       .map((entry) => entry.eventType);
@@ -99,6 +102,33 @@ describe('audit log', () => {
     ).toBe(true);
   });
 
+  it('uses the same correlation id across application and audit logs', async () => {
+    const correlationId = 'corr_test-runtime';
+    const runtime = await createIsolatedRuntime({
+      logLevel: 'info',
+      auditLogLevel: 'info',
+      correlationId,
+      logToStdout: false,
+    });
+
+    await runtime.volumeService.createVolume({ name: 'Correlation Trace' });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const appEntries = await readJsonLogEntries(resolveAppLogFilePath(runtime.config));
+    const auditEntries = await readJsonLogEntries(resolveAuditLogFilePath(runtime.config));
+
+    expect(appEntries.some((entry) => entry.correlationId === correlationId)).toBe(true);
+    expect(
+      auditEntries.some(
+        (entry) =>
+          entry.correlationId === correlationId &&
+          entry.eventType === 'volume.create' &&
+          entry.outcome === 'success',
+      ),
+    ).toBe(true);
+    expect(auditEntries.every((entry) => entry.correlationId === correlationId)).toBe(true);
+  });
+
   it('records structured failure entries for rejected operations', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Audit Failures' });
@@ -110,7 +140,7 @@ describe('audit log', () => {
     });
 
     const auditLogPath = resolveAuditLogFilePath(runtime.config);
-    const entries = await readAuditEntries(auditLogPath);
+    const entries = await readJsonLogEntries(auditLogPath);
     const failedDeleteEntry = entries.find(
       (entry) =>
         entry.eventType === 'entry.delete' &&

@@ -16,6 +16,7 @@ describe('support bundle cli formatter', () => {
     const result: SupportBundleResult = {
       bundleVersion: 1,
       cliVersion: APP_VERSION,
+      correlationId: 'corr_support-bundle',
       generatedAt: '2026-04-15T20:30:00.000Z',
       supportedVolumeSchemaVersion: 3,
       volumeId: 'volume-1',
@@ -60,6 +61,7 @@ describe('support bundle cli formatter', () => {
         'Bundle path: C:\\reports\\support-bundle',
         'Manifest: C:\\reports\\support-bundle\\manifest.json',
         'Checksums: C:\\reports\\support-bundle\\checksums.json',
+        'Correlation ID: corr_support-bundle',
         'Scope: volume-1',
         'Volumes checked: 1',
         'Issues detected: 0',
@@ -80,6 +82,7 @@ describe('support bundle cli formatter', () => {
     const result: SupportBundleResult = {
       bundleVersion: 1,
       cliVersion: APP_VERSION,
+      correlationId: 'corr_support-bundle-all',
       generatedAt: '2026-04-15T20:30:00.000Z',
       supportedVolumeSchemaVersion: 3,
       volumeId: null,
@@ -118,6 +121,9 @@ describe('support bundle cli formatter', () => {
 
     expect(formatSupportBundleResult(result)).toContain('Scope: all volumes');
     expect(formatSupportBundleResult(result)).toContain(
+      'Correlation ID: corr_support-bundle-all',
+    );
+    expect(formatSupportBundleResult(result)).toContain(
       'Backup inspection: not included',
     );
     expect(formatSupportBundleResult(result)).toContain(
@@ -138,6 +144,7 @@ describe('support bundle cli formatter', () => {
       checksumsPath: 'C:\\reports\\support-bundle\\checksums.json',
       bundleVersion: 1,
       bundleCliVersion: APP_VERSION,
+      bundleCorrelationId: 'corr_bundle-inspect',
       bundleCreatedAt: '2026-04-15T21:20:00.000Z',
       volumeId: 'volume-1',
       issueCount: 0,
@@ -154,6 +161,7 @@ describe('support bundle cli formatter', () => {
         'Checksums: C:\\reports\\support-bundle\\checksums.json',
         'Bundle version: 1',
         `Created with: ${APP_VERSION}`,
+        'Bundle correlation ID: corr_bundle-inspect',
         `Bundle created at: ${formatDateTime(result.bundleCreatedAt!)}`,
         'Scope: volume-1',
         'Verified files: 5/5',
@@ -172,6 +180,7 @@ describe('support bundle cli formatter', () => {
       checksumsPath: '/tmp/support-bundle/checksums.json',
       bundleVersion: null,
       bundleCliVersion: null,
+      bundleCorrelationId: null,
       bundleCreatedAt: null,
       volumeId: null,
       issueCount: 2,
@@ -198,6 +207,9 @@ describe('support bundle cli formatter', () => {
     );
     expect(formatSupportBundleInspectionResult(result)).toContain(
       'Created with: unknown',
+    );
+    expect(formatSupportBundleInspectionResult(result)).toContain(
+      'Bundle correlation ID: unknown',
     );
     expect(formatSupportBundleInspectionResult(result)).toContain(
       'Bundle created at: unknown',

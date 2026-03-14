@@ -334,6 +334,7 @@ export interface SupportBundleInspectionResult {
   checksumsPath: string;
   bundleVersion: number | null;
   bundleCliVersion: string | null;
+  bundleCorrelationId: string | null;
   bundleCreatedAt: string | null;
   volumeId: string | null;
   issueCount: number;
@@ -345,6 +346,7 @@ export interface SupportBundleInspectionResult {
 export interface SupportBundleResult {
   bundleVersion: 1;
   cliVersion: string;
+  correlationId: string;
   generatedAt: string;
   supportedVolumeSchemaVersion: number;
   volumeId: string | null;
