@@ -33,6 +33,14 @@ export interface VolumeEntryRow {
   imported_from_host_path: string | null;
 }
 
+export interface BlobRow {
+  content_ref: string;
+  size: number;
+  chunk_count: number;
+  created_at: string;
+  content: Buffer | null;
+}
+
 const volumeSchema = `
   CREATE TABLE IF NOT EXISTS manifest (
     id TEXT PRIMARY KEY,
@@ -66,10 +74,34 @@ const volumeSchema = `
   CREATE TABLE IF NOT EXISTS blobs (
     content_ref TEXT PRIMARY KEY,
     size INTEGER NOT NULL,
+    chunk_count INTEGER NOT NULL DEFAULT 0,
     content BLOB NOT NULL,
     created_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS blob_chunks (
+    content_ref TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    content BLOB NOT NULL,
+    PRIMARY KEY (content_ref, chunk_index)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_blob_chunks_content_ref
+    ON blob_chunks (content_ref, chunk_index);
 `;
+
+const migrateBlobSchema = async (database: SqliteVolumeDatabase): Promise<void> => {
+  const blobColumns = await database.all<{ name: string }[]>(
+    'PRAGMA table_info(blobs)',
+  );
+  const hasChunkCount = blobColumns.some((column) => column.name === 'chunk_count');
+
+  if (!hasChunkCount) {
+    await database.exec(
+      'ALTER TABLE blobs ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 0',
+    );
+  }
+};
 
 export const getVolumeDatabasePath = (dataDir: string, volumeId: string): string =>
   path.join(dataDir, 'volumes', `${volumeId}${VOLUME_DATABASE_EXTENSION}`);
@@ -91,6 +123,7 @@ export const withVolumeDatabase = async <T>(
     await database.exec('PRAGMA synchronous = NORMAL;');
     await database.exec('PRAGMA temp_store = MEMORY;');
     await database.exec(volumeSchema);
+    await migrateBlobSchema(database);
 
     return await callback(database);
   } finally {
