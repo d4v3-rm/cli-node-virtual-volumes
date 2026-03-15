@@ -24,6 +24,71 @@ export const fitSingleLine = (value: string, width: number): string => {
   return truncate(normalized, Math.max(1, width));
 };
 
+export const wrapTextLines = (value: string, width: number): string[] => {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  const availableWidth = Math.max(1, width);
+
+  if (normalized.length === 0) {
+    return [''];
+  }
+
+  const words = normalized.split(' ');
+  const lines: string[] = [];
+  let currentLine = '';
+
+  for (const word of words) {
+    if (word.length > availableWidth) {
+      if (currentLine.length > 0) {
+        lines.push(currentLine);
+        currentLine = '';
+      }
+
+      for (let index = 0; index < word.length; index += availableWidth) {
+        lines.push(word.slice(index, index + availableWidth));
+      }
+      continue;
+    }
+
+    const nextLine =
+      currentLine.length === 0 ? word : `${currentLine} ${word}`;
+
+    if (nextLine.length > availableWidth) {
+      lines.push(currentLine);
+      currentLine = word;
+    } else {
+      currentLine = nextLine;
+    }
+  }
+
+  if (currentLine.length > 0) {
+    lines.push(currentLine);
+  }
+
+  return lines.length > 0 ? lines : [''];
+};
+
+export const buildAsciiMeter = (
+  value: number,
+  total: number,
+  width: number,
+): string => {
+  const safeTotal = total > 0 ? total : 1;
+  const safeValue = Math.max(0, Math.min(value, safeTotal));
+  const slots = Math.max(6, width);
+  const ratio = safeValue / safeTotal;
+  const filled = Math.round(ratio * slots);
+
+  return `[${'#'.repeat(filled)}${'.'.repeat(slots - filled)}]`;
+};
+
+export const formatPercentage = (value: number, total: number): string => {
+  if (total <= 0) {
+    return '0%';
+  }
+
+  return `${Math.round((Math.max(0, value) / total) * 100)}%`;
+};
+
 export const getVirtualEntryIcon = (kind: DirectoryListingItem['kind']): string =>
   kind === 'directory' ? TERMINAL_ICONS.folder : TERMINAL_ICONS.file;
 

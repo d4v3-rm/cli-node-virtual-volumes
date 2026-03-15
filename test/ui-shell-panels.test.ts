@@ -7,6 +7,7 @@ import type {
 } from '../src/domain/types.js';
 import {
   buildHeaderPanelContent,
+  buildInspectorPanelLabel,
   buildInspectorPanelContent,
   buildPrimaryPanelView,
   buildShortcutsPanelContent,
@@ -97,8 +98,12 @@ describe('ui shell panels', () => {
 
   it('builds inspector content for dashboard and explorer', () => {
     const dashboardInspector = buildInspectorPanelContent({
+      auditLogDir: '/logs/audit',
       currentSnapshot: null,
       dataDir: '/data',
+      hostAllowPathCount: 1,
+      hostDenyPathCount: 1,
+      inspectorWidth: 48,
       logDir: '/logs',
       mode: 'dashboard',
       selectedEntry: null,
@@ -106,13 +111,18 @@ describe('ui shell panels', () => {
       volumes: [sampleVolume],
     });
 
-    expect(dashboardInspector).toContain('Finance');
-    expect(dashboardInspector).toContain('Used: 4.0 KB');
-    expect(dashboardInspector).toContain('Logs: /logs');
+    expect(dashboardInspector).toContain('[ VOLUME ]');
+    expect(dashboardInspector).toContain('Name: Finance');
+    expect(dashboardInspector).toContain('Usage: [');
+    expect(dashboardInspector).toContain('Host policy: allow 1 / deny 1');
 
     const explorerInspector = buildInspectorPanelContent({
+      auditLogDir: '/logs/audit',
       currentSnapshot: sampleSnapshot,
       dataDir: '/data',
+      hostAllowPathCount: 0,
+      hostDenyPathCount: 0,
+      inspectorWidth: 48,
       logDir: '/logs',
       mode: 'explorer',
       selectedEntry: sampleEntry,
@@ -120,9 +130,31 @@ describe('ui shell panels', () => {
       volumes: [sampleVolume],
     });
 
+    expect(explorerInspector).toContain('[ VOLUME ]');
     expect(explorerInspector).toContain('Path: /reports');
-    expect(explorerInspector).toContain('Selected: report.txt');
+    expect(explorerInspector).toContain('[ SELECTION ]');
+    expect(explorerInspector).toContain('Name: report.txt');
     expect(explorerInspector).toContain('Size: 2.0 KB');
+  });
+
+  it('builds inspector labels that reflect the active context', () => {
+    expect(
+      buildInspectorPanelLabel({
+        mode: 'dashboard',
+        selectedEntry: null,
+        selectedVolumeIndex: 0,
+        volumes: [sampleVolume],
+      }),
+    ).toBe(' Inspector  Volume ');
+
+    expect(
+      buildInspectorPanelLabel({
+        mode: 'explorer',
+        selectedEntry: sampleEntry,
+        selectedVolumeIndex: 0,
+        volumes: [sampleVolume],
+      }),
+    ).toBe(' Inspector  File ');
   });
 
   it('builds shortcuts content for both shells', () => {

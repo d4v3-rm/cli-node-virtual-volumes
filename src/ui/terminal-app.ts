@@ -91,6 +91,7 @@ import {
 } from './layout.js';
 import {
   buildHeaderPanelContent,
+  buildInspectorPanelLabel,
   buildInspectorPanelContent,
   buildPrimaryPanelView,
   buildShortcutsPanelContent,
@@ -516,10 +517,22 @@ export class TerminalApp {
   }
 
   private renderInspector(): void {
+    this.rightPane.setLabel(
+      buildInspectorPanelLabel({
+        mode: this.mode,
+        selectedEntry: this.getSelectedEntry(),
+        selectedVolumeIndex: this.selectedVolumeIndex,
+        volumes: this.volumes,
+      }),
+    );
     this.inspectorBox.setContent(
       buildInspectorPanelContent({
+        auditLogDir: this.runtime.config.auditLogDir,
         currentSnapshot: this.currentSnapshot,
         dataDir: this.runtime.config.dataDir,
+        hostAllowPathCount: this.runtime.config.hostAllowPaths.length,
+        hostDenyPathCount: this.runtime.config.hostDenyPaths.length,
+        inspectorWidth: this.getContentWidth(this.rightPane),
         logDir: this.runtime.config.logDir,
         mode: this.mode,
         selectedEntry: this.getSelectedEntry(),
@@ -527,6 +540,7 @@ export class TerminalApp {
         volumes: this.volumes,
       }),
     );
+    this.inspectorBox.setScroll(0);
   }
 
   private renderShortcuts(): void {
