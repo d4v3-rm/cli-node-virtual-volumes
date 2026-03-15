@@ -36,6 +36,10 @@ import { BlobStore } from '../storage/blob-store.js';
 import type { SqliteVolumeDatabase } from '../storage/sqlite-volume.js';
 import type { VolumeRepository } from '../storage/volume-repository.js';
 import {
+  sanitizeObservabilityMessage,
+  sanitizeObservabilityValue,
+} from '../utils/observability-redaction.js';
+import {
   assertValidEntryName,
   buildChildVirtualPath,
   getBaseName,
@@ -48,6 +52,7 @@ interface ServiceConfig {
   hostAllowPaths: AppConfig['hostAllowPaths'];
   hostDenyPaths: AppConfig['hostDenyPaths'];
   previewBytes: AppConfig['previewBytes'];
+  redactSensitiveDetails: AppConfig['redactSensitiveDetails'];
 }
 
 interface ImportTraversalContext {
@@ -94,6 +99,18 @@ export class VolumeService {
 
   public async listVolumes(): Promise<VolumeManifest[]> {
     return this.repository.listVolumes();
+  }
+
+  private sanitizeObservabilityPayload<T>(value: T): T {
+    return sanitizeObservabilityValue(value, this.config.redactSensitiveDetails);
+  }
+
+  private sanitizeObservabilityText(message: string, context: unknown): string {
+    return sanitizeObservabilityMessage(
+      message,
+      context,
+      this.config.redactSensitiveDetails,
+    );
   }
 
   public async createVolume(input: CreateVolumeInput): Promise<VolumeManifest> {
@@ -314,7 +331,7 @@ export class VolumeService {
           },
         );
         this.logger.info(
-          { volumeId, parentPath, directoryName: name },
+          this.sanitizeObservabilityPayload({ volumeId, parentPath, directoryName: name }),
           'Directory created.',
         );
 
@@ -359,6 +376,7 @@ export class VolumeService {
             const blobStore = new BlobStore(
               this.repository.getVolumeDatabasePath(volumeId),
               this.logger.child({ scope: 'blob-store', volumeId }),
+              this.config.redactSensitiveDetails,
             );
             const nextSummary: ImportSummary = {
               filesImported: 0,
@@ -390,7 +408,11 @@ export class VolumeService {
           },
         );
         this.logger.info(
-          { volumeId, destinationPath: input.destinationPath, summary },
+          this.sanitizeObservabilityPayload({
+            volumeId,
+            destinationPath: input.destinationPath,
+            summary,
+          }),
           'Host paths imported.',
         );
 
@@ -440,6 +462,7 @@ export class VolumeService {
         const blobStore = new BlobStore(
           this.repository.getVolumeDatabasePath(volumeId),
           this.logger.child({ scope: 'blob-store', volumeId }),
+          this.config.redactSensitiveDetails,
         );
         const summary: ExportSummary = {
           filesExported: 0,
@@ -483,7 +506,12 @@ export class VolumeService {
         }
 
         this.logger.info(
-          { volumeId, sourcePath: normalizedSourcePath, destinationHostDirectory, summary },
+          this.sanitizeObservabilityPayload({
+            volumeId,
+            sourcePath: normalizedSourcePath,
+            destinationHostDirectory,
+            summary,
+          }),
           'Virtual entry exported to host.',
         );
 
@@ -576,7 +604,10 @@ export class VolumeService {
             return this.getPathForEntry(record.state, sourceEntry.id);
           },
         );
-        this.logger.info({ volumeId, sourcePath, updatedPath }, 'Entry moved.');
+        this.logger.info(
+          this.sanitizeObservabilityPayload({ volumeId, sourcePath, updatedPath }),
+          'Entry moved.',
+        );
 
         return updatedPath;
       },
@@ -612,6 +643,7 @@ export class VolumeService {
             const blobStore = new BlobStore(
               this.repository.getVolumeDatabasePath(volumeId),
               this.logger.child({ scope: 'blob-store', volumeId }),
+              this.config.redactSensitiveDetails,
             );
 
             parentDirectory.childIds = parentDirectory.childIds.filter(
@@ -634,7 +666,7 @@ export class VolumeService {
           },
         );
         this.logger.info(
-          { volumeId, targetPath: normalizedPath, deletedEntries },
+          this.sanitizeObservabilityPayload({ volumeId, targetPath: normalizedPath, deletedEntries }),
           'Entry deleted.',
         );
 
@@ -652,6 +684,7 @@ export class VolumeService {
     const blobStore = new BlobStore(
       this.repository.getVolumeDatabasePath(volumeId),
       this.logger.child({ scope: 'blob-store', volumeId }),
+      this.config.redactSensitiveDetails,
     );
 
     const rawPreview = await blobStore.readPreview(
@@ -709,6 +742,7 @@ export class VolumeService {
           const blobStore = new BlobStore(
             this.repository.getVolumeDatabasePath(volumeId),
             this.logger.child({ scope: 'blob-store', volumeId }),
+            this.config.redactSensitiveDetails,
           );
 
           const descriptor = await blobStore.putBufferInDatabase(
@@ -761,7 +795,10 @@ export class VolumeService {
             staleContentRefs,
           );
         });
-        this.logger.info({ volumeId, filePath: normalizedPath }, 'Text file written.');
+        this.logger.info(
+          this.sanitizeObservabilityPayload({ volumeId, filePath: normalizedPath }),
+          'Text file written.',
+        );
       },
     );
   }
@@ -1447,55 +1484,58 @@ export class VolumeService {
     options: AuditOperationOptions,
     operation: () => Promise<T>,
     getSuccessDetails?: (result: T) => Record<string, unknown> | undefined,
-  ): Promise<T> {
-    const operationId = `audit_${nanoid(10)}`;
-    const startedAt = Date.now();
-    const startedAtIso = new Date(startedAt).toISOString();
+    ): Promise<T> {
+      const operationId = `audit_${nanoid(10)}`;
+      const startedAt = Date.now();
+      const startedAtIso = new Date(startedAt).toISOString();
 
-    try {
-      const result = await operation();
-      const completedAt = Date.now();
-      this.auditLogger.info(
-        {
-          category: 'audit',
+      try {
+        const result = await operation();
+        const completedAt = Date.now();
+        const details = this.sanitizeObservabilityPayload({
+          ...(options.details ?? {}),
+          ...(getSuccessDetails?.(result) ?? {}),
+        });
+        this.auditLogger.info(
+          {
+            category: 'audit',
           operationId,
           eventType: options.eventType,
           resourceType: options.resourceType,
           outcome: 'success',
-          volumeId: options.volumeId,
-          startedAt: startedAtIso,
-          completedAt: new Date(completedAt).toISOString(),
-          durationMs: completedAt - startedAt,
-          details: {
-            ...(options.details ?? {}),
-            ...(getSuccessDetails?.(result) ?? {}),
+            volumeId: options.volumeId,
+            startedAt: startedAtIso,
+            completedAt: new Date(completedAt).toISOString(),
+            durationMs: completedAt - startedAt,
+            details,
           },
-        },
-        'Audit event recorded.',
-      );
+          'Audit event recorded.',
+        );
 
       return result;
-    } catch (error) {
-      const completedAt = Date.now();
-      const auditError = this.serializeAuditError(error);
+      } catch (error) {
+        const completedAt = Date.now();
+        const auditError = this.serializeAuditError(error);
+        const details = this.sanitizeObservabilityPayload(options.details ?? {});
+        const errorPayload = this.sanitizeObservabilityPayload(auditError.payload);
 
-      if (auditError.severity === 'error') {
-        this.auditLogger.error(
+        if (auditError.severity === 'error') {
+          this.auditLogger.error(
           {
             category: 'audit',
             operationId,
             eventType: options.eventType,
             resourceType: options.resourceType,
             outcome: 'failure',
-            volumeId: options.volumeId,
-            startedAt: startedAtIso,
-            completedAt: new Date(completedAt).toISOString(),
-            durationMs: completedAt - startedAt,
-            details: options.details ?? {},
-            error: auditError.payload,
-          },
-          'Audit event recorded.',
-        );
+              volumeId: options.volumeId,
+              startedAt: startedAtIso,
+              completedAt: new Date(completedAt).toISOString(),
+              durationMs: completedAt - startedAt,
+              details,
+              error: errorPayload,
+            },
+            'Audit event recorded.',
+          );
       } else {
         this.auditLogger.warn(
           {
@@ -1504,15 +1544,15 @@ export class VolumeService {
             eventType: options.eventType,
             resourceType: options.resourceType,
             outcome: 'failure',
-            volumeId: options.volumeId,
-            startedAt: startedAtIso,
-            completedAt: new Date(completedAt).toISOString(),
-            durationMs: completedAt - startedAt,
-            details: options.details ?? {},
-            error: auditError.payload,
-          },
-          'Audit event recorded.',
-        );
+              volumeId: options.volumeId,
+              startedAt: startedAtIso,
+              completedAt: new Date(completedAt).toISOString(),
+              durationMs: completedAt - startedAt,
+              details,
+              error: errorPayload,
+            },
+            'Audit event recorded.',
+          );
       }
 
       throw error;
@@ -1523,16 +1563,17 @@ export class VolumeService {
     payload: Record<string, unknown>;
     severity: 'error' | 'warn';
   } {
-    if (isVolumeError(error)) {
-      return {
-        severity: 'warn',
-        payload: {
-          code: error.code,
-          message: error.message,
-          details: error.details ?? null,
-        },
-      };
-    }
+      if (isVolumeError(error)) {
+        const details = error.details ?? null;
+        return {
+          severity: 'warn',
+          payload: {
+            code: error.code,
+            message: this.sanitizeObservabilityText(error.message, details),
+            details,
+          },
+        };
+      }
 
     if (error instanceof Error) {
       return {

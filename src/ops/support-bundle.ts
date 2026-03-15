@@ -18,6 +18,9 @@ import type {
 import type { AppRuntime } from '../bootstrap/create-runtime.js';
 import { resolveAppLogFilePath, resolveAuditLogFilePath } from '../logging/logger.js';
 import { writeJsonAtomic, pathExists } from '../utils/fs.js';
+import {
+  redactFilesystemPath,
+} from '../utils/observability-redaction.js';
 import { SUPPORTED_VOLUME_SCHEMA_VERSION } from '../storage/sqlite-volume.js';
 
 const SUPPORT_BUNDLE_VERSION = 1 as const;
@@ -125,6 +128,7 @@ const isSupportBundleResult = (value: unknown): value is SupportBundleResult => 
     typeof value.config.logLevel === 'string' &&
     (typeof value.config.logRetentionDays === 'number' ||
       value.config.logRetentionDays === null) &&
+    typeof value.config.redactSensitiveDetails === 'boolean' &&
     typeof value.config.logToStdout === 'boolean' &&
     isNonNegativeNumber(value.config.defaultQuotaBytes) &&
     isNonNegativeNumber(value.config.previewBytes) &&
@@ -223,6 +227,7 @@ const buildBundleFileRecord = async (
   filePath: string,
   role: SupportBundleFileRole,
   sourcePath: string | null,
+  redactSensitiveDetails: boolean,
 ): Promise<SupportBundleFileRecord> => {
   const stats = await fs.stat(filePath);
   const relativePath = path.relative(bundleSourcePath, filePath);
@@ -233,7 +238,10 @@ const buildBundleFileRecord = async (
     relativePath,
     bytes: stats.size,
     checksumSha256: await computeFileSha256(filePath),
-    sourcePath,
+    sourcePath:
+      sourcePath && redactSensitiveDetails
+        ? redactFilesystemPath(sourcePath)
+        : sourcePath,
   };
 };
 
@@ -331,7 +339,10 @@ export const createSupportBundle = async (
       generatedAt,
       supportedVolumeSchemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
       volumeId: input.volumeId ?? null,
-      backupPath,
+      backupPath:
+        backupPath && runtime.config.redactSensitiveDetails
+          ? redactFilesystemPath(backupPath)
+          : backupPath,
       healthy: doctorReport.healthy,
       checkedVolumes: doctorReport.checkedVolumes,
       issueCount: doctorReport.issueCount,
@@ -344,14 +355,25 @@ export const createSupportBundle = async (
       auditLogSnapshotPath,
       logSnapshotPath,
       config: {
-        auditLogDir: runtime.config.auditLogDir,
+        auditLogDir: runtime.config.redactSensitiveDetails
+          ? redactFilesystemPath(runtime.config.auditLogDir)
+          : runtime.config.auditLogDir,
         auditLogLevel: runtime.config.auditLogLevel,
-        dataDir: runtime.config.dataDir,
-        hostAllowPaths: [...runtime.config.hostAllowPaths],
-        hostDenyPaths: [...runtime.config.hostDenyPaths],
-        logDir: runtime.config.logDir,
+        dataDir: runtime.config.redactSensitiveDetails
+          ? redactFilesystemPath(runtime.config.dataDir)
+          : runtime.config.dataDir,
+        hostAllowPaths: runtime.config.redactSensitiveDetails
+          ? runtime.config.hostAllowPaths.map((entry) => redactFilesystemPath(entry))
+          : [...runtime.config.hostAllowPaths],
+        hostDenyPaths: runtime.config.redactSensitiveDetails
+          ? runtime.config.hostDenyPaths.map((entry) => redactFilesystemPath(entry))
+          : [...runtime.config.hostDenyPaths],
+        logDir: runtime.config.redactSensitiveDetails
+          ? redactFilesystemPath(runtime.config.logDir)
+          : runtime.config.logDir,
         logLevel: runtime.config.logLevel,
         logRetentionDays: runtime.config.logRetentionDays,
+        redactSensitiveDetails: runtime.config.redactSensitiveDetails,
         logToStdout: runtime.config.logToStdout,
         defaultQuotaBytes: runtime.config.defaultQuotaBytes,
         previewBytes: runtime.config.previewBytes,
@@ -374,6 +396,7 @@ export const createSupportBundle = async (
         path.join(temporaryBundlePath, 'manifest.json'),
         'manifest',
         null,
+        runtime.config.redactSensitiveDetails,
       ),
       await buildBundleFileRecord(
         destinationPath,
@@ -381,6 +404,7 @@ export const createSupportBundle = async (
         path.join(temporaryBundlePath, 'doctor-report.json'),
         'doctor-report',
         null,
+        runtime.config.redactSensitiveDetails,
       ),
     ];
 
@@ -392,6 +416,7 @@ export const createSupportBundle = async (
           path.join(temporaryBundlePath, 'backup-inspection.json'),
           'backup-inspection',
           backupPath,
+          runtime.config.redactSensitiveDetails,
         ),
       );
     }
@@ -404,6 +429,7 @@ export const createSupportBundle = async (
           path.join(temporaryBundlePath, 'backup-artifact.manifest.json'),
           'backup-manifest',
           backupInspection.manifestPath,
+          runtime.config.redactSensitiveDetails,
         ),
       );
     }
@@ -416,6 +442,7 @@ export const createSupportBundle = async (
           path.join(temporaryBundlePath, 'logs', path.basename(currentLogPath)),
           'log-snapshot',
           currentLogPath,
+          runtime.config.redactSensitiveDetails,
         ),
       );
     }
@@ -428,6 +455,7 @@ export const createSupportBundle = async (
           path.join(temporaryBundlePath, 'audit', path.basename(currentAuditLogPath)),
           'audit-log-snapshot',
           currentAuditLogPath,
+          runtime.config.redactSensitiveDetails,
         ),
       );
     }

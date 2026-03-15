@@ -281,6 +281,7 @@ export interface SupportBundleConfigSnapshot {
   logDir: string;
   logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
   logRetentionDays: number | null;
+  redactSensitiveDetails: boolean;
   logToStdout: boolean;
   defaultQuotaBytes: number;
   previewBytes: number;

@@ -16,7 +16,9 @@ import type {
 
 const sandboxes: string[] = [];
 
-const createIsolatedRuntime = async () => {
+const createIsolatedRuntime = async (
+  overrides: Parameters<typeof createRuntime>[0] = {},
+) => {
   const sandboxRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), 'cli-node-virtual-volumes-support-bundle-'),
   );
@@ -27,6 +29,7 @@ const createIsolatedRuntime = async () => {
     logDir: path.join(sandboxRoot, 'logs'),
     logLevel: 'silent',
     logToStdout: false,
+    ...overrides,
   });
 };
 
@@ -96,6 +99,7 @@ describe('support bundle', () => {
     expect(result.cliVersion).toBe(APP_VERSION);
     expect(result.correlationId).toBe(runtime.correlationId);
     expect(result.config.logRetentionDays).toBeNull();
+    expect(result.config.redactSensitiveDetails).toBe(false);
     expect(result.bundlePath).toBe(path.resolve(bundlePath));
     expect(result.backupPath).toBe(path.resolve(backupPath));
     expect(result.volumeId).toBe(volume.id);
@@ -280,5 +284,42 @@ describe('support bundle', () => {
     expect(inspection.verifiedFiles).toBe(3);
     expect(issueCodes).toContain('CHECKSUM_MISMATCH');
     expect(issueCodes).toContain('MISSING_BUNDLE_FILE');
+  });
+
+  it('redacts sensitive runtime paths in support bundle metadata when configured', async () => {
+    const runtime = await createIsolatedRuntime({
+      redactSensitiveDetails: true,
+      hostAllowPaths: ['C:\\allowed-root'],
+      hostDenyPaths: ['C:\\blocked-root'],
+    });
+    const volume = await runtime.volumeService.createVolume({ name: 'Redacted Bundle' });
+    const bundlePath = path.join(runtime.config.dataDir, '..', 'redacted-support-bundle');
+    const backupPath = path.join(runtime.config.dataDir, '..', 'redacted.sqlite');
+    const currentLogPath = resolveAppLogFilePath(runtime.config);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/hello.txt', 'redact me');
+    await runtime.volumeService.backupVolume(volume.id, backupPath);
+    await fs.mkdir(path.dirname(currentLogPath), { recursive: true });
+    await fs.writeFile(currentLogPath, 'redacted support bundle log\n', 'utf8');
+
+    const result = await createSupportBundle(runtime, {
+      destinationPath: bundlePath,
+      volumeId: volume.id,
+      backupPath,
+    });
+    const checksumManifest = JSON.parse(
+      await fs.readFile(result.checksumsPath, 'utf8'),
+    ) as SupportBundleChecksumManifest;
+    const auditLogRecord = findBundleFileRecord(checksumManifest.files, 'audit-log-snapshot');
+
+    expect(result.backupPath).toMatch(/^<redacted:/u);
+    expect(result.backupPath).not.toBe(path.resolve(backupPath));
+    expect(result.config.redactSensitiveDetails).toBe(true);
+    expect(result.config.dataDir).toMatch(/^<redacted:/u);
+    expect(result.config.logDir).toMatch(/^<redacted:/u);
+    expect(result.config.auditLogDir).toMatch(/^<redacted:/u);
+    expect(result.config.hostAllowPaths[0]).toMatch(/^<redacted:/u);
+    expect(result.config.hostDenyPaths[0]).toMatch(/^<redacted:/u);
+    expect(auditLogRecord?.sourcePath).toMatch(/^<redacted:/u);
   });
 });

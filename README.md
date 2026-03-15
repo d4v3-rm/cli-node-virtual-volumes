@@ -158,6 +158,7 @@ Main variables:
 | `VOLUME_HOST_ALLOW_PATHS` | Optional host path allowlist for import/export, separated by the OS path delimiter |
 | `VOLUME_HOST_DENY_PATHS` | Optional host path denylist for import/export, separated by the OS path delimiter |
 | `VOLUME_LOG_DIR` | Runtime log directory |
+| `VOLUME_REDACT_SENSITIVE_DETAILS` | Redact sensitive host and local filesystem paths in logs and persisted JSON artifacts |
 | `VOLUME_LOG_RETENTION_DAYS` | Optional retention window for daily app and audit log files |
 | `VOLUME_DEFAULT_QUOTA_BYTES` | Default quota for new volumes |
 | `VOLUME_LOG_LEVEL` | `fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent` |
@@ -169,6 +170,7 @@ Operational notes:
 - If `VOLUME_DATA_DIR` is not set, the runtime uses the current working directory.
 - If `VOLUME_AUDIT_LOG_DIR` is not set, audit logs default to `VOLUME_LOG_DIR/audit`.
 - Audit logs are written separately from application logs and capture structured success/failure events for core write, import, export, delete, backup, restore, and diagnostics operations.
+- If `VOLUME_REDACT_SENSITIVE_DETAILS=true`, structured logs and persisted operational JSON artifacts redact sensitive filesystem paths while keeping local stdout output readable.
 - If `VOLUME_LOG_RETENTION_DAYS` is set, startup prunes older daily app and audit log files automatically.
 - Each CLI command runtime gets a correlation ID shared across app logs, audit logs, `--output` artifacts, and support bundles.
 - `VOLUME_HOST_ALLOW_PATHS` and `VOLUME_HOST_DENY_PATHS` accept absolute or relative paths, resolved at startup.

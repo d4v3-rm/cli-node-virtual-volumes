@@ -153,4 +153,45 @@ describe('audit log', () => {
     expect(failedDeleteEntry?.error.code).toBe('NOT_FOUND');
     expect(failedDeleteEntry?.error.message).toContain('/missing.txt');
   });
+
+  it('redacts sensitive host paths in app and audit logs when configured', async () => {
+    const runtime = await createIsolatedRuntime({
+      logLevel: 'info',
+      auditLogLevel: 'info',
+      redactSensitiveDetails: true,
+    });
+    const hostRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cli-node-virtual-volumes-audit-host-'));
+    sandboxes.push(hostRoot);
+    const importHostPath = path.join(hostRoot, 'import.txt');
+    const exportRoot = path.join(hostRoot, 'exports');
+
+    await fs.writeFile(importHostPath, 'host import payload', 'utf8');
+
+    const volume = await runtime.volumeService.createVolume({ name: 'Audit Redaction' });
+    await runtime.volumeService.importHostPaths(volume.id, {
+      destinationPath: '/',
+      hostPaths: [importHostPath],
+    });
+    await runtime.volumeService.exportEntryToHost(volume.id, {
+      sourcePath: '/import.txt',
+      destinationHostDirectory: exportRoot,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const auditEntries = await readJsonLogEntries(resolveAuditLogFilePath(runtime.config));
+    const appLogRaw = await fs.readFile(resolveAppLogFilePath(runtime.config), 'utf8');
+    const hostImportEntry = auditEntries.find(
+      (entry) => entry.eventType === 'host.import' && entry.outcome === 'success',
+    ) as { details?: { hostPathsPreview?: string[] } } | undefined;
+    const hostExportEntry = auditEntries.find(
+      (entry) => entry.eventType === 'host.export' && entry.outcome === 'success',
+    ) as { details?: { destinationHostDirectory?: string } } | undefined;
+
+    expect(hostImportEntry?.details?.hostPathsPreview?.[0]).toMatch(/^<redacted:/u);
+    expect(hostImportEntry?.details?.hostPathsPreview?.[0]).not.toBe(importHostPath);
+    expect(hostExportEntry?.details?.destinationHostDirectory).toMatch(/^<redacted:/u);
+    expect(appLogRaw).toContain('<redacted:');
+    expect(appLogRaw).not.toContain(importHostPath);
+    expect(appLogRaw).not.toContain(exportRoot);
+  });
 });

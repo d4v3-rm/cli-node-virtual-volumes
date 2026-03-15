@@ -10,6 +10,7 @@ import {
 } from '../logging/logger.js';
 import { VolumeRepository } from '../storage/volume-repository.js';
 import { createCorrelationId } from '../utils/correlation.js';
+import { sanitizeObservabilityValue } from '../utils/observability-redaction.js';
 
 export interface AppRuntime {
   auditLogger: Logger;
@@ -43,22 +44,28 @@ export const createRuntime = async (
 
   if (prunedLogs.appDeletedFiles.length > 0 || prunedLogs.auditDeletedFiles.length > 0) {
     logger.info(
-      {
-        appDeletedFiles: prunedLogs.appDeletedFiles.length,
-        auditDeletedFiles: prunedLogs.auditDeletedFiles.length,
-        logRetentionDays: config.logRetentionDays,
-      },
+      sanitizeObservabilityValue(
+        {
+          appDeletedFiles: prunedLogs.appDeletedFiles.length,
+          auditDeletedFiles: prunedLogs.auditDeletedFiles.length,
+          logRetentionDays: config.logRetentionDays,
+        },
+        config.redactSensitiveDetails,
+      ),
       'Pruned retained log files.',
     );
   }
 
   logger.info(
-    {
-      dataDir: config.dataDir,
-      logDir: config.logDir,
-      auditLogDir: config.auditLogDir,
-      logRetentionDays: config.logRetentionDays,
-    },
+    sanitizeObservabilityValue(
+      {
+        dataDir: config.dataDir,
+        logDir: config.logDir,
+        auditLogDir: config.auditLogDir,
+        logRetentionDays: config.logRetentionDays,
+      },
+      config.redactSensitiveDetails,
+    ),
     'Runtime initialized.',
   );
 

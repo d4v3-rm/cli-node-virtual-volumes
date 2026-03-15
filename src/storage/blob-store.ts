@@ -8,6 +8,10 @@ import type { Logger } from 'pino';
 import { VolumeError } from '../domain/errors.js';
 import { ensureDirectory } from '../utils/fs.js';
 import {
+  sanitizeObservabilityMessage,
+  sanitizeObservabilityValue,
+} from '../utils/observability-redaction.js';
+import {
   type BlobRow,
   type SqliteVolumeDatabase,
   withVolumeDatabase,
@@ -37,7 +41,12 @@ export class BlobStore {
   public constructor(
     private readonly databasePath: string,
     private readonly logger: Logger,
+    private readonly redactSensitiveDetails = false,
   ) {}
+
+  private sanitizeObservabilityPayload<T>(value: T): T {
+    return sanitizeObservabilityValue(value, this.redactSensitiveDetails);
+  }
 
   public async putHostFile(
     hostPath: string,
@@ -104,7 +113,11 @@ export class BlobStore {
     if (options.totalBytes !== undefined && size !== options.totalBytes) {
       throw new VolumeError(
         'INTEGRITY_CHECK_FAILED',
-        `Host file changed during import: expected ${options.totalBytes} bytes, read ${size}.`,
+        sanitizeObservabilityMessage(
+          `Host file changed during import: expected ${options.totalBytes} bytes, read ${size}.`,
+          { hostPath },
+          this.redactSensitiveDetails,
+        ),
         {
           hostPath,
           expectedBytes: options.totalBytes,
@@ -156,7 +169,10 @@ export class BlobStore {
         },
       );
 
-      this.logger.debug({ contentRef, hostPath, size, chunkCount }, 'Blob stored from host file.');
+      this.logger.debug(
+        this.sanitizeObservabilityPayload({ contentRef, hostPath, size, chunkCount }),
+        'Blob stored from host file.',
+      );
       return { contentRef: verifiedBlob.contentRef, size: verifiedBlob.size };
     } catch (error) {
       if (!reusedExistingBlob) {
@@ -235,7 +251,7 @@ export class BlobStore {
     }
 
     this.logger.debug(
-      { contentRef, destinationPath, size: totalBytes },
+      this.sanitizeObservabilityPayload({ contentRef, destinationPath, size: totalBytes }),
       'Blob exported to host file.',
     );
 
@@ -492,7 +508,11 @@ export class BlobStore {
     ) {
       throw new VolumeError(
         'INTEGRITY_CHECK_FAILED',
-        `Export integrity check failed for ${hostPath}.`,
+        sanitizeObservabilityMessage(
+          `Export integrity check failed for ${hostPath}.`,
+          { hostPath },
+          this.redactSensitiveDetails,
+        ),
         {
           hostPath,
           expectedContentRef: options.expectedContentRef,

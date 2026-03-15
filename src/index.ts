@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 
 import { createRuntime } from './bootstrap/create-runtime.js';
+import { loadAppConfig } from './config/env.js';
 import {
   formatBackupInspectionResult,
   formatBackupResult,
@@ -15,6 +16,7 @@ import {
 import { createSupportBundle, inspectSupportBundle } from './ops/support-bundle.js';
 import { TerminalApp } from './ui/terminal-app.js';
 import { createCorrelationId } from './utils/correlation.js';
+import { sanitizeObservabilityValue } from './utils/observability-redaction.js';
 
 const main = async (): Promise<void> => {
   const program = new Command()
@@ -51,6 +53,11 @@ const main = async (): Promise<void> => {
     };
   };
 
+  const sanitizeArtifactPayload = <T>(
+    payload: T,
+    redactSensitiveDetails: boolean,
+  ): T => sanitizeObservabilityValue(payload, redactSensitiveDetails);
+
   program.action(async () => {
     const runtime = await createRuntime(getRuntimeOverrides());
     const app = new TerminalApp(runtime);
@@ -77,9 +84,14 @@ const main = async (): Promise<void> => {
           overwrite: options.force,
         });
         const artifactPath = options.output
-          ? await writeCliJsonArtifact('backup', result, options.output, {
-              correlationId,
-            })
+          ? await writeCliJsonArtifact(
+              'backup',
+              sanitizeArtifactPayload(result, runtime.config.redactSensitiveDetails),
+              options.output,
+              {
+                correlationId,
+              },
+            )
           : null;
 
         console.log(
@@ -110,9 +122,14 @@ const main = async (): Promise<void> => {
           overwrite: options.force,
         });
         const artifactPath = options.output
-          ? await writeCliJsonArtifact('restore', result, options.output, {
-              correlationId,
-            })
+          ? await writeCliJsonArtifact(
+              'restore',
+              sanitizeArtifactPayload(result, runtime.config.redactSensitiveDetails),
+              options.output,
+              {
+                correlationId,
+              },
+            )
           : null;
 
         console.log(
@@ -140,9 +157,14 @@ const main = async (): Promise<void> => {
         const correlationId = runtime.correlationId;
         const result = await runtime.volumeService.inspectVolumeBackup(backupPath);
         const artifactPath = options.output
-          ? await writeCliJsonArtifact('inspect-backup', result, options.output, {
-              correlationId,
-            })
+          ? await writeCliJsonArtifact(
+              'inspect-backup',
+              sanitizeArtifactPayload(result, runtime.config.redactSensitiveDetails),
+              options.output,
+              {
+                correlationId,
+              },
+            )
           : null;
 
         console.log(
@@ -172,9 +194,14 @@ const main = async (): Promise<void> => {
         if (options.fix) {
           const report = await runtime.volumeService.runRepair(volumeId);
           const artifactPath = options.output
-            ? await writeCliJsonArtifact('doctor --fix', report, options.output, {
-                correlationId,
-              })
+            ? await writeCliJsonArtifact(
+                'doctor --fix',
+                sanitizeArtifactPayload(report, runtime.config.redactSensitiveDetails),
+                options.output,
+                {
+                  correlationId,
+                },
+              )
             : null;
 
           console.log(
@@ -191,9 +218,14 @@ const main = async (): Promise<void> => {
         } else {
           const report = await runtime.volumeService.runDoctor(volumeId);
           const artifactPath = options.output
-            ? await writeCliJsonArtifact('doctor', report, options.output, {
-                correlationId,
-              })
+            ? await writeCliJsonArtifact(
+                'doctor',
+                sanitizeArtifactPayload(report, runtime.config.redactSensitiveDetails),
+                options.output,
+                {
+                  correlationId,
+                },
+              )
             : null;
 
           console.log(
@@ -242,9 +274,14 @@ const main = async (): Promise<void> => {
           overwrite: options.force,
         });
         const artifactPath = options.output
-          ? await writeCliJsonArtifact('support-bundle', result, options.output, {
-              correlationId,
-            })
+          ? await writeCliJsonArtifact(
+              'support-bundle',
+              sanitizeArtifactPayload(result, runtime.config.redactSensitiveDetails),
+              options.output,
+              {
+                correlationId,
+              },
+            )
           : null;
 
         console.log(
@@ -271,11 +308,12 @@ const main = async (): Promise<void> => {
         options: { json?: boolean; output?: string },
       ) => {
         const correlationId = createCorrelationId();
+        const redactSensitiveDetails = loadAppConfig(getRuntimeOverrides()).redactSensitiveDetails;
         const result = await inspectSupportBundle(bundlePath);
         const artifactPath = options.output
           ? await writeCliJsonArtifact(
               'inspect-support-bundle',
-              result,
+              sanitizeArtifactPayload(result, redactSensitiveDetails),
               options.output,
               {
                 correlationId,
