@@ -76,6 +76,10 @@ const envSchema = z.object({
     z.array(z.string()).default([]),
   ),
   VOLUME_LOG_DIR: z.preprocess(emptyStringToUndefined, z.string().optional()),
+  VOLUME_LOG_RETENTION_DAYS: z.preprocess(
+    emptyStringToUndefined,
+    z.coerce.number().int().positive().optional(),
+  ),
   VOLUME_DEFAULT_QUOTA_BYTES: z.preprocess(
     emptyStringToUndefined,
     z.coerce.number().int().positive().default(DEFAULT_QUOTA_BYTES),
@@ -103,6 +107,7 @@ export interface RuntimeOverrides {
   hostDenyPaths?: string[];
   logDir?: string;
   logLevel?: AppConfig['logLevel'];
+  logRetentionDays?: number | null;
   logToStdout?: boolean;
 }
 
@@ -115,6 +120,7 @@ export interface AppConfig {
   logDir: string;
   defaultQuotaBytes: number;
   logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
+  logRetentionDays: number | null;
   logToStdout: boolean;
   previewBytes: number;
 }
@@ -141,6 +147,8 @@ export const loadAppConfig = (
       overrides.hostDenyPaths ?? inputEnvironment.VOLUME_HOST_DENY_PATHS,
     VOLUME_LOG_DIR: overrides.logDir ?? inputEnvironment.VOLUME_LOG_DIR,
     VOLUME_LOG_LEVEL: overrides.logLevel ?? inputEnvironment.VOLUME_LOG_LEVEL,
+    VOLUME_LOG_RETENTION_DAYS:
+      overrides.logRetentionDays ?? inputEnvironment.VOLUME_LOG_RETENTION_DAYS,
     VOLUME_LOG_TO_STDOUT:
       overrides.logToStdout ?? inputEnvironment.VOLUME_LOG_TO_STDOUT,
   });
@@ -164,6 +172,7 @@ export const loadAppConfig = (
     logDir,
     defaultQuotaBytes: parsed.VOLUME_DEFAULT_QUOTA_BYTES,
     logLevel: parsed.VOLUME_LOG_LEVEL,
+    logRetentionDays: parsed.VOLUME_LOG_RETENTION_DAYS ?? null,
     logToStdout: parsed.VOLUME_LOG_TO_STDOUT,
     previewBytes: parsed.VOLUME_PREVIEW_BYTES,
   };

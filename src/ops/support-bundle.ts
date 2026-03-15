@@ -123,6 +123,8 @@ const isSupportBundleResult = (value: unknown): value is SupportBundleResult => 
     value.config.hostDenyPaths.every((entry) => typeof entry === 'string') &&
     typeof value.config.logDir === 'string' &&
     typeof value.config.logLevel === 'string' &&
+    (typeof value.config.logRetentionDays === 'number' ||
+      value.config.logRetentionDays === null) &&
     typeof value.config.logToStdout === 'boolean' &&
     isNonNegativeNumber(value.config.defaultQuotaBytes) &&
     isNonNegativeNumber(value.config.previewBytes) &&
@@ -349,6 +351,7 @@ export const createSupportBundle = async (
         hostDenyPaths: [...runtime.config.hostDenyPaths],
         logDir: runtime.config.logDir,
         logLevel: runtime.config.logLevel,
+        logRetentionDays: runtime.config.logRetentionDays,
         logToStdout: runtime.config.logToStdout,
         defaultQuotaBytes: runtime.config.defaultQuotaBytes,
         previewBytes: runtime.config.previewBytes,
