@@ -330,10 +330,12 @@ await runtime.volumeService.writeTextFile(
 
 const preview = await runtime.volumeService.previewFile(volume.id, '/hello.txt');
 console.log(preview.content);
+await runtime.close();
 ```
 
 Useful API methods:
 
+- `runtime.close()`
 - `runtime.volumeService.backupVolume(...)`
 - `runtime.volumeService.inspectVolumeBackup(...)`
 - `runtime.volumeService.restoreVolumeBackup(...)`

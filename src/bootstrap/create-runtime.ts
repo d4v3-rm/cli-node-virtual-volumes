@@ -14,6 +14,7 @@ import { sanitizeObservabilityValue } from '../utils/observability-redaction.js'
 
 export interface AppRuntime {
   auditLogger: Logger;
+  close: () => Promise<void>;
   config: AppConfig;
   correlationId: string;
   logger: Logger;
@@ -28,8 +29,9 @@ export const createRuntime = async (
     overrides.correlationId?.trim().length
       ? overrides.correlationId.trim()
       : createCorrelationId();
-  const logger = createAppLogger(config, { correlationId });
+  const appLogger = createAppLogger(config, { correlationId });
   const auditLogger = createAuditLogger(config, { correlationId });
+  const logger = appLogger.logger;
   const prunedLogs = await pruneRetainedLogFiles(config);
   const repository = new VolumeRepository(config, logger.child({ scope: 'repository' }));
 
@@ -39,7 +41,7 @@ export const createRuntime = async (
     repository,
     config,
     logger.child({ scope: 'volume-service' }),
-    auditLogger,
+    auditLogger.logger,
   );
 
   if (prunedLogs.appDeletedFiles.length > 0 || prunedLogs.auditDeletedFiles.length > 0) {
@@ -70,8 +72,18 @@ export const createRuntime = async (
     'Runtime initialized.',
   );
 
+  let closed = false;
+
   return {
-    auditLogger,
+    auditLogger: auditLogger.logger,
+    close: async () => {
+      if (closed) {
+        return;
+      }
+
+      closed = true;
+      await Promise.all([appLogger.close(), auditLogger.close()]);
+    },
     config,
     correlationId,
     logger,

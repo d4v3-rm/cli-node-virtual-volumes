@@ -2,11 +2,17 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import pino, { type Logger, type StreamEntry } from 'pino';
+import type { SonicBoom } from 'sonic-boom';
 
 import type { AppConfig } from '../config/env.js';
 
 interface LoggerContext {
   correlationId?: string;
+}
+
+export interface ManagedLogger {
+  close: () => Promise<void>;
+  logger: Logger;
 }
 
 export interface LogPruneResult {
@@ -24,6 +30,42 @@ const createFileDestination = (destinationPath: string, sync: boolean) =>
     mkdir: true,
     sync,
   });
+
+const closeFileDestination = async (destination: SonicBoom): Promise<void> => {
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = (): void => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      destination.off('close', finish);
+      destination.off('finish', finish);
+      destination.off('error', finish);
+      resolve();
+    };
+
+    destination.once('close', finish);
+    destination.once('finish', finish);
+    destination.once('error', finish);
+
+    try {
+      destination.flushSync();
+    } catch {
+      // Ignore flush failures during shutdown and continue closing the destination.
+    }
+
+    try {
+      destination.end();
+    } catch {
+      finish();
+      return;
+    }
+
+    setTimeout(finish, 250);
+  });
+};
 
 const createLoggerBase = (
   baseContext: LoggerContext,
@@ -119,10 +161,11 @@ export const pruneRetainedLogFiles = async (
 export const createAppLogger = (
   config: AppConfig,
   baseContext: LoggerContext = {},
-): Logger => {
+): ManagedLogger => {
+  const fileDestination = createFileDestination(resolveAppLogFilePath(config), false);
   const streams: StreamEntry[] = [
     {
-      stream: createFileDestination(resolveAppLogFilePath(config), false),
+      stream: fileDestination,
     },
   ];
 
@@ -130,27 +173,40 @@ export const createAppLogger = (
     streams.push({ stream: process.stderr });
   }
 
-  return pino(
-    {
-      name: 'cli-node-virtual-volumes',
-      level: config.logLevel,
-      base: createLoggerBase(baseContext),
-      timestamp: pino.stdTimeFunctions.isoTime,
+  return {
+    logger: pino(
+      {
+        name: 'cli-node-virtual-volumes',
+        level: config.logLevel,
+        base: createLoggerBase(baseContext),
+        timestamp: pino.stdTimeFunctions.isoTime,
+      },
+      pino.multistream(streams),
+    ),
+    close: async () => {
+      await closeFileDestination(fileDestination);
     },
-    pino.multistream(streams),
-  );
+  };
 };
 
 export const createAuditLogger = (
   config: AppConfig,
   baseContext: LoggerContext = {},
-): Logger =>
-  pino(
-    {
-      name: 'cli-node-virtual-volumes-audit',
-      level: config.auditLogLevel,
-      base: createLoggerBase(baseContext, { channel: 'audit' }),
-      timestamp: pino.stdTimeFunctions.isoTime,
+): ManagedLogger => {
+  const fileDestination = createFileDestination(resolveAuditLogFilePath(config), true);
+
+  return {
+    logger: pino(
+      {
+        name: 'cli-node-virtual-volumes-audit',
+        level: config.auditLogLevel,
+        base: createLoggerBase(baseContext, { channel: 'audit' }),
+        timestamp: pino.stdTimeFunctions.isoTime,
+      },
+      fileDestination,
+    ),
+    close: async () => {
+      await closeFileDestination(fileDestination);
     },
-    createFileDestination(resolveAuditLogFilePath(config), true),
-  );
+  };
+};
