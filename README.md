@@ -160,6 +160,7 @@ Main variables:
 | `VOLUME_LOG_DIR` | Runtime log directory |
 | `VOLUME_REDACT_SENSITIVE_DETAILS` | Redact sensitive host and local filesystem paths in logs and persisted JSON artifacts |
 | `VOLUME_LOG_RETENTION_DAYS` | Optional retention window for daily app and audit log files |
+| `VOLUME_SUPPORT_BUNDLE_LOG_TAIL_LINES` | Max log lines copied from the end of each app and audit log into support bundles |
 | `VOLUME_DEFAULT_QUOTA_BYTES` | Default quota for new volumes |
 | `VOLUME_LOG_LEVEL` | `fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent` |
 | `VOLUME_LOG_TO_STDOUT` | Mirrors logs to stdout |
@@ -172,6 +173,7 @@ Operational notes:
 - Audit logs are written separately from application logs and capture structured success/failure events for core write, import, export, delete, backup, restore, and diagnostics operations.
 - If `VOLUME_REDACT_SENSITIVE_DETAILS=true`, structured logs and persisted operational JSON artifacts redact sensitive filesystem paths while keeping local stdout output readable.
 - If `VOLUME_LOG_RETENTION_DAYS` is set, startup prunes older daily app and audit log files automatically.
+- Support bundles include bounded tail snapshots of the current app and audit logs, controlled by `VOLUME_SUPPORT_BUNDLE_LOG_TAIL_LINES`.
 - Each CLI command runtime gets a correlation ID shared across app logs, audit logs, `--output` artifacts, and support bundles.
 - `VOLUME_HOST_ALLOW_PATHS` and `VOLUME_HOST_DENY_PATHS` accept absolute or relative paths, resolved at startup.
 - Path lists use `;` on Windows and `:` on Linux/macOS.
@@ -294,8 +296,8 @@ Each support bundle includes:
 - `doctor-report.json`
 - optional `backup-inspection.json`
 - optional `backup-artifact.manifest.json` when `--backup-path` points to a manifest-backed backup
-- optional current audit log snapshot
-- optional current log snapshot
+- optional current audit log tail snapshot
+- optional current log tail snapshot
 
 `inspect-support-bundle` validates:
 
