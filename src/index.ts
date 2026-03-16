@@ -268,6 +268,7 @@ const main = async (): Promise<void> => {
     .argument('<destinationPath>', 'Write the support bundle directory to this path')
     .argument('[volumeId]', 'Limit the doctor report to a specific volume id')
     .option('--backup-path <path>', 'Inspect this backup and include the report')
+    .option('--no-logs', 'Skip app and audit log snapshots inside the support bundle')
     .option('--json', 'Output the bundle summary as JSON')
     .option('--output <path>', 'Write the structured JSON result to this file')
     .option('--force', 'Overwrite an existing destination directory')
@@ -277,6 +278,7 @@ const main = async (): Promise<void> => {
         volumeId: string | undefined,
         options: {
           backupPath?: string;
+          noLogs?: boolean;
           json?: boolean;
           output?: string;
           force?: boolean;
@@ -288,6 +290,7 @@ const main = async (): Promise<void> => {
             destinationPath,
             volumeId,
             backupPath: options.backupPath,
+            includeLogs: !options.noLogs,
             overwrite: options.force,
           });
           const artifactPath = options.output

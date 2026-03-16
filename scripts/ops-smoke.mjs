@@ -104,6 +104,8 @@ const assertArtifactEnvelope = (artifact, expectedCommand, expectedVersion) => {
 };
 
 let sandboxRoot = null;
+let runtime = null;
+let validationRuntime = null;
 
 try {
   const packageJson = await readJson(packageJsonPath);
@@ -128,7 +130,7 @@ try {
   await fs.mkdir(backupsDir, { recursive: true });
   await fs.mkdir(reportsDir, { recursive: true });
 
-  const runtime = await createRuntime({
+  runtime = await createRuntime({
     dataDir: runtimePaths.dataDir,
     logDir: runtimePaths.logDir,
     logLevel: 'silent',
@@ -215,7 +217,7 @@ try {
     'Restore artifact should record manifest validation.',
   );
 
-  const validationRuntime = await createRuntime({
+  validationRuntime = await createRuntime({
     dataDir: runtimePaths.dataDir,
     logDir: runtimePaths.logDir,
     logLevel: 'silent',
@@ -434,6 +436,12 @@ try {
   process.stderr.write(`${message}\n`);
   process.exitCode = 1;
 } finally {
+  if (validationRuntime) {
+    await validationRuntime.close().catch(() => undefined);
+  }
+  if (runtime) {
+    await runtime.close().catch(() => undefined);
+  }
   if (sandboxRoot) {
     await fs.rm(sandboxRoot, { recursive: true, force: true }).catch(() => undefined);
   }

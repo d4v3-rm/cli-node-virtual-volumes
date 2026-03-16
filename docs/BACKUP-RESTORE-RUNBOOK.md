@@ -139,8 +139,9 @@ Per escalation o handoff verso supporto tecnico:
 
 1. Esegui `virtual-volumes support-bundle <destinationPath> [volumeId]`.
 2. Se stai lavorando su un restore o un backup sospetto, aggiungi `--backup-path <backupPath>`.
-3. Esegui `virtual-volumes inspect-support-bundle <destinationPath>` per verificare integrita' e checksum del bundle.
-4. Condividi la cartella generata, che include `manifest.json`, `checksums.json`, `doctor-report.json`, eventuale `backup-inspection.json`, eventuale copia del manifest del backup e tail snapshot del log corrente.
+3. Se il bundle deve essere piu' facile da condividere, usa `--no-logs` per escludere gli snapshot app e audit.
+4. Esegui `virtual-volumes inspect-support-bundle <destinationPath>` per verificare integrita' e checksum del bundle.
+5. Condividi la cartella generata, che include `manifest.json`, `checksums.json`, `doctor-report.json`, eventuale `backup-inspection.json`, eventuale copia del manifest del backup e, se non esclusi, tail snapshot del log corrente.
 
 ## Restore drill periodico
 

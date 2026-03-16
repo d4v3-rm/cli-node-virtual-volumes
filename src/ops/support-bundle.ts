@@ -316,6 +316,7 @@ export const createSupportBundle = async (
   const destinationPath = path.resolve(input.destinationPath);
   const temporaryBundlePath = createTemporaryBundlePath(destinationPath);
   const backupPath = input.backupPath ? path.resolve(input.backupPath) : null;
+  const includeLogs = input.includeLogs ?? true;
 
   if ((await pathExists(destinationPath)) && !input.overwrite) {
     throw new VolumeError(
@@ -350,12 +351,14 @@ export const createSupportBundle = async (
 
     const currentLogPath = resolveAppLogFilePath(runtime.config);
     const currentAuditLogPath = resolveAuditLogFilePath(runtime.config);
-    const logSnapshotPath = (await pathExists(currentLogPath))
-      ? path.join(destinationPath, 'logs', path.basename(currentLogPath))
-      : null;
-    const auditLogSnapshotPath = (await pathExists(currentAuditLogPath))
-      ? path.join(destinationPath, 'audit', path.basename(currentAuditLogPath))
-      : null;
+    const logSnapshotPath =
+      includeLogs && (await pathExists(currentLogPath))
+        ? path.join(destinationPath, 'logs', path.basename(currentLogPath))
+        : null;
+    const auditLogSnapshotPath =
+      includeLogs && (await pathExists(currentAuditLogPath))
+        ? path.join(destinationPath, 'audit', path.basename(currentAuditLogPath))
+        : null;
 
     await writeJsonAtomic(
       path.join(temporaryBundlePath, 'doctor-report.json'),

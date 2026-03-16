@@ -223,6 +223,36 @@ describe('support bundle', () => {
     );
   });
 
+  it('omits log snapshots when support bundle creation disables them explicitly', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'No Logs Bundle' });
+    const bundlePath = path.join(runtime.config.dataDir, '..', 'no-logs-support-bundle');
+    const currentLogPath = resolveAppLogFilePath(runtime.config);
+    const currentAuditLogPath = resolveAuditLogFilePath(runtime.config);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/hello.txt', 'support bundle');
+    await fs.mkdir(path.dirname(currentLogPath), { recursive: true });
+    await fs.mkdir(path.dirname(currentAuditLogPath), { recursive: true });
+    await fs.writeFile(currentLogPath, 'should not be copied\n', 'utf8');
+    await fs.writeFile(currentAuditLogPath, 'should not be copied\n', 'utf8');
+
+    const result = await createSupportBundle(runtime, {
+      destinationPath: bundlePath,
+      volumeId: volume.id,
+      includeLogs: false,
+    });
+    const checksumManifest = JSON.parse(
+      await fs.readFile(result.checksumsPath, 'utf8'),
+    ) as SupportBundleChecksumManifest;
+
+    expect(result.logSnapshotPath).toBeNull();
+    expect(result.auditLogSnapshotPath).toBeNull();
+    expect(findBundleFileRecord(checksumManifest.files, 'log-snapshot')).toBeUndefined();
+    expect(
+      findBundleFileRecord(checksumManifest.files, 'audit-log-snapshot'),
+    ).toBeUndefined();
+  });
+
   it('rejects existing bundle destinations without overwrite', async () => {
     const runtime = await createIsolatedRuntime();
     const bundlePath = path.join(runtime.config.dataDir, '..', 'existing-support-bundle');

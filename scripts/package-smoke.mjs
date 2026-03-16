@@ -173,6 +173,7 @@ try {
         "const runtime = await createRuntime({ dataDir, logDir, logLevel: 'silent' });",
         "const volume = await runtime.volumeService.createVolume({ name: 'Package Smoke' });",
         "await runtime.volumeService.writeTextFile(volume.id, '/package.txt', 'package smoke ok');",
+        'await runtime.close();',
         'process.stdout.write(volume.id);',
       ].join(' '),
       dataDir,
