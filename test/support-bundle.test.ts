@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -116,6 +117,15 @@ describe('support bundle', () => {
     expect(result.checksumsPath).toBe(
       path.join(path.resolve(bundlePath), 'checksums.json'),
     );
+    expect(result.contentProfile).toMatchObject({
+      redacted: false,
+      includesAppLogSnapshot: true,
+      includesAuditLogSnapshot: true,
+      includesBackupInspection: true,
+      includesBackupManifestCopy: true,
+      sensitivity: 'restricted',
+      sharingRecommendation: 'internal-only',
+    });
     expect(result.auditLogSnapshotPath).not.toBeNull();
     expect(result.logSnapshotPath).not.toBeNull();
     expect(await fs.readFile(result.auditLogSnapshotPath!, 'utf8')).toContain(
@@ -221,6 +231,8 @@ describe('support bundle', () => {
     expect(await fs.readFile(result.auditLogSnapshotPath!, 'utf8')).toBe(
       'audit-2\naudit-3\n',
     );
+    expect(result.contentProfile.includesAppLogSnapshot).toBe(true);
+    expect(result.contentProfile.includesAuditLogSnapshot).toBe(true);
   });
 
   it('omits log snapshots when support bundle creation disables them explicitly', async () => {
@@ -247,10 +259,48 @@ describe('support bundle', () => {
 
     expect(result.logSnapshotPath).toBeNull();
     expect(result.auditLogSnapshotPath).toBeNull();
+    expect(result.contentProfile).toMatchObject({
+      includesAppLogSnapshot: false,
+      includesAuditLogSnapshot: false,
+      sensitivity: 'restricted',
+      sharingRecommendation: 'internal-only',
+    });
     expect(findBundleFileRecord(checksumManifest.files, 'log-snapshot')).toBeUndefined();
     expect(
       findBundleFileRecord(checksumManifest.files, 'audit-log-snapshot'),
     ).toBeUndefined();
+  });
+
+  it('classifies redacted bundles without logs as externally shareable', async () => {
+    const runtime = await createIsolatedRuntime({
+      redactSensitiveDetails: true,
+    });
+    const volume = await runtime.volumeService.createVolume({ name: 'Shareable Bundle' });
+    const bundlePath = path.join(runtime.config.dataDir, '..', 'shareable-support-bundle');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/hello.txt', 'share me');
+
+    const result = await createSupportBundle(runtime, {
+      destinationPath: bundlePath,
+      volumeId: volume.id,
+      includeLogs: false,
+    });
+    const inspection = await inspectSupportBundle(bundlePath);
+
+    expect(result.contentProfile).toMatchObject({
+      redacted: true,
+      includesAppLogSnapshot: false,
+      includesAuditLogSnapshot: false,
+      sensitivity: 'sanitized',
+      sharingRecommendation: 'external-shareable',
+    });
+    expect(inspection.contentProfile).toMatchObject({
+      redacted: true,
+      includesAppLogSnapshot: false,
+      includesAuditLogSnapshot: false,
+      sensitivity: 'sanitized',
+      sharingRecommendation: 'external-shareable',
+    });
   });
 
   it('rejects existing bundle destinations without overwrite', async () => {
@@ -318,6 +368,20 @@ describe('support bundle', () => {
       issueCount: 0,
       expectedFiles: 6,
       verifiedFiles: 6,
+      contentProfile: {
+        redacted: false,
+        includesAppLogSnapshot: true,
+        includesAuditLogSnapshot: true,
+        includesBackupInspection: true,
+        includesBackupManifestCopy: true,
+        sensitivity: 'restricted',
+        sharingRecommendation: 'internal-only',
+        sharingNotes: [
+          'Runtime metadata and embedded reports are not redacted.',
+          'Log snapshots are included and may contain sensitive operational context.',
+          'A backup manifest copy is included for artifact correlation and recovery review.',
+        ],
+      },
       issues: [],
     });
     expect(Date.parse(inspection.bundleCreatedAt ?? '')).not.toBeNaN();
@@ -352,6 +416,59 @@ describe('support bundle', () => {
     expect(inspection.verifiedFiles).toBe(3);
     expect(issueCodes).toContain('CHECKSUM_MISMATCH');
     expect(issueCodes).toContain('MISSING_BUNDLE_FILE');
+  });
+
+  it('inspects legacy support bundle manifests that do not include a content profile', async () => {
+    const runtime = await createIsolatedRuntime({
+      redactSensitiveDetails: true,
+    });
+    const volume = await runtime.volumeService.createVolume({ name: 'Legacy Bundle' });
+    const bundlePath = path.join(runtime.config.dataDir, '..', 'legacy-profile-support-bundle');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/hello.txt', 'legacy');
+
+    const bundle = await createSupportBundle(runtime, {
+      destinationPath: bundlePath,
+      volumeId: volume.id,
+      includeLogs: false,
+    });
+    const manifest = JSON.parse(
+      await fs.readFile(bundle.manifestPath, 'utf8'),
+    ) as Record<string, unknown>;
+    const checksumManifestPath = path.join(bundlePath, 'checksums.json');
+    const checksumManifest = JSON.parse(
+      await fs.readFile(checksumManifestPath, 'utf8'),
+    ) as SupportBundleChecksumManifest;
+
+    delete manifest.contentProfile;
+    const serializedManifest = JSON.stringify(manifest, null, 2);
+    await fs.writeFile(bundle.manifestPath, serializedManifest, 'utf8');
+
+    const manifestRecord = checksumManifest.files.find((file) => file.role === 'manifest');
+    expect(manifestRecord).toBeDefined();
+    if (manifestRecord) {
+      manifestRecord.bytes = Buffer.byteLength(serializedManifest, 'utf8');
+      manifestRecord.checksumSha256 = createHash('sha256')
+        .update(serializedManifest)
+        .digest('hex');
+    }
+
+    await fs.writeFile(
+      checksumManifestPath,
+      JSON.stringify(checksumManifest, null, 2),
+      'utf8',
+    );
+
+    const inspection = await inspectSupportBundle(bundlePath);
+
+    expect(inspection.healthy).toBe(true);
+    expect(inspection.contentProfile).toMatchObject({
+      redacted: true,
+      includesAppLogSnapshot: false,
+      includesAuditLogSnapshot: false,
+      sensitivity: 'sanitized',
+      sharingRecommendation: 'external-shareable',
+    });
   });
 
   it('redacts sensitive runtime paths in support bundle metadata when configured', async () => {
@@ -389,6 +506,15 @@ describe('support bundle', () => {
     expect(result.backupPath).toMatch(/^<redacted:/u);
     expect(result.backupPath).not.toBe(path.resolve(backupPath));
     expect(result.config.redactSensitiveDetails).toBe(true);
+    expect(result.contentProfile).toMatchObject({
+      redacted: true,
+      includesAppLogSnapshot: true,
+      includesAuditLogSnapshot: true,
+      includesBackupInspection: true,
+      includesBackupManifestCopy: true,
+      sensitivity: 'restricted',
+      sharingRecommendation: 'internal-only',
+    });
     expect(result.config.dataDir).toMatch(/^<redacted:/u);
     expect(result.config.logDir).toMatch(/^<redacted:/u);
     expect(result.config.auditLogDir).toMatch(/^<redacted:/u);

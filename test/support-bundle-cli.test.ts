@@ -34,6 +34,20 @@ describe('support bundle cli formatter', () => {
         'C:\\reports\\support-bundle\\backup-artifact.manifest.json',
       auditLogSnapshotPath: 'C:\\reports\\support-bundle\\audit\\audit.log',
       logSnapshotPath: 'C:\\reports\\support-bundle\\logs\\app.log',
+      contentProfile: {
+        redacted: false,
+        includesAppLogSnapshot: true,
+        includesAuditLogSnapshot: true,
+        includesBackupInspection: true,
+        includesBackupManifestCopy: true,
+        sensitivity: 'restricted',
+        sharingRecommendation: 'internal-only',
+        sharingNotes: [
+          'Runtime metadata and embedded reports are not redacted.',
+          'Log snapshots are included and may contain sensitive operational context.',
+          'A backup manifest copy is included for artifact correlation and recovery review.',
+        ],
+      },
       config: {
         auditLogDir: 'C:\\audit',
         auditLogLevel: 'info',
@@ -64,6 +78,8 @@ describe('support bundle cli formatter', () => {
         'Manifest: C:\\reports\\support-bundle\\manifest.json',
         'Checksums: C:\\reports\\support-bundle\\checksums.json',
         'Correlation ID: corr_support-bundle',
+        'Sensitivity: restricted',
+        'Sharing: internal-only',
         'Scope: volume-1',
         'Volumes checked: 1',
         'Issues detected: 0',
@@ -76,6 +92,10 @@ describe('support bundle cli formatter', () => {
         `CLI version: ${APP_VERSION}`,
         'Supported schema: 3',
         `Generated at: ${formatDateTime(result.generatedAt)}`,
+        'Sharing notes:',
+        '- Runtime metadata and embedded reports are not redacted.',
+        '- Log snapshots are included and may contain sensitive operational context.',
+        '- A backup manifest copy is included for artifact correlation and recovery review.',
       ].join('\n'),
     );
   });
@@ -100,6 +120,18 @@ describe('support bundle cli formatter', () => {
       backupManifestCopyPath: null,
       auditLogSnapshotPath: null,
       logSnapshotPath: null,
+      contentProfile: {
+        redacted: true,
+        includesAppLogSnapshot: false,
+        includesAuditLogSnapshot: false,
+        includesBackupInspection: false,
+        includesBackupManifestCopy: false,
+        sensitivity: 'sanitized',
+        sharingRecommendation: 'external-shareable',
+        sharingNotes: [
+          'Bundle metadata is redacted and log snapshots are excluded, which is suitable for broader sharing.',
+        ],
+      },
       config: {
         auditLogDir: '/tmp/audit',
         auditLogLevel: 'info',
@@ -126,6 +158,10 @@ describe('support bundle cli formatter', () => {
     expect(formatSupportBundleResult(result)).toContain('Scope: all volumes');
     expect(formatSupportBundleResult(result)).toContain(
       'Correlation ID: corr_support-bundle-all',
+    );
+    expect(formatSupportBundleResult(result)).toContain('Sensitivity: sanitized');
+    expect(formatSupportBundleResult(result)).toContain(
+      'Sharing: external-shareable',
     );
     expect(formatSupportBundleResult(result)).toContain(
       'Backup inspection: not included',
@@ -154,6 +190,18 @@ describe('support bundle cli formatter', () => {
       issueCount: 0,
       expectedFiles: 5,
       verifiedFiles: 5,
+      contentProfile: {
+        redacted: true,
+        includesAppLogSnapshot: false,
+        includesAuditLogSnapshot: false,
+        includesBackupInspection: true,
+        includesBackupManifestCopy: true,
+        sensitivity: 'sanitized',
+        sharingRecommendation: 'external-shareable',
+        sharingNotes: [
+          'Bundle metadata is redacted and log snapshots are excluded, which is suitable for broader sharing.',
+        ],
+      },
       issues: [],
     };
 
@@ -166,11 +214,15 @@ describe('support bundle cli formatter', () => {
         'Bundle version: 1',
         `Created with: ${APP_VERSION}`,
         'Bundle correlation ID: corr_bundle-inspect',
+        'Sensitivity: sanitized',
+        'Sharing: external-shareable',
         `Bundle created at: ${formatDateTime(result.bundleCreatedAt!)}`,
         'Scope: volume-1',
         'Verified files: 5/5',
         'Issues: 0',
         `Inspected at: ${formatDateTime(result.generatedAt)}`,
+        'Sharing notes:',
+        '- Bundle metadata is redacted and log snapshots are excluded, which is suitable for broader sharing.',
       ].join('\n'),
     );
   });
@@ -190,6 +242,7 @@ describe('support bundle cli formatter', () => {
       issueCount: 2,
       expectedFiles: 4,
       verifiedFiles: 3,
+      contentProfile: null,
       issues: [
         {
           code: 'MISSING_BUNDLE_FILE',
@@ -215,6 +268,10 @@ describe('support bundle cli formatter', () => {
     expect(formatSupportBundleInspectionResult(result)).toContain(
       'Bundle correlation ID: unknown',
     );
+    expect(formatSupportBundleInspectionResult(result)).toContain(
+      'Sensitivity: unknown',
+    );
+    expect(formatSupportBundleInspectionResult(result)).toContain('Sharing: unknown');
     expect(formatSupportBundleInspectionResult(result)).toContain(
       'Bundle created at: unknown',
     );

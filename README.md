@@ -294,6 +294,7 @@ For the full operational procedure, drills, and audit checklist, see [docs/BACKU
 Each support bundle includes:
 
 - `manifest.json` with runtime/config metadata
+- `contentProfile` in the manifest, with explicit sensitivity and sharing guidance
 - `correlationId` inside the support bundle manifest for log lookup
 - `checksums.json` with SHA-256 inventory for the generated files
 - `doctor-report.json`
@@ -308,6 +309,7 @@ Each support bundle includes:
 - manifest path consistency
 - checksum inventory structure
 - file size and SHA-256 integrity for the tracked files
+- bundle sensitivity and sharing metadata so operators can see whether the artifact is external-shareable or internal-only
 
 ## Node.js API
 
