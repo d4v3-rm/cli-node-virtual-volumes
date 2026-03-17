@@ -24,6 +24,11 @@ export const fitSingleLine = (value: string, width: number): string => {
   return truncate(normalized, Math.max(1, width));
 };
 
+export const fitAlignedLine = (value: string, width: number): string => {
+  const normalized = value.replace(/\t/g, '  ').trimEnd();
+  return truncate(normalized, Math.max(1, width));
+};
+
 export const wrapTextLines = (value: string, width: number): string[] => {
   const normalized = value.replace(/\s+/g, ' ').trim();
   const availableWidth = Math.max(1, width);

@@ -9,6 +9,7 @@ import type {
 import type { HostBrowserEntry } from '../src/ui/host-browser.js';
 import {
   buildAsciiMeter,
+  fitAlignedLine,
   fitSingleLine,
   formatPercentage,
   formatEntryRow,
@@ -39,6 +40,8 @@ describe('ui presenters', () => {
   it('normalizes and truncates single-line text', () => {
     expect(fitSingleLine('  hello   world  ', 40)).toBe('hello world');
     expect(fitSingleLine('alpha beta gamma delta', 10)).toBe('alpha b...');
+    expect(fitAlignedLine('Type    : report.txt   ', 40)).toBe('Type    : report.txt');
+    expect(fitAlignedLine('Updated : 15/04/26, 23:08', 16)).toBe('Updated : 15/...');
   });
 
   it('wraps text and renders ascii usage meters', () => {

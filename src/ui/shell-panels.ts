@@ -6,6 +6,7 @@ import type {
 import { formatBytes, formatDateTime } from '../utils/formatters.js';
 import {
   buildAsciiMeter,
+  fitAlignedLine,
   fitSingleLine,
   formatEntryRow,
   formatPercentage,
@@ -62,6 +63,11 @@ export interface ShortcutsPanelOptions {
   width: number;
 }
 
+interface InspectorField {
+  label: string;
+  value: string;
+}
+
 const getPathDepth = (virtualPath: string): number =>
   virtualPath === '/'
     ? 0
@@ -90,16 +96,36 @@ const buildInspectorFieldLines = (
   label: string,
   value: string,
   width: number,
+  labelWidth = label.length,
 ): string[] => {
   const safeWidth = Math.max(18, width);
-  const prefix = `${label}: `;
+  const safeLabelWidth = Math.max(label.length, labelWidth);
+  const prefix = `${label.padEnd(safeLabelWidth, ' ')} : `;
   const wrapped = wrapTextLines(value, Math.max(8, safeWidth - prefix.length));
 
   return wrapped.map((line, index) =>
-    fitSingleLine(
+    fitAlignedLine(
       `${index === 0 ? prefix : ' '.repeat(prefix.length)}${line}`,
       safeWidth,
     ),
+  );
+};
+
+const buildInspectorFieldTable = (
+  fields: InspectorField[],
+  width: number,
+): string[] => {
+  if (fields.length === 0) {
+    return [];
+  }
+
+  const labelWidth = fields.reduce(
+    (maxWidth, field) => Math.max(maxWidth, field.label.length),
+    0,
+  );
+
+  return fields.flatMap((field) =>
+    buildInspectorFieldLines(field.label, field.value, width, labelWidth),
   );
 };
 
@@ -117,8 +143,8 @@ const appendInspectorSection = (
     lines.push('');
   }
 
-  lines.push(fitSingleLine(`[ ${title} ]`, width));
-  lines.push(...sectionLines.map((line) => fitSingleLine(line, width)));
+  lines.push(fitAlignedLine(`[ ${title} ]`, width));
+  lines.push(...sectionLines.map((line) => fitAlignedLine(line, width)));
 };
 
 const buildCapacitySectionLines = (
@@ -129,15 +155,30 @@ const buildCapacitySectionLines = (
 ): string[] => {
   const meterWidth = Math.max(8, Math.min(18, width - 16));
 
-  return [
-    `Used: ${formatBytes(usedBytes)} / ${formatBytes(quotaBytes)}`,
-    `Free: ${formatBytes(remainingBytes)}`,
-    `Usage: ${buildAsciiMeter(usedBytes, quotaBytes, meterWidth)} ${formatPercentage(
-      usedBytes,
-      quotaBytes,
-    )}`,
-    `Headroom: ${getQuotaHealthLabel(remainingBytes, quotaBytes)}`,
-  ];
+  return buildInspectorFieldTable(
+    [
+      {
+        label: 'Used',
+        value: `${formatBytes(usedBytes)} / ${formatBytes(quotaBytes)}`,
+      },
+      {
+        label: 'Free',
+        value: formatBytes(remainingBytes),
+      },
+      {
+        label: 'Usage',
+        value: `${buildAsciiMeter(usedBytes, quotaBytes, meterWidth)} ${formatPercentage(
+          usedBytes,
+          quotaBytes,
+        )}`,
+      },
+      {
+        label: 'Headroom',
+        value: getQuotaHealthLabel(remainingBytes, quotaBytes),
+      },
+    ],
+    width,
+  );
 };
 
 const buildRuntimeSectionLines = (
@@ -151,12 +192,15 @@ const buildRuntimeSectionLines = (
       ? 'open'
       : `allow ${options.hostAllowPathCount} / deny ${options.hostDenyPathCount}`;
 
-  return [
-    ...buildInspectorFieldLines('Data root', options.dataDir, options.inspectorWidth),
-    ...buildInspectorFieldLines('Logs', options.logDir, options.inspectorWidth),
-    ...buildInspectorFieldLines('Audit', options.auditLogDir, options.inspectorWidth),
-    `Host policy: ${hostPolicy}`,
-  ];
+  return buildInspectorFieldTable(
+    [
+      { label: 'Data root', value: options.dataDir },
+      { label: 'Logs', value: options.logDir },
+      { label: 'Audit', value: options.auditLogDir },
+      { label: 'Host policy', value: hostPolicy },
+    ],
+    options.inspectorWidth,
+  );
 };
 
 export const buildInspectorPanelLabel = (
@@ -301,12 +345,15 @@ export const buildInspectorPanelContent = (
     appendInspectorSection(
       lines,
       'VOLUME',
-      [
-        ...buildInspectorFieldLines('Name', selectedVolume.name, options.inspectorWidth),
-        ...buildInspectorFieldLines('Id', selectedVolume.id, options.inspectorWidth),
-        `Revision: ${selectedVolume.revision}`,
-        `Entries: ${selectedVolume.entryCount}`,
-      ],
+      buildInspectorFieldTable(
+        [
+          { label: 'Name', value: selectedVolume.name },
+          { label: 'Id', value: selectedVolume.id },
+          { label: 'Revision', value: String(selectedVolume.revision) },
+          { label: 'Entries', value: String(selectedVolume.entryCount) },
+        ],
+        options.inspectorWidth,
+      ),
       options.inspectorWidth,
     );
     appendInspectorSection(
@@ -323,10 +370,13 @@ export const buildInspectorPanelContent = (
     appendInspectorSection(
       lines,
       'TIMING',
-      [
-        `Created: ${formatDateTime(selectedVolume.createdAt)}`,
-        `Updated: ${formatDateTime(selectedVolume.updatedAt)}`,
-      ],
+      buildInspectorFieldTable(
+        [
+          { label: 'Created', value: formatDateTime(selectedVolume.createdAt) },
+          { label: 'Updated', value: formatDateTime(selectedVolume.updatedAt) },
+        ],
+        options.inspectorWidth,
+      ),
       options.inspectorWidth,
     );
     appendInspectorSection(
@@ -355,25 +405,29 @@ export const buildInspectorPanelContent = (
   appendInspectorSection(
     lines,
     'VOLUME',
-    [
-      ...buildInspectorFieldLines(
-        'Name',
-        options.currentSnapshot.volume.name,
-        options.inspectorWidth,
-      ),
-      ...buildInspectorFieldLines(
-        'Path',
-        options.currentSnapshot.currentPath,
-        options.inspectorWidth,
-      ),
-      `Revision: ${options.currentSnapshot.volume.revision}`,
-      `Window: ${formatWindowSummary(
-        options.currentSnapshot.windowOffset,
-        options.currentSnapshot.windowOffset + options.currentSnapshot.entries.length,
-        options.currentSnapshot.totalEntries,
-      )}`,
-      `Depth: ${getPathDepth(options.currentSnapshot.currentPath)}`,
-    ],
+    buildInspectorFieldTable(
+      [
+        { label: 'Name', value: options.currentSnapshot.volume.name },
+        { label: 'Path', value: options.currentSnapshot.currentPath },
+        {
+          label: 'Revision',
+          value: String(options.currentSnapshot.volume.revision),
+        },
+        {
+          label: 'Window',
+          value: formatWindowSummary(
+            options.currentSnapshot.windowOffset,
+            options.currentSnapshot.windowOffset + options.currentSnapshot.entries.length,
+            options.currentSnapshot.totalEntries,
+          ),
+        },
+        {
+          label: 'Depth',
+          value: String(getPathDepth(options.currentSnapshot.currentPath)),
+        },
+      ],
+      options.inspectorWidth,
+    ),
     options.inspectorWidth,
   );
   appendInspectorSection(
@@ -399,15 +453,25 @@ export const buildInspectorPanelContent = (
     appendInspectorSection(
       lines,
       'SELECTION',
-      [
-        ...buildInspectorFieldLines('Name', options.selectedEntry.name, options.inspectorWidth),
-        `Type: ${options.selectedEntry.kind}`,
-        ...(options.selectedEntry.kind === 'file'
-          ? [`Size: ${formatBytes(options.selectedEntry.size)}`]
-          : ['Size: directory']),
-        `Updated: ${formatDateTime(options.selectedEntry.updatedAt)}`,
-        ...buildInspectorFieldLines('Path', options.selectedEntry.path, options.inspectorWidth),
-      ],
+      buildInspectorFieldTable(
+        [
+          { label: 'Name', value: options.selectedEntry.name },
+          { label: 'Type', value: options.selectedEntry.kind },
+          {
+            label: 'Size',
+            value:
+              options.selectedEntry.kind === 'file'
+                ? formatBytes(options.selectedEntry.size)
+                : 'directory',
+          },
+          {
+            label: 'Updated',
+            value: formatDateTime(options.selectedEntry.updatedAt),
+          },
+          { label: 'Path', value: options.selectedEntry.path },
+        ],
+        options.inspectorWidth,
+      ),
       options.inspectorWidth,
     );
   }
