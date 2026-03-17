@@ -12,6 +12,7 @@ const SENSITIVE_PATH_KEYS = new Set([
   'bundlePath',
   'checksumsPath',
   'currentHostPath',
+  'cwd',
   'dataDir',
   'databasePath',
   'deniedRoot',
@@ -60,6 +61,24 @@ export const redactFilesystemPath = (targetPath: string): string => {
 
   const digest = createHash('sha256').update(targetPath).digest('hex').slice(0, 8);
   return `<redacted:${getRedactedPathLabel(targetPath)}#${digest}>`;
+};
+
+export const redactOpaqueValue = (
+  targetValue: string,
+  label = 'value',
+): string => {
+  if (targetValue.startsWith(REDACTED_PREFIX) || targetValue.length === 0) {
+    return targetValue;
+  }
+
+  const digest = createHash('sha256').update(targetValue).digest('hex').slice(0, 8);
+  const normalizedLabel = label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, '-')
+    .replace(/^-+|-+$/gu, '');
+
+  return `<redacted:${normalizedLabel.length > 0 ? normalizedLabel : 'value'}#${digest}>`;
 };
 
 const sanitizeInternal = (
