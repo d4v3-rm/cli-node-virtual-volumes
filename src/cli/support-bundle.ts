@@ -1,8 +1,83 @@
 import type {
   SupportBundleInspectionResult,
+  SupportBundleSharingRecommendation,
   SupportBundleResult,
 } from '../domain/types.js';
 import { formatDateTime } from '../utils/formatters.js';
+
+const supportBundleSharingRecommendationRank: Record<
+  SupportBundleSharingRecommendation,
+  number
+> = {
+  'internal-only': 0,
+  'external-shareable': 1,
+};
+
+export interface SupportBundleSharingRequirementStatus {
+  required: SupportBundleSharingRecommendation;
+  satisfied: boolean;
+  message: string | null;
+}
+
+export const isSupportBundleSharingRecommendation = (
+  value: string,
+): value is SupportBundleSharingRecommendation =>
+  value === 'external-shareable' || value === 'internal-only';
+
+export const parseSupportBundleSharingRecommendation = (
+  value: string,
+): SupportBundleSharingRecommendation => {
+  if (isSupportBundleSharingRecommendation(value)) {
+    return value;
+  }
+
+  throw new Error(
+    `Unsupported support bundle sharing policy "${value}". Expected one of: external-shareable, internal-only.`,
+  );
+};
+
+export const evaluateSupportBundleSharingRequirement = (
+  result: Pick<SupportBundleInspectionResult, 'contentProfile'>,
+  required: SupportBundleSharingRecommendation,
+): SupportBundleSharingRequirementStatus => {
+  const actual = result.contentProfile?.sharingRecommendation;
+
+  if (!actual) {
+    return {
+      required,
+      satisfied: false,
+      message:
+        'Support bundle sharing guidance is unknown, so the required sharing policy cannot be verified.',
+    };
+  }
+
+  const satisfied =
+    supportBundleSharingRecommendationRank[actual] >=
+    supportBundleSharingRecommendationRank[required];
+
+  return {
+    required,
+    satisfied,
+    message: satisfied
+      ? null
+      : `Support bundle is recommended for ${actual} sharing, but ${required} was required.`,
+  };
+};
+
+export const formatSupportBundleSharingRequirementStatus = (
+  status: SupportBundleSharingRequirementStatus,
+): string => {
+  const lines = [
+    `Required sharing: ${status.required}`,
+    `Policy gate: ${status.satisfied ? 'PASSED' : 'FAILED'}`,
+  ];
+
+  if (status.message) {
+    lines.push(`Policy note: ${status.message}`);
+  }
+
+  return lines.join('\n');
+};
 
 export const formatSupportBundleResult = (
   result: SupportBundleResult,

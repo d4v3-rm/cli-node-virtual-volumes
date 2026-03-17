@@ -259,7 +259,7 @@ The CLI exposes a full recovery workflow:
 | `virtual-volumes restore <backupPath> --force` | Replace an existing volume with rollback protection |
 | `virtual-volumes doctor [volumeId]` | Run consistency checks after restore |
 | `virtual-volumes support-bundle <destinationPath> [volumeId]` | Export doctor data, checksum inventory, runtime metadata, and log snapshot for support |
-| `virtual-volumes inspect-support-bundle <bundlePath>` | Verify support bundle metadata, required files, and checksums |
+| `virtual-volumes inspect-support-bundle <bundlePath>` | Verify support bundle metadata, required files, checksums, and sharing suitability |
 
 Recommended flow:
 
@@ -269,7 +269,7 @@ virtual-volumes inspect-backup ./backups/finance.sqlite
 virtual-volumes restore ./backups/finance.sqlite
 virtual-volumes doctor vol_finance_01
 virtual-volumes support-bundle ./reports/finance-support vol_finance_01 --backup-path ./backups/finance.sqlite
-virtual-volumes inspect-support-bundle ./reports/finance-support
+virtual-volumes inspect-support-bundle ./reports/finance-support --require-sharing internal-only
 ```
 
 For audit and automation, operational commands also support `--output <path>` to persist a structured JSON artifact with `command`, `cliVersion`, `correlationId`, `generatedAt`, and `payload`, while keeping the normal CLI output on stdout.
@@ -310,6 +310,8 @@ Each support bundle includes:
 - checksum inventory structure
 - file size and SHA-256 integrity for the tracked files
 - bundle sensitivity and sharing metadata so operators can see whether the artifact is external-shareable or internal-only
+
+Use `virtual-volumes inspect-support-bundle ... --require-sharing external-shareable` before an external handoff, or `--require-sharing internal-only` to ensure the bundle is at least safe for internal escalation.
 
 ## Node.js API
 

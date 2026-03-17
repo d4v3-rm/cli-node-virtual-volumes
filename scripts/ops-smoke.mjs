@@ -395,6 +395,8 @@ try {
     [
       'inspect-support-bundle',
       supportBundlePath,
+      '--require-sharing',
+      'internal-only',
       '--json',
       '--output',
       supportBundleInspectionPath,
@@ -409,6 +411,10 @@ try {
   assert(
     supportBundleInspection.healthy === true,
     'Support bundle inspection should report a healthy bundle.',
+  );
+  assert(
+    supportBundleInspection.contentProfile?.sharingRecommendation === 'internal-only',
+    'Support bundle inspection should expose the expected sharing recommendation.',
   );
   assertArtifactEnvelope(
     supportBundleInspectionArtifact,
