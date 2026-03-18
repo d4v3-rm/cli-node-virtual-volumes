@@ -100,7 +100,11 @@ const isSupportBundleChecksumManifest = (
 const isSupportBundleContentProfile = (
   value: unknown,
 ): value is SupportBundleContentProfile => {
-  if (!isRecord(value) || !Array.isArray(value.sharingNotes)) {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.sharingNotes) ||
+    !Array.isArray(value.disposalNotes)
+  ) {
     return false;
   }
 
@@ -113,7 +117,9 @@ const isSupportBundleContentProfile = (
     (value.sensitivity === 'sanitized' || value.sensitivity === 'restricted') &&
     (value.sharingRecommendation === 'external-shareable' ||
       value.sharingRecommendation === 'internal-only') &&
-    value.sharingNotes.every((entry) => typeof entry === 'string')
+    isNonNegativeNumber(value.recommendedRetentionDays) &&
+    value.sharingNotes.every((entry) => typeof entry === 'string') &&
+    value.disposalNotes.every((entry) => typeof entry === 'string')
   );
 };
 
@@ -176,6 +182,7 @@ const buildContentProfile = (options: {
   includesBackupManifestCopy: boolean;
 }): SupportBundleContentProfile => {
   const sharingNotes: string[] = [];
+  const disposalNotes: string[] = [];
 
   if (!options.redacted) {
     sharingNotes.push('Runtime metadata and embedded reports are not redacted.');
@@ -205,6 +212,25 @@ const buildContentProfile = (options: {
     !options.includesAuditLogSnapshot
       ? 'sanitized'
       : 'restricted';
+  const recommendedRetentionDays = sensitivity === 'sanitized' ? 30 : 7;
+
+  disposalNotes.push(
+    sensitivity === 'sanitized'
+      ? 'Delete this bundle when the diagnostic handoff or review window ends.'
+      : 'Delete this bundle after the incident or support escalation is closed.',
+  );
+
+  if (options.includesAppLogSnapshot || options.includesAuditLogSnapshot) {
+    disposalNotes.push(
+      'Purge embedded log snapshots together with the bundle; they are not intended for long-term archival.',
+    );
+  }
+
+  if (options.includesBackupManifestCopy) {
+    disposalNotes.push(
+      'Remove the copied backup manifest together with the bundle to avoid stale recovery metadata.',
+    );
+  }
 
   return {
     redacted: options.redacted,
@@ -215,7 +241,9 @@ const buildContentProfile = (options: {
     sensitivity,
     sharingRecommendation:
       sensitivity === 'sanitized' ? 'external-shareable' : 'internal-only',
+    recommendedRetentionDays,
     sharingNotes,
+    disposalNotes,
   };
 };
 

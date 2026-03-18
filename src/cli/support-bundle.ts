@@ -90,6 +90,7 @@ export const formatSupportBundleResult = (
     `Correlation ID: ${result.correlationId}`,
     `Sensitivity: ${result.contentProfile.sensitivity}`,
     `Sharing: ${result.contentProfile.sharingRecommendation}`,
+    `Retention: ${result.contentProfile.recommendedRetentionDays} days`,
     `Scope: ${result.volumeId ?? 'all volumes'}`,
     `Volumes checked: ${result.checkedVolumes}`,
     `Issues detected: ${result.issueCount}`,
@@ -114,6 +115,13 @@ export const formatSupportBundleResult = (
     );
   }
 
+  if (result.contentProfile.disposalNotes.length > 0) {
+    lines.push('Disposal notes:');
+    lines.push(
+      ...result.contentProfile.disposalNotes.map((note) => `- ${note}`),
+    );
+  }
+
   return lines.join('\n');
 };
 
@@ -130,6 +138,9 @@ export const formatSupportBundleInspectionResult = (
     `Bundle correlation ID: ${result.bundleCorrelationId ?? 'unknown'}`,
     `Sensitivity: ${result.contentProfile?.sensitivity ?? 'unknown'}`,
     `Sharing: ${result.contentProfile?.sharingRecommendation ?? 'unknown'}`,
+    `Retention: ${result.contentProfile?.recommendedRetentionDays ?? 'unknown'}${
+      result.contentProfile ? ' days' : ''
+    }`,
     `Bundle created at: ${
       result.bundleCreatedAt ? formatDateTime(result.bundleCreatedAt) : 'unknown'
     }`,
@@ -150,6 +161,13 @@ export const formatSupportBundleInspectionResult = (
     lines.push('Sharing notes:');
     lines.push(
       ...result.contentProfile.sharingNotes.map((note) => `- ${note}`),
+    );
+  }
+
+  if (result.contentProfile?.disposalNotes.length) {
+    lines.push('Disposal notes:');
+    lines.push(
+      ...result.contentProfile.disposalNotes.map((note) => `- ${note}`),
     );
   }
 

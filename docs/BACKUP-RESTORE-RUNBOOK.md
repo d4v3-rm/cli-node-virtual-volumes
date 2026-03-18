@@ -146,6 +146,7 @@ Per escalation o handoff verso supporto tecnico:
 7. Condividi la cartella generata, che include `manifest.json`, `checksums.json`, `doctor-report.json`, eventuale `backup-inspection.json`, eventuale copia del manifest del backup e, se non esclusi, tail snapshot del log corrente.
 8. Se usi `VOLUME_REDACT_SENSITIVE_DETAILS=true`, anche i report JSON interni del bundle vengono redatti prima della condivisione.
 9. Controlla il `contentProfile` del bundle o l'output di `inspect-support-bundle` per capire se l'artifact e' `external-shareable` oppure `internal-only`.
+10. Segui anche `recommendedRetentionDays` e le `disposalNotes` del bundle per evitare che artifact diagnostici restino in giro oltre il necessario.
 
 ## Restore drill periodico
 
