@@ -7,6 +7,7 @@ import path from 'node:path';
 import { APP_VERSION } from '../config/app-metadata.js';
 import { VolumeError } from '../domain/errors.js';
 import type {
+  StorageDoctorReport,
   CreateSupportBundleInput,
   SupportBundleChecksumManifest,
   SupportBundleContentProfile,
@@ -33,6 +34,7 @@ const SUPPORT_BUNDLE_FILE_ROLES: SupportBundleFileRole[] = [
   'backup-inspection',
   'backup-manifest',
   'doctor-report',
+  'handoff-report',
   'log-snapshot',
   'manifest',
 ];
@@ -146,6 +148,9 @@ const isSupportBundleResultLike = (
     typeof value.bundlePath === 'string' &&
     typeof value.manifestPath === 'string' &&
     typeof value.doctorReportPath === 'string' &&
+    (typeof value.handoffReportPath === 'string' ||
+      value.handoffReportPath === null ||
+      typeof value.handoffReportPath === 'undefined') &&
     isStringOrNull(value.backupInspectionReportPath) &&
     isStringOrNull(value.backupManifestCopyPath) &&
     typeof value.checksumsPath === 'string' &&
@@ -254,6 +259,9 @@ const coerceSupportBundleResult = (value: unknown): SupportBundleResult | null =
 
   return {
     ...value,
+    handoffReportPath: isStringOrNull(value.handoffReportPath)
+      ? value.handoffReportPath
+      : null,
     contentProfile: isSupportBundleContentProfile(value.contentProfile)
       ? value.contentProfile
       : buildContentProfile({
@@ -302,6 +310,13 @@ const getExpectedBundleFiles = (
     { path: manifest.doctorReportPath, role: 'doctor-report' },
   ];
 
+  if (manifest.handoffReportPath) {
+    files.push({
+      path: manifest.handoffReportPath,
+      role: 'handoff-report',
+    });
+  }
+
   if (manifest.backupInspectionReportPath) {
     files.push({
       path: manifest.backupInspectionReportPath,
@@ -331,6 +346,78 @@ const getExpectedBundleFiles = (
   }
 
   return files;
+};
+
+const toBundleRelativePath = (
+  bundlePath: string,
+  filePath: string | null,
+): string | null => {
+  if (!filePath) {
+    return null;
+  }
+
+  return path.relative(bundlePath, filePath).replace(/\\/g, '/');
+};
+
+const buildSupportBundleHandoffReport = (
+  result: SupportBundleResult,
+  doctorReport: StorageDoctorReport,
+): string => {
+  const lines = [
+    '# Support Bundle Handoff Report',
+    '',
+    '## Summary',
+    `- Status: ${result.healthy ? 'HEALTHY' : 'UNHEALTHY'}`,
+    `- Generated at: ${result.generatedAt}`,
+    `- Correlation ID: ${result.correlationId}`,
+    `- Scope: ${result.volumeId ?? 'all volumes'}`,
+    `- Volumes checked: ${result.checkedVolumes}`,
+    `- Issues detected: ${result.issueCount}`,
+    `- Sensitivity: ${result.contentProfile.sensitivity}`,
+    `- Sharing: ${result.contentProfile.sharingRecommendation}`,
+    `- Retention: ${result.contentProfile.recommendedRetentionDays} days`,
+    '',
+    '## Included Artifacts',
+    `- Doctor report: ${toBundleRelativePath(result.bundlePath, result.doctorReportPath) ?? 'not included'}`,
+    `- Backup inspection: ${toBundleRelativePath(result.bundlePath, result.backupInspectionReportPath) ?? 'not included'}`,
+    `- Backup manifest copy: ${toBundleRelativePath(result.bundlePath, result.backupManifestCopyPath) ?? 'not included'}`,
+    `- App log snapshot: ${toBundleRelativePath(result.bundlePath, result.logSnapshotPath) ?? 'not included'}`,
+    `- Audit log snapshot: ${toBundleRelativePath(result.bundlePath, result.auditLogSnapshotPath) ?? 'not included'}`,
+    '',
+    '## Findings',
+  ];
+
+  if (doctorReport.issueCount === 0) {
+    lines.push('- No storage issues were detected at bundle creation time.');
+  } else {
+    for (const volume of doctorReport.volumes) {
+      if (volume.issues.length === 0) {
+        continue;
+      }
+
+      lines.push(
+        `- ${volume.volumeName} (${volume.volumeId}): ${volume.issueCount} issue(s)`,
+      );
+      lines.push(
+        ...volume.issues.map((issue) => `  - [${issue.code}] ${issue.message}`),
+      );
+    }
+  }
+
+  lines.push('', '## Sharing Notes');
+  lines.push(...result.contentProfile.sharingNotes.map((note) => `- ${note}`));
+  lines.push('', '## Disposal Notes');
+  lines.push(...result.contentProfile.disposalNotes.map((note) => `- ${note}`));
+  lines.push('', '## Recommended Next Actions');
+  lines.push('- Run inspect-support-bundle before handoff to validate integrity.');
+  lines.push(
+    `- Enforce the intended audience with --require-sharing ${result.contentProfile.sharingRecommendation}.`,
+  );
+  lines.push(
+    '- Keep the bundle only for the recommended retention window, then remove it with its copied reports and snapshots.',
+  );
+
+  return `${lines.join('\n')}\n`;
 };
 
 const computeFileSha256 = async (filePath: string): Promise<string> =>
@@ -476,6 +563,7 @@ export const createSupportBundle = async (
       : null;
     const generatedAt = new Date().toISOString();
     const doctorReportPath = path.join(destinationPath, 'doctor-report.json');
+    const handoffReportPath = path.join(destinationPath, 'handoff-report.md');
     const backupInspectionReportPath = backupInspection
       ? path.join(destinationPath, 'backup-inspection.json')
       : null;
@@ -557,6 +645,7 @@ export const createSupportBundle = async (
       bundlePath: destinationPath,
       manifestPath: path.join(destinationPath, 'manifest.json'),
       doctorReportPath,
+      handoffReportPath,
       backupInspectionReportPath,
       backupManifestCopyPath,
       checksumsPath,
@@ -606,6 +695,18 @@ export const createSupportBundle = async (
       },
     };
 
+    await fs.writeFile(
+      path.join(temporaryBundlePath, 'handoff-report.md'),
+      buildSupportBundleHandoffReport(
+        result,
+        sanitizeObservabilityValue(
+          doctorReport,
+          runtime.config.redactSensitiveDetails,
+        ),
+      ),
+      'utf8',
+    );
+
     await writeJsonAtomic(path.join(temporaryBundlePath, 'manifest.json'), result);
 
     const files: SupportBundleFileRecord[] = [
@@ -622,6 +723,14 @@ export const createSupportBundle = async (
         temporaryBundlePath,
         path.join(temporaryBundlePath, 'doctor-report.json'),
         'doctor-report',
+        null,
+        runtime.config.redactSensitiveDetails,
+      ),
+      await buildBundleFileRecord(
+        destinationPath,
+        temporaryBundlePath,
+        path.join(temporaryBundlePath, 'handoff-report.md'),
+        'handoff-report',
         null,
         runtime.config.redactSensitiveDetails,
       ),
@@ -945,6 +1054,7 @@ export const inspectSupportBundle = async (
     bundleCorrelationId: manifest?.correlationId ?? null,
     bundleCreatedAt: manifest?.generatedAt ?? checksumManifest?.generatedAt ?? null,
     volumeId: manifest?.volumeId ?? null,
+    handoffReportPath: manifest?.handoffReportPath ?? null,
     issueCount: issues.length,
     expectedFiles: checksumManifest?.files.length ?? 0,
     verifiedFiles,

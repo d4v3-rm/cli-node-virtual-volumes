@@ -284,6 +284,11 @@ try {
     'Installed CLI support bundle should include a doctor report path.',
   );
   assert(
+    supportBundleManifest.handoffReportPath ===
+      path.join(path.resolve(supportBundlePath), 'handoff-report.md'),
+    'Installed CLI support bundle should include a handoff report path.',
+  );
+  assert(
     supportBundleManifest.checksumsPath ===
       path.join(path.resolve(supportBundlePath), 'checksums.json'),
     'Installed CLI support bundle should include a checksum manifest path.',
@@ -302,11 +307,15 @@ try {
     'Installed CLI support bundle should include a copied audit log snapshot.',
   );
   assert(
+    await pathExists(supportBundleManifest.handoffReportPath),
+    'Installed CLI support bundle should include a handoff report.',
+  );
+  assert(
     supportBundleManifest.backupManifestCopyPath === null,
     'Installed CLI support bundle should not include a backup manifest copy without a backup path.',
   );
   assert(
-    Array.isArray(checksumManifest.files) && checksumManifest.files.length >= 3,
+    Array.isArray(checksumManifest.files) && checksumManifest.files.length >= 4,
     'Installed CLI support bundle should include checksum records.',
   );
 

@@ -177,6 +177,7 @@ export type SupportBundleFileRole =
   | 'backup-inspection'
   | 'backup-manifest'
   | 'doctor-report'
+  | 'handoff-report'
   | 'log-snapshot'
   | 'manifest';
 
@@ -359,6 +360,7 @@ export interface SupportBundleInspectionResult {
   bundleCorrelationId: string | null;
   bundleCreatedAt: string | null;
   volumeId: string | null;
+  handoffReportPath: string | null;
   issueCount: number;
   expectedFiles: number;
   verifiedFiles: number;
@@ -380,6 +382,7 @@ export interface SupportBundleResult {
   bundlePath: string;
   manifestPath: string;
   doctorReportPath: string;
+  handoffReportPath: string | null;
   backupInspectionReportPath: string | null;
   backupManifestCopyPath: string | null;
   checksumsPath: string;

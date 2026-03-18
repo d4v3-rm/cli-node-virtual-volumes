@@ -95,6 +95,7 @@ describe('support bundle', () => {
     const checksumManifest = JSON.parse(
       await fs.readFile(result.checksumsPath, 'utf8'),
     ) as SupportBundleChecksumManifest;
+    const handoffReport = await fs.readFile(result.handoffReportPath!, 'utf8');
     const copiedBackupManifest = JSON.parse(
       await fs.readFile(result.backupManifestCopyPath!, 'utf8'),
     ) as {
@@ -114,6 +115,9 @@ describe('support bundle', () => {
     expect(result.issueCount).toBe(0);
     expect(result.backupInspectionReportPath).not.toBeNull();
     expect(result.backupManifestCopyPath).not.toBeNull();
+    expect(result.handoffReportPath).toBe(
+      path.join(path.resolve(bundlePath), 'handoff-report.md'),
+    );
     expect(result.checksumsPath).toBe(
       path.join(path.resolve(bundlePath), 'checksums.json'),
     );
@@ -135,6 +139,10 @@ describe('support bundle', () => {
     expect(await fs.readFile(result.logSnapshotPath!, 'utf8')).toContain(
       'support bundle log',
     );
+    expect(handoffReport).toContain('# Support Bundle Handoff Report');
+    expect(handoffReport).toContain('- Sharing: internal-only');
+    expect(handoffReport).toContain('- Retention: 7 days');
+    expect(handoffReport).toContain('- Doctor report: doctor-report.json');
     expect(manifest).toEqual(result);
     expect(doctorReport).toMatchObject({
       healthy: true,
@@ -152,9 +160,10 @@ describe('support bundle', () => {
       checksumSha256: backupResult.checksumSha256,
     });
     expect(checksumManifest.bundlePath).toBe(path.resolve(bundlePath));
-    expect(checksumManifest.files).toHaveLength(6);
+    expect(checksumManifest.files).toHaveLength(7);
     const manifestRecord = findBundleFileRecord(checksumManifest.files, 'manifest');
     const doctorRecord = findBundleFileRecord(checksumManifest.files, 'doctor-report');
+    const handoffRecord = findBundleFileRecord(checksumManifest.files, 'handoff-report');
     const inspectionRecord = findBundleFileRecord(
       checksumManifest.files,
       'backup-inspection',
@@ -177,6 +186,10 @@ describe('support bundle', () => {
       relativePath: 'doctor-report.json',
     });
     expect(doctorRecord?.checksumSha256).toMatch(/^[0-9a-f]{64}$/u);
+    expect(handoffRecord).toMatchObject({
+      relativePath: 'handoff-report.md',
+    });
+    expect(handoffRecord?.checksumSha256).toMatch(/^[0-9a-f]{64}$/u);
     expect(inspectionRecord).toMatchObject({
       relativePath: 'backup-inspection.json',
     });
@@ -369,9 +382,10 @@ describe('support bundle', () => {
       bundleCliVersion: APP_VERSION,
       bundleCorrelationId: runtime.correlationId,
       volumeId: volume.id,
+      handoffReportPath: path.join(path.resolve(bundlePath), 'handoff-report.md'),
       issueCount: 0,
-      expectedFiles: 6,
-      verifiedFiles: 6,
+      expectedFiles: 7,
+      verifiedFiles: 7,
       contentProfile: {
         redacted: false,
         includesAppLogSnapshot: true,
@@ -422,8 +436,8 @@ describe('support bundle', () => {
     );
 
     expect(inspection.healthy).toBe(false);
-    expect(inspection.expectedFiles).toBe(4);
-    expect(inspection.verifiedFiles).toBe(3);
+    expect(inspection.expectedFiles).toBe(5);
+    expect(inspection.verifiedFiles).toBe(4);
     expect(issueCodes).toContain('CHECKSUM_MISMATCH');
     expect(issueCodes).toContain('MISSING_BUNDLE_FILE');
   });
