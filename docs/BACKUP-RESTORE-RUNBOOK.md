@@ -147,6 +147,7 @@ Per escalation o handoff verso supporto tecnico:
 8. Se usi `VOLUME_REDACT_SENSITIVE_DETAILS=true`, anche i report JSON interni del bundle vengono redatti prima della condivisione.
 9. Controlla il `contentProfile` del bundle o l'output di `inspect-support-bundle` per capire se l'artifact e' `external-shareable` oppure `internal-only`.
 10. Segui anche `recommendedRetentionDays` e le `disposalNotes` del bundle per evitare che artifact diagnostici restino in giro oltre il necessario.
+11. Se `inspect-support-bundle` segnala che la retention e' stata superata, rigenera il bundle prima dell'handoff invece di condividere un artifact stantio.
 
 ## Restore drill periodico
 
