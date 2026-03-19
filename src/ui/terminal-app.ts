@@ -171,6 +171,15 @@ const ICONS = {
   volume: '*',
 } as const;
 
+export interface TerminalUiFactory {
+  box: (options: Widgets.BoxOptions) => Widgets.BoxElement;
+  list: (options: Widgets.ListOptions<Widgets.ListElementStyle>) => Widgets.ListElement;
+  screen: (options: Widgets.IScreenOptions) => Widgets.Screen;
+  textbox: (options: Widgets.TextboxOptions) => Widgets.TextboxElement;
+}
+
+const DEFAULT_TERMINAL_UI_FACTORY: TerminalUiFactory = blessed;
+
 export class TerminalApp {
   private readonly screen: Widgets.Screen;
 
@@ -224,52 +233,55 @@ export class TerminalApp {
 
   private destroyed = false;
 
-  public constructor(private readonly runtime: AppRuntime) {
+  public constructor(
+    private readonly runtime: AppRuntime,
+    private readonly uiFactory: TerminalUiFactory = DEFAULT_TERMINAL_UI_FACTORY,
+  ) {
     const widgetSpecs = buildShellWidgetSpecs(THEME);
 
-    this.screen = blessed.screen(buildScreenOptions());
+    this.screen = this.uiFactory.screen(buildScreenOptions());
 
-    this.headerBox = blessed.box({
+    this.headerBox = this.uiFactory.box({
       parent: this.screen,
       ...widgetSpecs.headerBox,
     });
 
-    this.leftPane = blessed.box({
+    this.leftPane = this.uiFactory.box({
       parent: this.screen,
       ...widgetSpecs.leftPane,
     });
 
-    this.primaryList = blessed.list({
+    this.primaryList = this.uiFactory.list({
       parent: this.leftPane,
       ...widgetSpecs.primaryList,
     });
 
-    this.rightPane = blessed.box({
+    this.rightPane = this.uiFactory.box({
       parent: this.screen,
       ...widgetSpecs.rightPane,
     });
 
-    this.inspectorBox = blessed.box({
+    this.inspectorBox = this.uiFactory.box({
       parent: this.rightPane,
       ...widgetSpecs.inspectorBox,
     });
 
-    this.shortcutsBox = blessed.box({
+    this.shortcutsBox = this.uiFactory.box({
       parent: this.screen,
       ...widgetSpecs.shortcutsBox,
     });
 
-    this.statusBox = blessed.box({
+    this.statusBox = this.uiFactory.box({
       parent: this.screen,
       ...widgetSpecs.statusBox,
     });
 
-    this.overlayBackdrop = blessed.box({
+    this.overlayBackdrop = this.uiFactory.box({
       parent: this.screen,
       ...widgetSpecs.overlayBackdrop,
     });
 
-    this.overlayContainer = blessed.box({
+    this.overlayContainer = this.uiFactory.box({
       parent: this.screen,
       ...widgetSpecs.overlayContainer,
     });
@@ -878,7 +890,7 @@ export class TerminalApp {
         }),
       );
 
-      const headerBox = blessed.box({
+      const headerBox = this.uiFactory.box({
         parent: this.overlayContainer,
         top: 1,
         left: 2,
@@ -890,7 +902,7 @@ export class TerminalApp {
         },
       });
 
-      const browserPane = blessed.box({
+      const browserPane = this.uiFactory.box({
         parent: this.overlayContainer,
         top: 4,
         left: 1,
@@ -907,7 +919,7 @@ export class TerminalApp {
         },
       });
 
-      const browserList = blessed.list({
+      const browserList = this.uiFactory.list({
         parent: browserPane,
         top: 1,
         left: 1,
@@ -937,7 +949,7 @@ export class TerminalApp {
         },
       });
 
-      const summaryPane = blessed.box({
+      const summaryPane = this.uiFactory.box({
         parent: this.overlayContainer,
         top: 4,
         right: 1,
@@ -954,7 +966,7 @@ export class TerminalApp {
         },
       });
 
-      const summaryBox = blessed.box({
+      const summaryBox = this.uiFactory.box({
         parent: summaryPane,
         top: 1,
         left: 1,
@@ -975,7 +987,7 @@ export class TerminalApp {
         },
       });
 
-      const footerBox = blessed.box({
+      const footerBox = this.uiFactory.box({
         parent: this.overlayContainer,
         left: 2,
         right: 2,
@@ -1600,7 +1612,7 @@ export class TerminalApp {
     layout: OverlayRegionLayout,
     options: Widgets.BoxOptions,
   ): Widgets.BoxElement {
-    return blessed.box({
+    return this.uiFactory.box({
       parent: this.overlayContainer,
       ...layout,
       ...options,
@@ -1611,7 +1623,7 @@ export class TerminalApp {
     layout: OverlayRegionLayout,
     options: Widgets.TextboxOptions,
   ): Widgets.TextboxElement {
-    return blessed.textbox({
+    return this.uiFactory.textbox({
       parent: this.overlayContainer,
       ...layout,
       ...options,

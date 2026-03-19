@@ -28,6 +28,35 @@ const pathExists = async (targetPath) => {
 const readJson = async (filePath) =>
   JSON.parse(await fs.readFile(filePath, 'utf8'));
 
+const parseTrailingJson = (value) => {
+  const trimmed = value.trim();
+  const arrayStart = trimmed.lastIndexOf('\n[');
+  const objectStart = trimmed.lastIndexOf('\n{');
+  const jsonStartCandidates = [trimmed.startsWith('[') || trimmed.startsWith('{') ? 0 : -1];
+
+  if (arrayStart >= 0) {
+    jsonStartCandidates.push(arrayStart + 1);
+  }
+
+  if (objectStart >= 0) {
+    jsonStartCandidates.push(objectStart + 1);
+  }
+
+  for (const jsonStart of jsonStartCandidates.sort((left, right) => right - left)) {
+    if (jsonStart < 0) {
+      continue;
+    }
+
+    try {
+      return JSON.parse(trimmed.slice(jsonStart));
+    } catch {
+      // Fall through and try the next candidate.
+    }
+  }
+
+  return JSON.parse(trimmed);
+};
+
 const quoteWindowsArg = (value) => {
   if (value.length === 0) {
     return '""';
@@ -98,7 +127,7 @@ const resolveTarballPath = async () => {
   }
 
   const packRun = runCommand(npmCommand, ['pack', '--json']);
-  const packResults = JSON.parse(packRun.stdout);
+  const packResults = parseTrailingJson(packRun.stdout);
   const packedFile = packResults.at(0)?.filename;
 
   assert(typeof packedFile === 'string', 'npm pack did not produce a tarball.');
