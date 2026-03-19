@@ -176,6 +176,7 @@ export class VolumeService {
       directoriesImported: 0,
       bytesImported: 0,
       conflictsResolved: 0,
+      integrityChecksPassed: 0,
     };
     const traversalContext: ImportTraversalContext = {
       processedNodes: 0,
@@ -230,6 +231,7 @@ export class VolumeService {
       directoriesExported: 0,
       bytesExported: 0,
       conflictsResolved: 0,
+      integrityChecksPassed: 0,
     };
     const traversalContext: ExportTraversalContext = {
       processedNodes: 0,
@@ -554,11 +556,11 @@ export class VolumeService {
 
       const descriptor = await blobStore.putHostFile(absoluteHostPath, {
         totalBytes: hostEntryStats.size,
-        onProgress: ({ bytesTransferred, totalBytes }) => {
+        onProgress: ({ bytesTransferred, totalBytes, phase }) => {
           this.emitImportProgress(
             traversalContext,
             absoluteHostPath,
-            'file',
+            phase === 'integrity' ? 'integrity' : 'file',
             summary,
             bytesTransferred,
             totalBytes,
@@ -577,10 +579,11 @@ export class VolumeService {
 
       summary.filesImported += 1;
       summary.bytesImported += descriptor.size;
+      summary.integrityChecksPassed += 1;
       await this.reportImportProgress(
         traversalContext,
         absoluteHostPath,
-        'file',
+        'integrity',
         summary,
         descriptor.size,
         descriptor.size,
@@ -656,12 +659,12 @@ export class VolumeService {
 
     await blobStore.exportBlobToHost(entry.contentRef, destinationFilePath, {
       totalBytes: entry.size,
-      onProgress: ({ bytesTransferred, totalBytes }) => {
+      onProgress: ({ bytesTransferred, totalBytes, phase }) => {
         this.emitExportProgress(
           traversalContext,
           sourceVirtualPath,
           destinationFilePath,
-          'file',
+          phase === 'integrity' ? 'integrity' : 'file',
           summary,
           bytesTransferred,
           totalBytes,
@@ -671,11 +674,12 @@ export class VolumeService {
 
     summary.filesExported += 1;
     summary.bytesExported += entry.size;
+    summary.integrityChecksPassed += 1;
     await this.reportExportProgress(
       traversalContext,
       sourceVirtualPath,
       destinationFilePath,
-      'file',
+      'integrity',
       summary,
       entry.size,
       entry.size,
