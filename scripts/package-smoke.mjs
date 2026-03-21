@@ -150,7 +150,10 @@ try {
   const runtimeRoot = path.join(sandboxRoot, 'runtime');
   const dataDir = path.join(runtimeRoot, 'data');
   const logDir = path.join(runtimeRoot, 'logs');
+  const backupsDir = path.join(runtimeRoot, 'backups');
   const doctorArtifactPath = path.join(runtimeRoot, 'doctor-report.json');
+  const backupArtifactPath = path.join(runtimeRoot, 'backup-report.json');
+  const restoreDrillArtifactPath = path.join(runtimeRoot, 'restore-drill-report.json');
   const supportBundlePath = path.join(runtimeRoot, 'support-bundle');
   const supportBundleSummaryPath = path.join(
     runtimeRoot,
@@ -162,6 +165,7 @@ try {
   );
 
   await fs.mkdir(consumerRoot, { recursive: true });
+  await fs.mkdir(backupsDir, { recursive: true });
 
   const consumerTarballPath = path.join(consumerRoot, path.basename(tarballPath));
   await fs.copyFile(tarballPath, consumerTarballPath);
@@ -258,6 +262,76 @@ try {
   assert(
     doctorArtifact.payload.volumes?.[0]?.volumeId === volumeId,
     'Installed CLI artifact should reference the smoke-test volume.',
+  );
+
+  const backupPath = path.join(backupsDir, 'package-smoke.sqlite');
+  const backupRun = runCommand(
+    process.execPath,
+    [
+      installedCliPath,
+      '--data-dir',
+      dataDir,
+      '--log-dir',
+      logDir,
+      '--log-level',
+      'silent',
+      'backup',
+      volumeId,
+      backupPath,
+      '--json',
+      '--output',
+      backupArtifactPath,
+    ],
+    { cwd: consumerRoot },
+  );
+  const backupPayload = JSON.parse(backupRun.stdout);
+  const backupArtifact = await readJson(backupArtifactPath);
+
+  assert(
+    backupPayload.volumeId === volumeId,
+    'Installed CLI backup command should target the smoke-test volume.',
+  );
+  assert(
+    backupArtifact.command === 'backup',
+    'Installed CLI backup artifact should include the command metadata.',
+  );
+
+  const restoreDrillRun = runCommand(
+    process.execPath,
+    [
+      installedCliPath,
+      '--data-dir',
+      dataDir,
+      '--log-dir',
+      logDir,
+      '--log-level',
+      'silent',
+      'restore-drill',
+      backupPath,
+      '--json',
+      '--output',
+      restoreDrillArtifactPath,
+    ],
+    { cwd: consumerRoot },
+  );
+  const restoreDrillPayload = JSON.parse(restoreDrillRun.stdout);
+  const restoreDrillArtifact = await readJson(restoreDrillArtifactPath);
+
+  assert(
+    restoreDrillPayload.healthy === true,
+    'Installed CLI restore-drill command should report a healthy isolated restore.',
+  );
+  assert(
+    restoreDrillArtifact.command === 'restore-drill',
+    'Installed CLI restore-drill artifact should include the command metadata.',
+  );
+  assert(
+    restoreDrillArtifact.payload.restore.volumeId === volumeId,
+    'Installed CLI restore-drill artifact should reference the smoke-test volume.',
+  );
+  assert(
+    restoreDrillArtifact.payload.sandboxPath === null,
+    'Installed CLI restore-drill should clean its sandbox by default.',
   );
 
   const supportBundleRun = runCommand(
@@ -395,7 +469,7 @@ try {
   );
 
   process.stdout.write(
-    `[package-smoke] installed ${path.basename(tarballPath)} and verified package import + CLI doctor + support bundle + support bundle inspection flows\n`,
+    `[package-smoke] installed ${path.basename(tarballPath)} and verified package import + CLI backup + restore drill + doctor + support bundle + support bundle inspection flows\n`,
   );
 } catch (error) {
   const message =

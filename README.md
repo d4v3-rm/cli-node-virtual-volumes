@@ -255,6 +255,7 @@ The CLI exposes a full recovery workflow:
 | --- | --- |
 | `virtual-volumes backup <volumeId> <destinationPath>` | Create a consistent SQLite snapshot |
 | `virtual-volumes inspect-backup <backupPath>` | Validate the backup artifact before restore |
+| `virtual-volumes restore-drill <backupPath>` | Run an isolated inspect, restore, and doctor drill in a temporary sandbox |
 | `virtual-volumes restore <backupPath>` | Restore a volume from backup |
 | `virtual-volumes restore <backupPath> --force` | Replace an existing volume with rollback protection |
 | `virtual-volumes doctor [volumeId]` | Run consistency checks after restore |
@@ -266,6 +267,7 @@ Recommended flow:
 ```bash
 virtual-volumes backup vol_finance_01 ./backups/finance.sqlite
 virtual-volumes inspect-backup ./backups/finance.sqlite
+virtual-volumes restore-drill ./backups/finance.sqlite
 virtual-volumes restore ./backups/finance.sqlite
 virtual-volumes doctor vol_finance_01
 virtual-volumes support-bundle ./reports/finance-support vol_finance_01 --backup-path ./backups/finance.sqlite
@@ -288,6 +290,13 @@ Each standard backup produces:
 - sidecar consistency
 - `createdWithVersion` compatibility
 - `schemaVersion` compatibility
+
+`restore-drill` validates the recovery path end-to-end without touching live data:
+
+- runs `inspect-backup` first
+- restores the backup into an isolated temporary data directory
+- runs `doctor` on the restored copy
+- removes the sandbox automatically unless `--keep-sandbox` is used
 
 For the full operational procedure, drills, and audit checklist, see [docs/BACKUP-RESTORE-RUNBOOK.md](./docs/BACKUP-RESTORE-RUNBOOK.md).
 

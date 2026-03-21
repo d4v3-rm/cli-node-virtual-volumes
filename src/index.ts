@@ -5,6 +5,7 @@ import { loadAppConfig } from './config/env.js';
 import {
   formatBackupInspectionResult,
   formatBackupResult,
+  formatRestoreDrillResult,
   formatRestoreResult,
 } from './cli/backup.js';
 import { formatDoctorReport, formatRepairReport } from './cli/doctor.js';
@@ -16,6 +17,7 @@ import {
   formatSupportBundleInspectionResult,
   formatSupportBundleResult,
 } from './cli/support-bundle.js';
+import { runRestoreDrill } from './ops/restore-drill.js';
 import { createSupportBundle, inspectSupportBundle } from './ops/support-bundle.js';
 import { TerminalApp } from './ui/terminal-app.js';
 import { createCorrelationId } from './utils/correlation.js';
@@ -192,6 +194,55 @@ const main = async (): Promise<void> => {
               json: options.json,
             }),
           );
+        });
+      },
+    );
+
+  program
+    .command('restore-drill')
+    .description(
+      'Run an isolated inspect, restore, and doctor drill for a backup without touching the live data directory.',
+    )
+    .argument('<backupPath>', 'Run a restore drill against this backup snapshot')
+    .option('--json', 'Output the drill result as JSON')
+    .option('--output <path>', 'Write the structured JSON result to this file')
+    .option(
+      '--keep-sandbox',
+      'Preserve the temporary sandbox data directory after a successful drill',
+    )
+    .action(
+      async (
+        backupPath: string,
+        options: { json?: boolean; output?: string; keepSandbox?: boolean },
+      ) => {
+        await withRuntime(async (runtime) => {
+          const correlationId = runtime.correlationId;
+          const result = await runRestoreDrill(runtime, {
+            backupPath,
+            keepSandbox: options.keepSandbox,
+          });
+          const artifactPath = options.output
+            ? await writeCliJsonArtifact(
+                'restore-drill',
+                sanitizeArtifactPayload(result, runtime.config.redactSensitiveDetails),
+                options.output,
+                {
+                  correlationId,
+                },
+              )
+            : null;
+
+          console.log(
+            renderCliResult(result, formatRestoreDrillResult, {
+              artifactPath,
+              correlationId,
+              json: options.json,
+            }),
+          );
+
+          if (!result.healthy) {
+            process.exitCode = 1;
+          }
         });
       },
     );

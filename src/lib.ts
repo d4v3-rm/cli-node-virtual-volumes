@@ -4,6 +4,7 @@ export type { AppRuntime } from './bootstrap/create-runtime.js';
 export { loadAppConfig } from './config/env.js';
 export type { AppConfig, RuntimeOverrides } from './config/env.js';
 export { VolumeError, isVolumeError } from './domain/errors.js';
+export { runRestoreDrill } from './ops/restore-drill.js';
 export { createSupportBundle, inspectSupportBundle } from './ops/support-bundle.js';
 export type {
   CreateSupportBundleInput,
@@ -38,6 +39,7 @@ export type {
   SupportBundleResult,
   VolumeBackupResult,
   VolumeManifest,
+  VolumeRestoreDrillResult,
   VolumeRestoreResult,
 } from './domain/types.js';
 export { formatBytes, formatDateTime } from './utils/formatters.js';

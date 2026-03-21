@@ -78,6 +78,19 @@ La preflight valida:
 
 Se uno di questi controlli fallisce, il restore non va eseguito.
 
+Per una prova sicura e ripetibile del recovery path senza toccare il data dir live, usa anche:
+
+```bash
+virtual-volumes restore-drill <backupPath>
+```
+
+Il drill:
+
+1. esegue `inspect-backup`
+2. ripristina il backup in un data dir temporaneo isolato
+3. esegue `doctor` sul volume ripristinato
+4. rimuove il sandbox al termine, a meno che non venga richiesto `--keep-sandbox`
+
 ## Restore standard
 
 Usa il restore standard quando il volume target non esiste piu' nel data directory:
@@ -123,8 +136,9 @@ Per un backup di routine:
 
 1. Esegui `virtual-volumes backup`.
 2. Esegui subito `virtual-volumes inspect-backup`.
-3. Se serve audit operativo, aggiungi `--output <path>` per salvare l'artifact JSON del comando.
-4. Conserva insieme `.sqlite` e `.manifest.json`.
+3. Esegui `virtual-volumes restore-drill` quando vuoi verificare il recovery path senza toccare i dati live.
+4. Se serve audit operativo, aggiungi `--output <path>` per salvare l'artifact JSON del comando.
+5. Conserva insieme `.sqlite` e `.manifest.json`.
 
 Per un restore di emergenza:
 
@@ -155,8 +169,8 @@ Per alzare davvero la readiness operativa, pianifica un drill regolare:
 
 1. crea un backup di un volume reale
 2. verifica il backup con `inspect-backup`
-3. ripristina in un ambiente di test
-4. esegui `doctor`
+3. esegui `restore-drill`
+4. se il drill deve essere investigabile, ripeti con `restore-drill --keep-sandbox`
 5. verifica contenuti, revision e file chiave
 
 ## Cosa conservare in audit

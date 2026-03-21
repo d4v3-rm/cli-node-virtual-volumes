@@ -2,6 +2,7 @@ import { formatDateTime } from '../utils/formatters.js';
 import type {
   VolumeBackupInspectionResult,
   VolumeBackupResult,
+  VolumeRestoreDrillResult,
   VolumeRestoreResult,
 } from '../domain/types.js';
 
@@ -50,4 +51,21 @@ export const formatBackupInspectionResult = (
     `SHA-256: ${result.checksumSha256}`,
     `Bytes written: ${result.bytesWritten}`,
     `Created at: ${result.createdAt ? formatDateTime(result.createdAt) : 'unknown'}`,
+  ].join('\n');
+
+export const formatRestoreDrillResult = (
+  result: VolumeRestoreDrillResult,
+): string =>
+  [
+    `Restore drill: ${result.healthy ? 'PASSED' : 'FAILED'}`,
+    `Volume: ${result.restore.volumeName} (${result.restore.volumeId})`,
+    `Revision: ${result.restore.revision}`,
+    `Schema version: ${result.restore.schemaVersion}`,
+    `Backup path: ${result.backupPath}`,
+    `Artifact validation: ${result.inspection.validatedWithManifest ? 'PASSED' : 'SKIPPED'}`,
+    `Bytes restored: ${result.restore.bytesRestored}`,
+    `Doctor result: ${result.doctor.healthy ? 'HEALTHY' : 'UNHEALTHY'}`,
+    `Doctor issues: ${result.doctor.issueCount}`,
+    `Sandbox: ${result.sandboxPath ?? 'cleaned automatically'}`,
+    `Drill completed at: ${formatDateTime(result.generatedAt)}`,
   ].join('\n');
