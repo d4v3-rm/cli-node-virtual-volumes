@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createRuntime } from '../src/bootstrap/create-runtime.js';
 import type { AppRuntime } from '../src/bootstrap/create-runtime.js';
 import { resolveAppLogFilePath, resolveAuditLogFilePath } from '../src/logging/logger.js';
+import { runRestoreDrill } from '../src/ops/restore-drill.js';
 
 const sandboxes: string[] = [];
 const runtimes: AppRuntime[] = [];
@@ -199,5 +200,37 @@ describe('audit log', () => {
     expect(appLogRaw).toContain('<redacted:');
     expect(appLogRaw).not.toContain(importHostPath);
     expect(appLogRaw).not.toContain(exportRoot);
+  });
+
+  it('records structured success entries for restore drills', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Audit Drill' });
+    const backupPath = path.join(runtime.config.dataDir, '..', 'audit-drill.sqlite');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/payload.txt', 'audit drill');
+    await runtime.volumeService.backupVolume(volume.id, backupPath);
+    await runRestoreDrill(runtime, { backupPath });
+
+    const auditEntries = await readJsonLogEntries(resolveAuditLogFilePath(runtime.config));
+    const restoreDrillEntry = auditEntries.find(
+      (entry) =>
+        entry.eventType === 'volume.restore.drill' &&
+        entry.outcome === 'success',
+    ) as
+      | {
+          backupPath?: string;
+          issueCount?: number;
+          keptSandbox?: boolean;
+          resourceType?: string;
+          volumeId?: string;
+        }
+      | undefined;
+
+    expect(restoreDrillEntry).toBeDefined();
+    expect(restoreDrillEntry?.resourceType).toBe('backup');
+    expect(restoreDrillEntry?.volumeId).toBe(volume.id);
+    expect(restoreDrillEntry?.backupPath).toBe(path.resolve(backupPath));
+    expect(restoreDrillEntry?.issueCount).toBe(0);
+    expect(restoreDrillEntry?.keptSandbox).toBe(false);
   });
 });
