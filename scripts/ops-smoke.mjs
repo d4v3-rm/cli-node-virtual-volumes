@@ -257,6 +257,42 @@ try {
     'Restored volume content did not match the backup snapshot.',
   );
 
+  const compactReportPath = path.join(reportsDir, 'compact-report.json');
+  const compactRun = runCli(
+    ['compact', volume.id, '--json', '--output', compactReportPath],
+    runtimePaths,
+  );
+  const compactResult = JSON.parse(compactRun.stdout);
+  const compactArtifact = await readJson(compactReportPath);
+
+  assert(
+    compactResult.volumeId === volume.id,
+    'Compaction stdout payload should target the restored volume.',
+  );
+  assertArtifactEnvelope(compactArtifact, 'compact', packageJson.version);
+  assert(
+    compactArtifact.payload.volumeId === volume.id,
+    'Compaction artifact should target the restored volume.',
+  );
+  assert(
+    Number.isInteger(compactArtifact.payload.bytesBefore) &&
+      compactArtifact.payload.bytesBefore >= 0,
+    'Compaction artifact should report a non-negative bytesBefore value.',
+  );
+  assert(
+    Number.isInteger(compactArtifact.payload.bytesAfter) &&
+      compactArtifact.payload.bytesAfter >= 0,
+    'Compaction artifact should report a non-negative bytesAfter value.',
+  );
+  assert(
+    compactArtifact.payload.reclaimedBytes ===
+      Math.max(
+        0,
+        compactArtifact.payload.bytesBefore - compactArtifact.payload.bytesAfter,
+      ),
+    'Compaction artifact should report reclaimed bytes consistently.',
+  );
+
   const doctorReportPath = path.join(reportsDir, 'doctor-report.json');
   const doctorRun = runCli(
     ['doctor', volume.id, '--output', doctorReportPath],

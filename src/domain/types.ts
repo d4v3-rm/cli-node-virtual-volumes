@@ -221,6 +221,18 @@ export interface VolumeRestoreDrillResult {
   doctor: StorageDoctorReport;
 }
 
+export interface VolumeCompactionResult {
+  volumeId: string;
+  volumeName: string;
+  revision: number;
+  schemaVersion: number;
+  databasePath: string;
+  bytesBefore: number;
+  bytesAfter: number;
+  reclaimedBytes: number;
+  compactedAt: string;
+}
+
 export interface StorageDoctorIssue {
   code:
     | 'DATABASE_OPEN_FAILED'

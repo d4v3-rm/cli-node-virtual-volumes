@@ -23,6 +23,7 @@ import type {
   StorageRepairAction,
   StorageRepairReport,
   StorageRepairVolumeReport,
+  VolumeCompactionResult,
   VolumeBackupManifest,
   VolumeBackupInspectionResult,
   VolumeEntry,
@@ -816,6 +817,58 @@ export class VolumeRepository {
     this.logger.info({ volumeId }, 'Volume deleted.');
   }
 
+  public async compactVolume(volumeId: string): Promise<VolumeCompactionResult> {
+    const databasePath = this.getVolumeDatabasePath(volumeId);
+    if (!(await pathExists(databasePath))) {
+      throw new VolumeError('NOT_FOUND', `Volume ${volumeId} does not exist.`, {
+        volumeId,
+      });
+    }
+
+    const bytesBefore = await this.getDatabaseArtifactBytes(databasePath);
+    const metadata = await withVolumeDatabase(databasePath, async (database) => {
+      const manifestRow = await this.requireManifestRow(database, volumeId);
+      const schemaVersion = await this.getSchemaVersion(database);
+
+      await database.get('PRAGMA wal_checkpoint(TRUNCATE)');
+      await database.exec('VACUUM');
+      await database.exec('PRAGMA optimize');
+      await database.get('PRAGMA wal_checkpoint(TRUNCATE)');
+
+      return {
+        manifest: this.toManifest(manifestRow),
+        schemaVersion,
+      };
+    });
+    const bytesAfter = await this.getDatabaseArtifactBytes(databasePath);
+    const result: VolumeCompactionResult = {
+      volumeId: metadata.manifest.id,
+      volumeName: metadata.manifest.name,
+      revision: metadata.manifest.revision,
+      schemaVersion: metadata.schemaVersion,
+      databasePath,
+      bytesBefore,
+      bytesAfter,
+      reclaimedBytes: Math.max(0, bytesBefore - bytesAfter),
+      compactedAt: new Date().toISOString(),
+    };
+
+    this.logger.info(
+      this.sanitizeObservabilityPayload({
+        volumeId: result.volumeId,
+        databasePath,
+        bytesBefore,
+        bytesAfter,
+        reclaimedBytes: result.reclaimedBytes,
+        schemaVersion: result.schemaVersion,
+        revision: result.revision,
+      }),
+      'Volume compaction completed.',
+    );
+
+    return result;
+  }
+
   public getVolumeDatabasePath(volumeId: string): string {
     return getVolumeDatabasePath(this.config.dataDir, volumeId);
   }
@@ -883,6 +936,27 @@ export class VolumeRepository {
       fs.rm(`${databasePath}-wal`, { force: true }),
       fs.rm(`${databasePath}-shm`, { force: true }),
     ]);
+  }
+
+  private async getDatabaseArtifactBytes(databasePath: string): Promise<number> {
+    const artifactPaths = [
+      databasePath,
+      `${databasePath}-journal`,
+      `${databasePath}-wal`,
+      `${databasePath}-shm`,
+    ];
+    const sizes = await Promise.all(
+      artifactPaths.map(async (artifactPath) => {
+        try {
+          const stats = await fs.stat(artifactPath);
+          return stats.size;
+        } catch {
+          return 0;
+        }
+      }),
+    );
+
+    return sizes.reduce((total, size) => total + size, 0);
   }
 
   private async snapshotVolumeDatabase(

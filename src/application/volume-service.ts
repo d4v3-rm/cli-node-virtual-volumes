@@ -24,6 +24,7 @@ import type {
   RestoreVolumeBackupOptions,
   StorageDoctorReport,
   StorageRepairReport,
+  VolumeCompactionResult,
   VolumeBackupInspectionResult,
   VolumeEntry,
   VolumeBackupResult,
@@ -71,6 +72,7 @@ type AuditEventType =
   | 'volume.backup'
   | 'volume.restore'
   | 'volume.backup.inspect'
+  | 'volume.compact'
   | 'storage.doctor'
   | 'storage.repair'
   | 'entry.directory.create'
@@ -221,6 +223,25 @@ export class VolumeService {
         volumeId: result.volumeId,
         revision: result.revision,
         validatedWithManifest: result.validatedWithManifest,
+      }),
+    );
+  }
+
+  public async compactVolume(volumeId: string): Promise<VolumeCompactionResult> {
+    return this.runAuditedOperation(
+      {
+        eventType: 'volume.compact',
+        resourceType: 'storage',
+        volumeId,
+      },
+      () => this.repository.compactVolume(volumeId),
+      (result) => ({
+        volumeId: result.volumeId,
+        volumeName: result.volumeName,
+        revision: result.revision,
+        reclaimedBytes: result.reclaimedBytes,
+        bytesBefore: result.bytesBefore,
+        bytesAfter: result.bytesAfter,
       }),
     );
   }
