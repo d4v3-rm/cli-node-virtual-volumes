@@ -71,7 +71,7 @@ This project provides:
 
 - `.env`-driven configuration.
 - Structured file logging.
-- `doctor` and safe `repair` flows.
+- `doctor` with SQLite maintenance signals and safe `repair` flows.
 - Consistent `backup`, `inspect-backup`, and `restore` commands.
 - TypeScript build with `tsup`.
 - Test suite with `vitest`.
@@ -305,6 +305,12 @@ Each standard backup produces:
 - checkpoints and truncates the WAL
 - runs `VACUUM` and `PRAGMA optimize`
 - reports database artifact bytes before and after compaction
+
+`doctor` now also reports SQLite maintenance stats for each volume:
+
+- database, WAL, and total artifact bytes
+- free-page bytes and free-page ratio
+- `COMPACTION_RECOMMENDED` when a volume is fragmented enough to justify running `compact`
 
 For the full operational procedure, drills, and audit checklist, see [docs/BACKUP-RESTORE-RUNBOOK.md](./docs/BACKUP-RESTORE-RUNBOOK.md).
 

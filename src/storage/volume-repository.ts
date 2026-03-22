@@ -18,6 +18,7 @@ import type {
   FileEntry,
   RestoreVolumeBackupOptions,
   StorageDoctorIssue,
+  StorageDoctorMaintenanceStats,
   StorageDoctorReport,
   StorageDoctorVolumeReport,
   StorageRepairAction,
@@ -946,17 +947,19 @@ export class VolumeRepository {
       `${databasePath}-shm`,
     ];
     const sizes = await Promise.all(
-      artifactPaths.map(async (artifactPath) => {
-        try {
-          const stats = await fs.stat(artifactPath);
-          return stats.size;
-        } catch {
-          return 0;
-        }
-      }),
+      artifactPaths.map((artifactPath) => this.getArtifactSizeBytes(artifactPath)),
     );
 
     return sizes.reduce((total, size) => total + size, 0);
+  }
+
+  private async getArtifactSizeBytes(artifactPath: string): Promise<number> {
+    try {
+      const stats = await fs.stat(artifactPath);
+      return stats.size;
+    } catch {
+      return 0;
+    }
   }
 
   private async snapshotVolumeDatabase(
@@ -1137,6 +1140,47 @@ export class VolumeRepository {
 
     const parsedVersion = Number.parseInt(row?.value ?? '0', 10);
     return Number.isNaN(parsedVersion) ? 0 : parsedVersion;
+  }
+
+  private async getPragmaIntegerValue(
+    database: SqliteVolumeDatabase,
+    pragmaName: 'page_count' | 'page_size' | 'freelist_count',
+  ): Promise<number> {
+    const row = await database.get<Record<string, number | bigint | string>>(
+      `PRAGMA ${pragmaName}`,
+    );
+    const value = Number(Object.values(row ?? {})[0] ?? 0);
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  private async collectStorageMaintenanceStats(
+    database: SqliteVolumeDatabase,
+    databasePath: string,
+  ): Promise<StorageDoctorMaintenanceStats> {
+    const [pageCount, pageSizeBytes, freelistCount, databaseBytes, walBytes, artifactBytes] =
+      await Promise.all([
+        this.getPragmaIntegerValue(database, 'page_count'),
+        this.getPragmaIntegerValue(database, 'page_size'),
+        this.getPragmaIntegerValue(database, 'freelist_count'),
+        this.getArtifactSizeBytes(databasePath),
+        this.getArtifactSizeBytes(`${databasePath}-wal`),
+        this.getDatabaseArtifactBytes(databasePath),
+      ]);
+
+    const freeBytes = Math.max(0, freelistCount * pageSizeBytes);
+    const freeRatio = pageCount > 0 ? freelistCount / pageCount : 0;
+
+    return {
+      databaseBytes,
+      walBytes,
+      artifactBytes,
+      pageSizeBytes,
+      pageCount,
+      freelistCount,
+      freeBytes,
+      freeRatio,
+      compactionRecommended: freeBytes >= 1024 * 1024 && freeRatio >= 0.1,
+    };
   }
 
   private async computeFileSha256(filePath: string): Promise<string> {
@@ -1453,8 +1497,13 @@ export class VolumeRepository {
       return await withVolumeDatabase(databasePath, async (database) => {
         const record = await this.loadVolumeFromDatabase(database, volumeId);
         const persistedBlobRefs = await this.listPersistedBlobRefs(database);
+        const maintenance = await this.collectStorageMaintenanceStats(database, databasePath);
         const sqliteIssues = await this.collectSqliteDoctorIssues(database, volumeId);
-        const issues = [...sqliteIssues, ...this.collectDoctorIssues(record, persistedBlobRefs)];
+        const issues = [
+          ...sqliteIssues,
+          ...this.collectDoctorIssues(record, persistedBlobRefs),
+          ...this.collectMaintenanceDoctorIssues(record.manifest.id, maintenance),
+        ];
 
         return {
           volumeId: record.manifest.id,
@@ -1463,6 +1512,7 @@ export class VolumeRepository {
           healthy: issues.length === 0,
           issueCount: issues.length,
           issues,
+          maintenance,
         };
       });
     } catch (error) {
@@ -1786,6 +1836,23 @@ export class VolumeRepository {
     }
 
     return issues;
+  }
+
+  private collectMaintenanceDoctorIssues(
+    volumeId: string,
+    maintenance: StorageDoctorMaintenanceStats,
+  ): StorageDoctorIssue[] {
+    if (!maintenance.compactionRecommended) {
+      return [];
+    }
+
+    return [
+      {
+        code: 'COMPACTION_RECOMMENDED',
+        severity: 'warn',
+        message: `Volume ${volumeId} has ${maintenance.freelistCount} free SQLite page(s), about ${maintenance.freeBytes} bytes (${(maintenance.freeRatio * 100).toFixed(1)}%) reclaimable via compaction.`,
+      },
+    ];
   }
 
   private async persistVolumeToDatabase(

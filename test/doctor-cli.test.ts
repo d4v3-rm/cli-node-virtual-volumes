@@ -18,6 +18,17 @@ describe('doctor cli formatters', () => {
           healthy: true,
           issueCount: 0,
           issues: [],
+          maintenance: {
+            artifactBytes: 1048576,
+            databaseBytes: 1048576,
+            walBytes: 0,
+            pageSizeBytes: 4096,
+            pageCount: 256,
+            freelistCount: 0,
+            freeBytes: 0,
+            freeRatio: 0,
+            compactionRecommended: false,
+          },
         },
       ],
     };
@@ -30,6 +41,7 @@ describe('doctor cli formatters', () => {
         'Total issues: 0',
         '',
         'OK Finance (volume-1) revision=7 issues=0',
+        '  - Maintenance: artifacts=1.0 MB db=1.0 MB wal=0 B free=0 B (0.0%) compact=not-needed',
         '  - No issues detected.',
       ].join('\n'),
     );
