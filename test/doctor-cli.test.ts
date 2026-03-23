@@ -10,6 +10,12 @@ describe('doctor cli formatters', () => {
       healthy: true,
       checkedVolumes: 1,
       issueCount: 0,
+      maintenanceSummary: {
+        volumesWithStats: 1,
+        recommendedCompactions: 0,
+        totalArtifactBytes: 1048576,
+        totalFreeBytes: 0,
+      },
       volumes: [
         {
           volumeId: 'volume-1',
@@ -39,6 +45,10 @@ describe('doctor cli formatters', () => {
         'Generated at: 2026-04-15T10:00:00.000Z',
         'Checked volumes: 1',
         'Total issues: 0',
+        'Volumes with maintenance stats: 1',
+        'Recommended compactions: 0',
+        'Total SQLite artifacts: 1.0 MB',
+        'Total reclaimable free bytes: 0 B',
         '',
         'OK Finance (volume-1) revision=7 issues=0',
         '  - Maintenance: artifacts=1.0 MB db=1.0 MB wal=0 B free=0 B (0.0%) compact=not-needed',

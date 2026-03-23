@@ -480,12 +480,34 @@ export class VolumeRepository {
       (total, report) => total + report.issueCount,
       0,
     );
+    const maintenanceSummary = volumeReports.reduce(
+      (summary, report) => {
+        if (!report.maintenance) {
+          return summary;
+        }
+
+        summary.volumesWithStats += 1;
+        summary.totalArtifactBytes += report.maintenance.artifactBytes;
+        summary.totalFreeBytes += report.maintenance.freeBytes;
+        if (report.maintenance.compactionRecommended) {
+          summary.recommendedCompactions += 1;
+        }
+        return summary;
+      },
+      {
+        volumesWithStats: 0,
+        recommendedCompactions: 0,
+        totalArtifactBytes: 0,
+        totalFreeBytes: 0,
+      },
+    );
 
     return {
       generatedAt: new Date().toISOString(),
       healthy: issueCount === 0,
       checkedVolumes: volumeReports.length,
       issueCount,
+      maintenanceSummary,
       volumes: volumeReports,
     };
   }

@@ -54,6 +54,10 @@ export const formatDoctorReport = (report: StorageDoctorReport): string => {
     `Generated at: ${report.generatedAt}`,
     `Checked volumes: ${report.checkedVolumes}`,
     `Total issues: ${report.issueCount}`,
+    `Volumes with maintenance stats: ${report.maintenanceSummary.volumesWithStats}`,
+    `Recommended compactions: ${report.maintenanceSummary.recommendedCompactions}`,
+    `Total SQLite artifacts: ${formatBytes(report.maintenanceSummary.totalArtifactBytes)}`,
+    `Total reclaimable free bytes: ${formatBytes(report.maintenanceSummary.totalFreeBytes)}`,
   ];
 
   if (report.volumes.length > 0) {

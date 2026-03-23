@@ -301,11 +301,19 @@ export interface StorageDoctorVolumeReport {
   maintenance?: StorageDoctorMaintenanceStats;
 }
 
+export interface StorageDoctorMaintenanceSummary {
+  volumesWithStats: number;
+  recommendedCompactions: number;
+  totalArtifactBytes: number;
+  totalFreeBytes: number;
+}
+
 export interface StorageDoctorReport {
   generatedAt: string;
   healthy: boolean;
   checkedVolumes: number;
   issueCount: number;
+  maintenanceSummary: StorageDoctorMaintenanceSummary;
   volumes: StorageDoctorVolumeReport[];
 }
 
