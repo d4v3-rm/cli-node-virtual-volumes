@@ -257,6 +257,42 @@ try {
     'Restored volume content did not match the backup snapshot.',
   );
 
+  await validationRuntime.volumeService.writeTextFile(
+    volume.id,
+    '/transient-churn.txt',
+    'x'.repeat(2 * 1024 * 1024),
+  );
+  await validationRuntime.volumeService.deleteEntry(volume.id, '/transient-churn.txt');
+
+  const compactRecommendedReportPath = path.join(
+    reportsDir,
+    'compact-recommended-report.json',
+  );
+  const compactRecommendedRun = runCli(
+    ['compact-recommended', '--json', '--output', compactRecommendedReportPath],
+    runtimePaths,
+  );
+  const compactRecommendedResult = JSON.parse(compactRecommendedRun.stdout);
+  const compactRecommendedArtifact = await readJson(compactRecommendedReportPath);
+
+  assert(
+    compactRecommendedResult.recommendedVolumes === 1,
+    'Recommended compaction should detect the churned restored volume.',
+  );
+  assert(
+    compactRecommendedResult.compactedVolumes === 1,
+    'Recommended compaction should compact the churned restored volume.',
+  );
+  assertArtifactEnvelope(
+    compactRecommendedArtifact,
+    'compact-recommended',
+    packageJson.version,
+  );
+  assert(
+    compactRecommendedArtifact.payload.totalReclaimedBytes >= 0,
+    'Recommended compaction artifact should include reclaimed bytes.',
+  );
+
   const compactReportPath = path.join(reportsDir, 'compact-report.json');
   const compactRun = runCli(
     ['compact', volume.id, '--json', '--output', compactReportPath],
@@ -498,7 +534,7 @@ try {
   );
 
   process.stdout.write(
-    `[ops-smoke] verified backup, inspect, restore drill, restore, doctor, support bundle, and support bundle inspection flows for ${volume.id}\n`,
+    `[ops-smoke] verified backup, inspect, restore drill, restore, compact-recommended, compact, doctor, support bundle, and support bundle inspection flows for ${volume.id}\n`,
   );
 } catch (error) {
   const message = error instanceof Error ? error.message : 'Unknown smoke failure.';

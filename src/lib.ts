@@ -37,6 +37,8 @@ export type {
   SupportBundleSensitivity,
   SupportBundleSharingRecommendation,
   SupportBundleResult,
+  VolumeCompactionBatchItem,
+  VolumeCompactionBatchResult,
   VolumeCompactionResult,
   VolumeBackupResult,
   VolumeManifest,

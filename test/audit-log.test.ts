@@ -72,6 +72,7 @@ describe('audit log', () => {
       destinationHostDirectory: exportRoot,
     });
     await runtime.volumeService.compactVolume(volume.id);
+    await runtime.volumeService.compactRecommendedVolumes({ dryRun: true });
     await runtime.volumeService.moveEntry(volume.id, {
       sourcePath: '/docs/notes.txt',
       destinationDirectoryPath: '/',
@@ -95,6 +96,7 @@ describe('audit log', () => {
         'host.import',
         'host.export',
         'volume.compact',
+        'volume.compact.batch',
         'entry.move',
         'entry.delete',
         'storage.doctor',
