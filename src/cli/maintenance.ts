@@ -48,6 +48,8 @@ export const formatVolumeCompactionBatchResult = (
     `Generated at: ${formatDateTime(result.generatedAt)}`,
     `Checked volumes: ${result.checkedVolumes}`,
     `Recommended volumes: ${result.recommendedVolumes}`,
+    `Planned volumes: ${result.plannedVolumes}`,
+    `Deferred volumes: ${result.deferredVolumes}`,
     `Skipped volumes: ${result.skippedVolumes}`,
     `Compacted volumes: ${result.compactedVolumes}`,
     `Failed volumes: ${result.failedVolumes}`,

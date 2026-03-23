@@ -1233,6 +1233,61 @@ describe('VolumeService', () => {
     expect(cleanDoctor?.issues).toEqual([]);
   });
 
+  it('limits recommended batch compaction to the most fragmented volumes first', async () => {
+    const runtime = await createIsolatedRuntime();
+    const largestVolume = await runtime.volumeService.createVolume({ name: 'Largest churn' });
+    const smallerVolume = await runtime.volumeService.createVolume({ name: 'Smaller churn' });
+    const cleanVolume = await runtime.volumeService.createVolume({ name: 'Stable' });
+
+    await runtime.volumeService.writeTextFile(
+      largestVolume.id,
+      '/large.txt',
+      'a'.repeat(2 * 1024 * 1024),
+    );
+    await runtime.volumeService.deleteEntry(largestVolume.id, '/large.txt');
+    await runtime.volumeService.writeTextFile(
+      smallerVolume.id,
+      '/small.txt',
+      'b'.repeat(Math.floor(1.25 * 1024 * 1024)),
+    );
+    await runtime.volumeService.deleteEntry(smallerVolume.id, '/small.txt');
+    await runtime.volumeService.writeTextFile(cleanVolume.id, '/stable.txt', 'steady');
+
+    const dryRun = await runtime.volumeService.compactRecommendedVolumes({
+      dryRun: true,
+      limit: 1,
+    });
+    const batchResult = await runtime.volumeService.compactRecommendedVolumes({
+      limit: 1,
+    });
+    const followUpDoctor = await runtime.volumeService.runDoctor();
+    const largestDoctor = followUpDoctor.volumes.find(
+      (volumeReport) => volumeReport.volumeId === largestVolume.id,
+    );
+    const smallerDoctor = followUpDoctor.volumes.find(
+      (volumeReport) => volumeReport.volumeId === smallerVolume.id,
+    );
+
+    expect(dryRun.recommendedVolumes).toBe(2);
+    expect(dryRun.plannedVolumes).toBe(1);
+    expect(dryRun.deferredVolumes).toBe(1);
+    expect(dryRun.volumes).toHaveLength(1);
+    expect(dryRun.volumes[0]?.volumeId).toBe(largestVolume.id);
+    expect(batchResult.recommendedVolumes).toBe(2);
+    expect(batchResult.plannedVolumes).toBe(1);
+    expect(batchResult.compactedVolumes).toBe(1);
+    expect(batchResult.deferredVolumes).toBe(1);
+    expect(batchResult.volumes).toHaveLength(1);
+    expect(batchResult.volumes[0]?.volumeId).toBe(largestVolume.id);
+    expect(batchResult.volumes[0]?.status).toBe('compacted');
+    expect(
+      largestDoctor?.issues.some((issue) => issue.code === 'COMPACTION_RECOMMENDED'),
+    ).toBe(false);
+    expect(
+      smallerDoctor?.issues.some((issue) => issue.code === 'COMPACTION_RECOMMENDED'),
+    ).toBe(true);
+  });
+
   it('rejects restore when the backup manifest checksum does not match the artifact', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Tamper Detection' });

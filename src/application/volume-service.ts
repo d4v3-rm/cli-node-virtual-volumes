@@ -250,7 +250,7 @@ export class VolumeService {
   }
 
   public async compactRecommendedVolumes(
-    options: { dryRun?: boolean } = {},
+    options: { dryRun?: boolean; limit?: number } = {},
   ): Promise<VolumeCompactionBatchResult> {
     return this.runAuditedOperation(
       {
@@ -258,6 +258,7 @@ export class VolumeService {
         resourceType: 'storage',
         details: {
           dryRun: options.dryRun === true,
+          limit: options.limit ?? null,
         },
       },
       async () => {
@@ -268,12 +269,15 @@ export class VolumeService {
             (left, right) =>
               (right.maintenance?.freeBytes ?? 0) - (left.maintenance?.freeBytes ?? 0),
           );
+        const plannedVolumes = options.limit
+          ? recommendedVolumes.slice(0, options.limit)
+          : recommendedVolumes;
         const volumes: VolumeCompactionBatchItem[] = [];
         let compactedVolumes = 0;
         let failedVolumes = 0;
         let totalReclaimedBytes = 0;
 
-        for (const report of recommendedVolumes) {
+        for (const report of plannedVolumes) {
           const maintenance = report.maintenance;
           if (!maintenance) {
             continue;
@@ -329,9 +333,11 @@ export class VolumeService {
           dryRun: options.dryRun === true,
           checkedVolumes: doctorReport.checkedVolumes,
           recommendedVolumes: recommendedVolumes.length,
+          plannedVolumes: plannedVolumes.length,
           compactedVolumes,
           failedVolumes,
           skippedVolumes: Math.max(0, doctorReport.checkedVolumes - recommendedVolumes.length),
+          deferredVolumes: Math.max(0, recommendedVolumes.length - plannedVolumes.length),
           totalReclaimedBytes,
           volumes,
         };
@@ -339,9 +345,11 @@ export class VolumeService {
       (result) => ({
         checkedVolumes: result.checkedVolumes,
         recommendedVolumes: result.recommendedVolumes,
+        plannedVolumes: result.plannedVolumes,
         compactedVolumes: result.compactedVolumes,
         failedVolumes: result.failedVolumes,
         dryRun: result.dryRun,
+        deferredVolumes: result.deferredVolumes,
         totalReclaimedBytes: result.totalReclaimedBytes,
       }),
     );
