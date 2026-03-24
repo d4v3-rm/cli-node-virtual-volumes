@@ -250,7 +250,7 @@ export class VolumeService {
   }
 
   public async compactRecommendedVolumes(
-    options: { dryRun?: boolean; limit?: number } = {},
+    options: { dryRun?: boolean; limit?: number; minFreeBytes?: number; minFreeRatio?: number } = {},
   ): Promise<VolumeCompactionBatchResult> {
     return this.runAuditedOperation(
       {
@@ -259,6 +259,8 @@ export class VolumeService {
         details: {
           dryRun: options.dryRun === true,
           limit: options.limit ?? null,
+          minFreeBytes: options.minFreeBytes ?? null,
+          minFreeRatio: options.minFreeRatio ?? null,
         },
       },
       async () => {
@@ -269,9 +271,31 @@ export class VolumeService {
             (left, right) =>
               (right.maintenance?.freeBytes ?? 0) - (left.maintenance?.freeBytes ?? 0),
           );
+        const eligibleVolumes = recommendedVolumes.filter((report) => {
+          const maintenance = report.maintenance;
+          if (!maintenance) {
+            return false;
+          }
+
+          if (
+            options.minFreeBytes !== undefined &&
+            maintenance.freeBytes < options.minFreeBytes
+          ) {
+            return false;
+          }
+
+          if (
+            options.minFreeRatio !== undefined &&
+            maintenance.freeRatio < options.minFreeRatio
+          ) {
+            return false;
+          }
+
+          return true;
+        });
         const plannedVolumes = options.limit
-          ? recommendedVolumes.slice(0, options.limit)
-          : recommendedVolumes;
+          ? eligibleVolumes.slice(0, options.limit)
+          : eligibleVolumes;
         const volumes: VolumeCompactionBatchItem[] = [];
         let compactedVolumes = 0;
         let failedVolumes = 0;
@@ -333,11 +357,15 @@ export class VolumeService {
           dryRun: options.dryRun === true,
           checkedVolumes: doctorReport.checkedVolumes,
           recommendedVolumes: recommendedVolumes.length,
+          eligibleVolumes: eligibleVolumes.length,
           plannedVolumes: plannedVolumes.length,
           compactedVolumes,
           failedVolumes,
           skippedVolumes: Math.max(0, doctorReport.checkedVolumes - recommendedVolumes.length),
-          deferredVolumes: Math.max(0, recommendedVolumes.length - plannedVolumes.length),
+          filteredVolumes: Math.max(0, recommendedVolumes.length - eligibleVolumes.length),
+          deferredVolumes: Math.max(0, eligibleVolumes.length - plannedVolumes.length),
+          minimumFreeBytes: options.minFreeBytes ?? null,
+          minimumFreeRatio: options.minFreeRatio ?? null,
           totalReclaimedBytes,
           volumes,
         };
@@ -345,11 +373,15 @@ export class VolumeService {
       (result) => ({
         checkedVolumes: result.checkedVolumes,
         recommendedVolumes: result.recommendedVolumes,
+        eligibleVolumes: result.eligibleVolumes,
         plannedVolumes: result.plannedVolumes,
         compactedVolumes: result.compactedVolumes,
         failedVolumes: result.failedVolumes,
         dryRun: result.dryRun,
+        filteredVolumes: result.filteredVolumes,
         deferredVolumes: result.deferredVolumes,
+        minimumFreeBytes: result.minimumFreeBytes,
+        minimumFreeRatio: result.minimumFreeRatio,
         totalReclaimedBytes: result.totalReclaimedBytes,
       }),
     );

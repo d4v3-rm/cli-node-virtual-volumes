@@ -305,17 +305,50 @@ const main = async (): Promise<void> => {
         return parsed;
       },
     )
+    .option(
+      '--min-free-bytes <bytes>',
+      'Only include recommended volumes with at least this many reclaimable free bytes',
+      (value: string) => {
+        const parsed = Number.parseInt(value, 10);
+        if (!Number.isInteger(parsed) || parsed <= 0) {
+          throw new Error('--min-free-bytes must be a positive integer');
+        }
+
+        return parsed;
+      },
+    )
+    .option(
+      '--min-free-ratio <ratio>',
+      'Only include recommended volumes with at least this reclaimable free-page ratio (0-1)',
+      (value: string) => {
+        const parsed = Number.parseFloat(value);
+        if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+          throw new Error('--min-free-ratio must be a number between 0 and 1');
+        }
+
+        return parsed;
+      },
+    )
     .option('--json', 'Output the batch result as JSON')
     .option('--output <path>', 'Write the structured JSON result to this file')
     .action(
       async (
-        options: { dryRun?: boolean; json?: boolean; limit?: number; output?: string },
+        options: {
+          dryRun?: boolean;
+          json?: boolean;
+          limit?: number;
+          minFreeBytes?: number;
+          minFreeRatio?: number;
+          output?: string;
+        },
       ) => {
         await withRuntime(async (runtime) => {
           const correlationId = runtime.correlationId;
           const result = await runtime.volumeService.compactRecommendedVolumes({
             dryRun: options.dryRun,
             limit: options.limit,
+            minFreeBytes: options.minFreeBytes,
+            minFreeRatio: options.minFreeRatio,
           });
           const artifactPath = options.output
             ? await writeCliJsonArtifact(
