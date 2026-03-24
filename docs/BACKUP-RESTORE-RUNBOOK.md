@@ -153,9 +153,10 @@ Per manutenzione batch di tutti i volumi gestiti:
 1. Esegui `virtual-volumes compact-recommended --dry-run` per vedere quali volumi verrebbero compattati.
 2. Se vuoi limitare il blast radius, aggiungi `--limit <n>` per processare solo i primi N volumi ordinati per free bytes reclaimable.
 3. Se vuoi restringere ulteriormente il batch, aggiungi `--min-free-bytes <bytes>` e/o `--min-free-ratio <ratio>` per includere solo i volumi che superano soglie minime esplicite.
-4. Esegui `virtual-volumes compact-recommended` per compattare solo i volumi oggi marcati con `COMPACTION_RECOMMENDED`.
-5. Se vuoi audit strutturato, aggiungi `--output <path>` anche al batch.
-6. Riesegui `virtual-volumes doctor` se vuoi confermare che la frammentazione raccomandata sia stata assorbita.
+4. Per default il batch blocca i volumi che hanno anche issue diverse da `COMPACTION_RECOMMENDED`; usa `--include-unsafe` solo quando vuoi forzare esplicitamente la compattazione su volumi ancora diagnostically unhealthy.
+5. Esegui `virtual-volumes compact-recommended` per compattare solo i volumi oggi marcati con `COMPACTION_RECOMMENDED`.
+6. Se vuoi audit strutturato, aggiungi `--output <path>` anche al batch.
+7. Riesegui `virtual-volumes doctor` se vuoi confermare che la frammentazione raccomandata sia stata assorbita.
 
 Per un restore di emergenza:
 

@@ -241,7 +241,8 @@ export interface VolumeCompactionBatchItem {
   artifactBytes: number;
   freeBytes: number;
   freeRatio: number;
-  status: 'planned' | 'compacted' | 'failed';
+  status: 'blocked' | 'planned' | 'compacted' | 'failed';
+  blockingIssueCodes?: StorageDoctorIssue['code'][];
   error?: string;
   compaction?: VolumeCompactionResult;
 }
@@ -249,10 +250,12 @@ export interface VolumeCompactionBatchItem {
 export interface VolumeCompactionBatchResult {
   generatedAt: string;
   dryRun: boolean;
+  includeUnsafe: boolean;
   checkedVolumes: number;
   recommendedVolumes: number;
   eligibleVolumes: number;
   plannedVolumes: number;
+  blockedVolumes: number;
   compactedVolumes: number;
   failedVolumes: number;
   skippedVolumes: number;
