@@ -37,6 +37,20 @@ const countPersistedBlobs = async (
     return row?.count ?? 0;
   });
 
+const getPersistedBlobChunkCount = async (
+  dataDir: string,
+  volumeId: string,
+  contentRef: string,
+): Promise<number> =>
+  withVolumeDatabase(getVolumeDatabasePath(dataDir, volumeId), async (database) => {
+    const row = await database.get<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM blob_chunks WHERE content_ref = ?',
+      contentRef,
+    );
+
+    return row?.count ?? 0;
+  });
+
 afterEach(async () => {
   await Promise.all(
     sandboxes.splice(0, sandboxes.length).map((sandboxRoot) =>
@@ -236,6 +250,7 @@ describe('VolumeService', () => {
     expect(summary.filesImported).toBe(3);
     expect(summary.directoriesImported).toBe(1);
     expect(summary.conflictsResolved).toBe(1);
+    expect(summary.integrityChecksPassed).toBe(3);
     expect(snapshot.entries.map((entry) => entry.name)).toEqual([
       'bundle',
       'alpha (2).txt',
@@ -254,7 +269,7 @@ describe('VolumeService', () => {
     await fs.writeFile(path.join(hostRoot, 'batch', 'two.txt'), 'two');
 
     const progressEvents: {
-      phase: 'file' | 'directory';
+      phase: 'file' | 'directory' | 'integrity';
       currentHostPath: string;
       filesImported: number;
       directoriesImported: number;
@@ -278,6 +293,7 @@ describe('VolumeService', () => {
       directoriesImported: 1,
     });
     expect(progressEvents.some((event) => event.phase === 'file')).toBe(true);
+    expect(progressEvents.some((event) => event.phase === 'integrity')).toBe(true);
     expect(progressEvents.at(-1)).toMatchObject({
       filesImported: 2,
       directoriesImported: 1,
@@ -310,11 +326,13 @@ describe('VolumeService', () => {
       directoriesExported: 1,
       filesExported: 1,
       conflictsResolved: 1,
+      integrityChecksPassed: 1,
     });
     expect(fileSummary).toMatchObject({
       directoriesExported: 0,
       filesExported: 1,
       conflictsResolved: 1,
+      integrityChecksPassed: 1,
     });
     await expect(
       fs.readFile(path.join(hostRoot, 'docs (2)', 'readme.txt'), 'utf8'),
@@ -334,7 +352,7 @@ describe('VolumeService', () => {
     await runtime.volumeService.writeTextFile(volume.id, '/big.txt', content);
 
     const progressEvents: {
-      phase: 'file' | 'directory';
+      phase: 'file' | 'directory' | 'integrity';
       currentVirtualPath: string;
       destinationHostPath: string;
       bytesExported: number;
@@ -360,8 +378,9 @@ describe('VolumeService', () => {
     expect(progressEvents.some((event) => event.phase === 'file' && event.currentBytes > 0)).toBe(
       true,
     );
+    expect(progressEvents.some((event) => event.phase === 'integrity')).toBe(true);
     expect(progressEvents.at(-1)).toMatchObject({
-      phase: 'file',
+      phase: 'integrity',
       currentVirtualPath: '/big.txt',
       bytesExported: Buffer.byteLength(content, 'utf8'),
       currentBytes: Buffer.byteLength(content, 'utf8'),
@@ -371,10 +390,62 @@ describe('VolumeService', () => {
       filesExported: 1,
       directoriesExported: 0,
       bytesExported: Buffer.byteLength(content, 'utf8'),
+      integrityChecksPassed: 1,
     });
     await expect(fs.readFile(path.join(hostRoot, 'big.txt'), 'utf8')).resolves.toHaveLength(
       content.length,
     );
+  });
+
+  it('imports and exports large files through chunked sqlite blobs with integrity verification', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Large Files' });
+    const hostRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-large-file-'));
+    sandboxes.push(hostRoot);
+
+    const largeContent = Buffer.alloc(1024 * 1024 + 333, 0);
+    const largeHostPath = path.join(hostRoot, 'large.bin');
+    await fs.writeFile(largeHostPath, largeContent);
+
+    const importSummary = await runtime.volumeService.importHostPaths(volume.id, {
+      destinationPath: '/',
+      hostPaths: [largeHostPath],
+    });
+    const snapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+    const importedEntry = snapshot.entries.find((entry) => entry.name === 'large.bin');
+
+    expect(importSummary).toMatchObject({
+      filesImported: 1,
+      directoriesImported: 0,
+      bytesImported: largeContent.byteLength,
+      integrityChecksPassed: 1,
+    });
+    expect(importedEntry?.kind).toBe('file');
+
+    const preview = await runtime.volumeService.previewFile(volume.id, '/large.bin');
+    expect(preview.kind).toBe('binary');
+
+    const entryPath = path.join(hostRoot, 'exports');
+    await fs.mkdir(entryPath, { recursive: true });
+
+    const exportSummary = await runtime.volumeService.exportEntryToHost(volume.id, {
+      sourcePath: '/large.bin',
+      destinationHostDirectory: entryPath,
+    });
+    const exportedPath = path.join(entryPath, 'large.bin');
+    const exportedContent = await fs.readFile(exportedPath);
+    const expectedContentRef = createHash('sha256').update(largeContent).digest('hex');
+
+    expect(exportSummary).toMatchObject({
+      filesExported: 1,
+      directoriesExported: 0,
+      bytesExported: largeContent.byteLength,
+      integrityChecksPassed: 1,
+    });
+    await expect(
+      getPersistedBlobChunkCount(runtime.config.dataDir, volume.id, expectedContentRef),
+    ).resolves.toBeGreaterThan(1);
+    expect(createHash('sha256').update(exportedContent).digest('hex')).toBe(expectedContentRef);
   });
 
   it('prevents moving a directory into one of its descendants', async () => {
