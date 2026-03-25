@@ -26,7 +26,13 @@ const formatBatchItem = (item: VolumeCompactionBatchItem): string => {
 
   if (item.status === 'blocked') {
     const blockingIssues = item.blockingIssueCodes?.join(', ') ?? 'unknown';
-    return `${prefix} ${maintenance} blocking=${blockingIssues}`;
+    const reason = item.reason ? ` reason=${item.reason}` : '';
+    return `${prefix} ${maintenance} blocking=${blockingIssues}${reason}`;
+  }
+
+  if (item.status === 'filtered' || item.status === 'deferred') {
+    const reason = item.reason ?? 'unknown';
+    return `${prefix} ${maintenance} reason=${reason}`;
   }
 
   if (item.status === 'compacted' && item.compaction) {

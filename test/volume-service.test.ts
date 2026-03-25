@@ -1276,15 +1276,24 @@ describe('VolumeService', () => {
     expect(dryRun.recommendedVolumes).toBe(2);
     expect(dryRun.plannedVolumes).toBe(1);
     expect(dryRun.deferredVolumes).toBe(1);
-    expect(dryRun.volumes).toHaveLength(1);
-    expect(dryRun.volumes[0]?.volumeId).toBe(largestVolume.id);
+    expect(dryRun.volumes).toHaveLength(2);
+    expect(dryRun.volumes.find((item) => item.status === 'planned')?.volumeId).toBe(
+      largestVolume.id,
+    );
+    expect(dryRun.volumes.find((item) => item.status === 'deferred')?.volumeId).toBe(
+      smallerVolume.id,
+    );
     expect(batchResult.recommendedVolumes).toBe(2);
     expect(batchResult.plannedVolumes).toBe(1);
     expect(batchResult.compactedVolumes).toBe(1);
     expect(batchResult.deferredVolumes).toBe(1);
-    expect(batchResult.volumes).toHaveLength(1);
-    expect(batchResult.volumes[0]?.volumeId).toBe(largestVolume.id);
-    expect(batchResult.volumes[0]?.status).toBe('compacted');
+    expect(batchResult.volumes).toHaveLength(2);
+    expect(batchResult.volumes.find((item) => item.status === 'compacted')?.volumeId).toBe(
+      largestVolume.id,
+    );
+    expect(batchResult.volumes.find((item) => item.status === 'deferred')?.volumeId).toBe(
+      smallerVolume.id,
+    );
     expect(
       largestDoctor?.issues.some((issue) => issue.code === 'COMPACTION_RECOMMENDED'),
     ).toBe(false);
@@ -1348,8 +1357,88 @@ describe('VolumeService', () => {
     expect(dryRun.plannedVolumes).toBe(1);
     expect(dryRun.minimumFreeBytes).toBe(minFreeBytes);
     expect(dryRun.minimumFreeRatio).toBe(minFreeRatio);
-    expect(dryRun.volumes).toHaveLength(1);
-    expect(dryRun.volumes[0]?.volumeId).toBe(highestRatioVolume.id);
+    expect(dryRun.volumes).toHaveLength(2);
+    expect(dryRun.volumes.find((item) => item.status === 'planned')?.volumeId).toBe(
+      highestRatioVolume.id,
+    );
+    expect(dryRun.volumes.find((item) => item.status === 'filtered')?.volumeId).toBe(
+      lowerRatioVolume.id,
+    );
+  });
+
+  it('reports filtered and deferred recommended volumes explicitly in the batch plan', async () => {
+    const runtime = await createIsolatedRuntime();
+    const filteredVolume = await runtime.volumeService.createVolume({ name: 'Filtered' });
+    const plannedVolume = await runtime.volumeService.createVolume({ name: 'Planned' });
+    const deferredVolume = await runtime.volumeService.createVolume({ name: 'Deferred' });
+
+    await runtime.volumeService.writeTextFile(
+      filteredVolume.id,
+      '/deleted.txt',
+      'f'.repeat(Math.floor(1.5 * 1024 * 1024)),
+    );
+    await runtime.volumeService.writeTextFile(
+      filteredVolume.id,
+      '/retained.txt',
+      'r'.repeat(1024 * 1024),
+    );
+    await runtime.volumeService.deleteEntry(filteredVolume.id, '/deleted.txt');
+
+    await runtime.volumeService.writeTextFile(
+      plannedVolume.id,
+      '/deleted.txt',
+      'p'.repeat(2 * 1024 * 1024),
+    );
+    await runtime.volumeService.deleteEntry(plannedVolume.id, '/deleted.txt');
+
+    await runtime.volumeService.writeTextFile(
+      deferredVolume.id,
+      '/deleted.txt',
+      'd'.repeat(Math.floor(1.75 * 1024 * 1024)),
+    );
+    await runtime.volumeService.deleteEntry(deferredVolume.id, '/deleted.txt');
+
+    const doctorReport = await runtime.volumeService.runDoctor();
+    const filteredMaintenance = doctorReport.volumes.find(
+      (volumeReport) => volumeReport.volumeId === filteredVolume.id,
+    )?.maintenance;
+    const plannedMaintenance = doctorReport.volumes.find(
+      (volumeReport) => volumeReport.volumeId === plannedVolume.id,
+    )?.maintenance;
+    const deferredMaintenance = doctorReport.volumes.find(
+      (volumeReport) => volumeReport.volumeId === deferredVolume.id,
+    )?.maintenance;
+
+    expect(filteredMaintenance?.compactionRecommended).toBe(true);
+    expect(plannedMaintenance?.compactionRecommended).toBe(true);
+    expect(deferredMaintenance?.compactionRecommended).toBe(true);
+
+    const minFreeRatio = ((filteredMaintenance?.freeRatio ?? 0) + (plannedMaintenance?.freeRatio ?? 0)) / 2;
+    const dryRun = await runtime.volumeService.compactRecommendedVolumes({
+      dryRun: true,
+      limit: 1,
+      minFreeRatio,
+    });
+
+    const filteredItem = dryRun.volumes.find((item) => item.volumeId === filteredVolume.id);
+    const plannedItem = dryRun.volumes.find((item) => item.volumeId === plannedVolume.id);
+    const deferredItem = dryRun.volumes.find((item) => item.volumeId === deferredVolume.id);
+
+    expect(dryRun.recommendedVolumes).toBe(3);
+    expect(dryRun.eligibleVolumes).toBe(2);
+    expect(dryRun.filteredVolumes).toBe(1);
+    expect(dryRun.deferredVolumes).toBe(1);
+    expect(filteredItem).toMatchObject({
+      status: 'filtered',
+    });
+    expect(filteredItem?.reason).toContain('--min-free-ratio');
+    expect(plannedItem).toMatchObject({
+      status: 'planned',
+    });
+    expect(deferredItem).toMatchObject({
+      status: 'deferred',
+    });
+    expect(deferredItem?.reason).toContain('--limit 1');
   });
 
   it('blocks unsafe recommended batch compaction by default unless includeUnsafe is enabled', async () => {
