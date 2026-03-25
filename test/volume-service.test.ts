@@ -1203,6 +1203,8 @@ describe('VolumeService', () => {
 
     expect(dryRun.checkedVolumes).toBe(2);
     expect(dryRun.recommendedVolumes).toBe(1);
+    expect(dryRun.eligibleReclaimableBytes).toBeGreaterThan(0);
+    expect(dryRun.plannedReclaimableBytes).toBeGreaterThan(0);
     expect(dryRun.skippedVolumes).toBe(1);
     expect(dryRun.compactedVolumes).toBe(0);
     expect(dryRun.failedVolumes).toBe(0);
@@ -1225,6 +1227,8 @@ describe('VolumeService', () => {
 
     expect(batchResult.checkedVolumes).toBe(2);
     expect(batchResult.recommendedVolumes).toBe(1);
+    expect(batchResult.eligibleReclaimableBytes).toBeGreaterThan(0);
+    expect(batchResult.plannedReclaimableBytes).toBeGreaterThan(0);
     expect(batchResult.compactedVolumes).toBe(1);
     expect(batchResult.failedVolumes).toBe(0);
     expect(batchResult.totalReclaimedBytes).toBeGreaterThan(0);
@@ -1276,6 +1280,8 @@ describe('VolumeService', () => {
     expect(dryRun.recommendedVolumes).toBe(2);
     expect(dryRun.plannedVolumes).toBe(1);
     expect(dryRun.deferredVolumes).toBe(1);
+    expect(dryRun.plannedReclaimableBytes).toBeGreaterThan(0);
+    expect(dryRun.deferredReclaimableBytes).toBeGreaterThan(0);
     expect(dryRun.volumes).toHaveLength(2);
     expect(dryRun.volumes.find((item) => item.status === 'planned')?.volumeId).toBe(
       largestVolume.id,
@@ -1287,6 +1293,8 @@ describe('VolumeService', () => {
     expect(batchResult.plannedVolumes).toBe(1);
     expect(batchResult.compactedVolumes).toBe(1);
     expect(batchResult.deferredVolumes).toBe(1);
+    expect(batchResult.plannedReclaimableBytes).toBeGreaterThan(0);
+    expect(batchResult.deferredReclaimableBytes).toBeGreaterThan(0);
     expect(batchResult.volumes).toHaveLength(2);
     expect(batchResult.volumes.find((item) => item.status === 'compacted')?.volumeId).toBe(
       largestVolume.id,
@@ -1355,6 +1363,9 @@ describe('VolumeService', () => {
     expect(dryRun.eligibleVolumes).toBe(1);
     expect(dryRun.filteredVolumes).toBe(1);
     expect(dryRun.plannedVolumes).toBe(1);
+    expect(dryRun.eligibleReclaimableBytes).toBeGreaterThan(0);
+    expect(dryRun.filteredReclaimableBytes).toBeGreaterThan(0);
+    expect(dryRun.plannedReclaimableBytes).toBeGreaterThan(0);
     expect(dryRun.minimumFreeBytes).toBe(minFreeBytes);
     expect(dryRun.minimumFreeRatio).toBe(minFreeRatio);
     expect(dryRun.volumes).toHaveLength(2);
@@ -1428,6 +1439,9 @@ describe('VolumeService', () => {
     expect(dryRun.eligibleVolumes).toBe(2);
     expect(dryRun.filteredVolumes).toBe(1);
     expect(dryRun.deferredVolumes).toBe(1);
+    expect(dryRun.filteredReclaimableBytes).toBeGreaterThan(0);
+    expect(dryRun.deferredReclaimableBytes).toBeGreaterThan(0);
+    expect(dryRun.plannedReclaimableBytes).toBeGreaterThan(0);
     expect(filteredItem).toMatchObject({
       status: 'filtered',
     });
@@ -1497,6 +1511,8 @@ describe('VolumeService', () => {
     expect(blockedDryRun.eligibleVolumes).toBe(1);
     expect(blockedDryRun.blockedVolumes).toBe(1);
     expect(blockedDryRun.plannedVolumes).toBe(0);
+    expect(blockedDryRun.blockedReclaimableBytes).toBeGreaterThan(0);
+    expect(blockedDryRun.plannedReclaimableBytes).toBe(0);
     expect(blockedDryRun.volumes[0]).toMatchObject({
       volumeId: volume.id,
       status: 'blocked',

@@ -318,6 +318,7 @@ Each standard backup produces:
 - blocks unsafe volumes by default when `doctor` reports additional issues beyond compaction advice
 - supports `--dry-run` to preview the plan before mutating anything
 - uses dry-run output as a true fleet plan, showing `planned`, `blocked`, `filtered`, and `deferred` volumes with explicit reasons
+- quantifies reclaimable bytes across `eligible`, `planned`, `blocked`, `filtered`, and `deferred` buckets so operators can size the batch before running it
 - supports `--limit <n>` to process only the top N recommended volumes by reclaimable free bytes
 - supports `--min-free-bytes` and `--min-free-ratio` to tighten the batch to only the volumes that exceed explicit operator thresholds
 - supports `--include-unsafe` when you intentionally want to compact even volumes that still have other doctor findings
