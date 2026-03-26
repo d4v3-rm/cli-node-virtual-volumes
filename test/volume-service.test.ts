@@ -1310,6 +1310,45 @@ describe('VolumeService', () => {
     ).toBe(true);
   });
 
+  it('summarizes top compaction candidates in doctor maintenance posture', async () => {
+    const runtime = await createIsolatedRuntime();
+    const largestVolume = await runtime.volumeService.createVolume({ name: 'Largest churn' });
+    const smallerVolume = await runtime.volumeService.createVolume({ name: 'Smaller churn' });
+    const cleanVolume = await runtime.volumeService.createVolume({ name: 'Stable' });
+
+    await runtime.volumeService.writeTextFile(
+      largestVolume.id,
+      '/large.txt',
+      'a'.repeat(2 * 1024 * 1024),
+    );
+    await runtime.volumeService.deleteEntry(largestVolume.id, '/large.txt');
+    await runtime.volumeService.writeTextFile(
+      smallerVolume.id,
+      '/small.txt',
+      'b'.repeat(Math.floor(1.25 * 1024 * 1024)),
+    );
+    await runtime.volumeService.deleteEntry(smallerVolume.id, '/small.txt');
+    await runtime.volumeService.writeTextFile(cleanVolume.id, '/stable.txt', 'steady');
+
+    const doctorReport = await runtime.volumeService.runDoctor();
+
+    expect(doctorReport.maintenanceSummary.recommendedCompactions).toBe(2);
+    expect(doctorReport.maintenanceSummary.topCompactionCandidates).toHaveLength(2);
+    expect(doctorReport.maintenanceSummary.topCompactionCandidates[0]).toMatchObject({
+      volumeId: largestVolume.id,
+      volumeName: 'Largest churn',
+    });
+    expect(doctorReport.maintenanceSummary.topCompactionCandidates[1]).toMatchObject({
+      volumeId: smallerVolume.id,
+      volumeName: 'Smaller churn',
+    });
+    expect(
+      doctorReport.maintenanceSummary.topCompactionCandidates[0]?.freeBytes,
+    ).toBeGreaterThan(
+      doctorReport.maintenanceSummary.topCompactionCandidates[1]?.freeBytes ?? 0,
+    );
+  });
+
   it('filters recommended batch compaction by requested free-byte and free-ratio thresholds', async () => {
     const runtime = await createIsolatedRuntime();
     const highestRatioVolume = await runtime.volumeService.createVolume({ name: 'High ratio' });

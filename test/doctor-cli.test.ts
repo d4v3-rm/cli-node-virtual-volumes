@@ -15,6 +15,7 @@ describe('doctor cli formatters', () => {
         recommendedCompactions: 0,
         totalArtifactBytes: 1048576,
         totalFreeBytes: 0,
+        topCompactionCandidates: [],
       },
       volumes: [
         {
@@ -53,6 +54,58 @@ describe('doctor cli formatters', () => {
         'OK Finance (volume-1) revision=7 issues=0',
         '  - Maintenance: artifacts=1.0 MB db=1.0 MB wal=0 B free=0 B (0.0%) compact=not-needed',
         '  - No issues detected.',
+      ].join('\n'),
+    );
+  });
+
+  it('formats maintenance summary with top compaction candidates', () => {
+    const report: StorageDoctorReport = {
+      generatedAt: '2026-04-15T10:02:00.000Z',
+      healthy: false,
+      checkedVolumes: 2,
+      issueCount: 2,
+      maintenanceSummary: {
+        volumesWithStats: 2,
+        recommendedCompactions: 2,
+        totalArtifactBytes: 12582912,
+        totalFreeBytes: 3670016,
+        topCompactionCandidates: [
+          {
+            volumeId: 'volume-2',
+            volumeName: 'Ops',
+            revision: 4,
+            issueCount: 1,
+            artifactBytes: 8388608,
+            freeBytes: 2097152,
+            freeRatio: 0.25,
+          },
+          {
+            volumeId: 'volume-3',
+            volumeName: 'Archive',
+            revision: 6,
+            issueCount: 1,
+            artifactBytes: 4194304,
+            freeBytes: 1572864,
+            freeRatio: 0.375,
+          },
+        ],
+      },
+      volumes: [],
+    };
+
+    expect(formatDoctorReport(report)).toBe(
+      [
+        'Storage doctor: ISSUES FOUND',
+        'Generated at: 2026-04-15T10:02:00.000Z',
+        'Checked volumes: 2',
+        'Total issues: 2',
+        'Volumes with maintenance stats: 2',
+        'Recommended compactions: 2',
+        'Total SQLite artifacts: 12.0 MB',
+        'Total reclaimable free bytes: 3.5 MB',
+        'Top compaction candidates:',
+        '  1. Ops (volume-2) free=2.0 MB (25.0%) artifacts=8.0 MB issues=1',
+        '  2. Archive (volume-3) free=1.5 MB (37.5%) artifacts=4.0 MB issues=1',
       ].join('\n'),
     );
   });

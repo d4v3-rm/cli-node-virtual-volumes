@@ -195,6 +195,7 @@ describe('backup cli formatters', () => {
           recommendedCompactions: 0,
           totalArtifactBytes: 16384,
           totalFreeBytes: 0,
+          topCompactionCandidates: [],
         },
         volumes: [],
       },
