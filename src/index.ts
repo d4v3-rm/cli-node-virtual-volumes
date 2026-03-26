@@ -18,6 +18,8 @@ import {
   formatSupportBundleResult,
 } from './cli/support-bundle.js';
 import {
+  evaluateVolumeCompactionBatchPolicy,
+  formatVolumeCompactionBatchPolicyStatus,
   formatVolumeCompactionBatchResult,
   formatVolumeCompactionResult,
 } from './cli/maintenance.js';
@@ -333,6 +335,10 @@ const main = async (): Promise<void> => {
         return parsed;
       },
     )
+    .option(
+      '--strict-plan',
+      'Fail with a non-zero exit code when the batch still contains blocked, filtered, deferred, or failed volumes',
+    )
     .option('--json', 'Output the batch result as JSON')
     .option('--output <path>', 'Write the structured JSON result to this file')
     .action(
@@ -345,6 +351,7 @@ const main = async (): Promise<void> => {
           minFreeBytes?: number;
           minFreeRatio?: number;
           output?: string;
+          strictPlan?: boolean;
         },
       ) => {
         await withRuntime(async (runtime) => {
@@ -375,7 +382,17 @@ const main = async (): Promise<void> => {
             }),
           );
 
+          const policyStatus = evaluateVolumeCompactionBatchPolicy(result, {
+            strictPlan: options.strictPlan,
+          });
+          if (options.strictPlan) {
+            console.error(formatVolumeCompactionBatchPolicyStatus(policyStatus));
+          }
+
           if (!options.dryRun && result.failedVolumes > 0) {
+            process.exitCode = 1;
+          }
+          if (!policyStatus.satisfied) {
             process.exitCode = 1;
           }
         });

@@ -5,6 +5,12 @@ import type {
 } from '../domain/types.js';
 import { formatBytes, formatDateTime } from '../utils/formatters.js';
 
+export interface VolumeCompactionBatchPolicyStatus {
+  strictPlan: boolean;
+  satisfied: boolean;
+  messages: string[];
+}
+
 export const formatVolumeCompactionResult = (
   result: VolumeCompactionResult,
 ): string =>
@@ -85,5 +91,69 @@ export const formatVolumeCompactionBatchResult = (
 
   lines.push('');
   lines.push(...result.volumes.map((item) => formatBatchItem(item)));
+  return lines.join('\n');
+};
+
+export const evaluateVolumeCompactionBatchPolicy = (
+  result: Pick<
+    VolumeCompactionBatchResult,
+    'blockedVolumes' | 'deferredVolumes' | 'failedVolumes' | 'filteredVolumes'
+  >,
+  options: {
+    strictPlan?: boolean;
+  } = {},
+): VolumeCompactionBatchPolicyStatus => {
+  if (!options.strictPlan) {
+    return {
+      strictPlan: false,
+      satisfied: true,
+      messages: [],
+    };
+  }
+
+  const messages: string[] = [];
+
+  if (result.blockedVolumes > 0) {
+    messages.push(
+      `${result.blockedVolumes} blocked volume(s) still require doctor cleanup before the batch is automation-safe.`,
+    );
+  }
+
+  if (result.filteredVolumes > 0) {
+    messages.push(
+      `${result.filteredVolumes} volume(s) were filtered out by the current free-space thresholds.`,
+    );
+  }
+
+  if (result.deferredVolumes > 0) {
+    messages.push(
+      `${result.deferredVolumes} volume(s) remain deferred outside the current --limit budget.`,
+    );
+  }
+
+  if (result.failedVolumes > 0) {
+    messages.push(
+      `${result.failedVolumes} volume(s) failed during compaction execution.`,
+    );
+  }
+
+  return {
+    strictPlan: true,
+    satisfied: messages.length === 0,
+    messages,
+  };
+};
+
+export const formatVolumeCompactionBatchPolicyStatus = (
+  status: VolumeCompactionBatchPolicyStatus,
+): string => {
+  const lines = [
+    `Strict plan gate: ${status.satisfied ? 'PASSED' : 'FAILED'}`,
+  ];
+
+  if (status.messages.length > 0) {
+    lines.push(...status.messages.map((message) => `- ${message}`));
+  }
+
   return lines.join('\n');
 };

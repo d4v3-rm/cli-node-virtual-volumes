@@ -269,7 +269,13 @@ try {
     'compact-recommended-report.json',
   );
   const compactRecommendedRun = runCli(
-    ['compact-recommended', '--json', '--output', compactRecommendedReportPath],
+    [
+      'compact-recommended',
+      '--strict-plan',
+      '--json',
+      '--output',
+      compactRecommendedReportPath,
+    ],
     runtimePaths,
   );
   const compactRecommendedResult = JSON.parse(compactRecommendedRun.stdout);

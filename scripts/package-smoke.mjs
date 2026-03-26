@@ -309,6 +309,7 @@ try {
       '--log-level',
       'silent',
       'compact-recommended',
+      '--strict-plan',
       '--json',
       '--output',
       compactRecommendedArtifactPath,
