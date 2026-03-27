@@ -8,7 +8,7 @@ import { VolumeError } from '../domain/errors.js';
 import { ensureDirectory } from '../utils/fs.js';
 
 export const VOLUME_DATABASE_EXTENSION = '.sqlite';
-export const SUPPORTED_VOLUME_SCHEMA_VERSION = 3;
+export const SUPPORTED_VOLUME_SCHEMA_VERSION = 4;
 
 export type SqliteVolumeDatabase = Database<sqlite3.Database, sqlite3.Statement>;
 
@@ -38,6 +38,7 @@ export interface VolumeEntryRow {
 
 export interface BlobRow {
   content_ref: string;
+  reference_count: number;
   size: number;
   chunk_count: number;
   created_at: string;
@@ -59,6 +60,7 @@ const volumeSchema = `
 
   CREATE TABLE IF NOT EXISTS blobs (
     content_ref TEXT PRIMARY KEY,
+    reference_count INTEGER NOT NULL DEFAULT 0,
     size INTEGER NOT NULL,
     chunk_count INTEGER NOT NULL DEFAULT 0,
     content BLOB NOT NULL,
@@ -213,6 +215,28 @@ const migrateBlobSchema = async (database: SqliteVolumeDatabase): Promise<void> 
       'ALTER TABLE blobs ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 0',
     );
   }
+};
+
+const migrateBlobReferenceCountSchema = async (
+  database: SqliteVolumeDatabase,
+): Promise<void> => {
+  if (!(await hasColumn(database, 'blobs', 'reference_count'))) {
+    await database.exec(
+      'ALTER TABLE blobs ADD COLUMN reference_count INTEGER NOT NULL DEFAULT 0',
+    );
+  }
+
+  await database.exec(`
+    UPDATE blobs
+       SET reference_count = COALESCE(
+         (
+           SELECT COUNT(*)
+             FROM entries
+            WHERE entries.content_ref = blobs.content_ref
+         ),
+         0
+       )
+  `);
 };
 
 const migrateManifestRevisionSchema = async (
@@ -465,6 +489,11 @@ const applySchemaMigrations = async (
     if (currentVersion < 3) {
       await migrateRelationalConstraintSchema(database);
       await recordSchemaMigration(database, 3, 'relational-storage-constraints');
+    }
+
+    if (currentVersion < 4) {
+      await migrateBlobReferenceCountSchema(database);
+      await recordSchemaMigration(database, 4, 'blob-reference-counts');
     }
 
     await database.run(

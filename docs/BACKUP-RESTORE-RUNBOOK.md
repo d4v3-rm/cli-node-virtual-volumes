@@ -143,10 +143,11 @@ Per un backup di routine:
 Per manutenzione ordinaria del database SQLite di un volume gia' in esercizio:
 
 1. Esegui `virtual-volumes doctor <volumeId>` per verificare che il volume sia integro.
-   Il report include anche metriche SQLite, i top candidate di compattazione ordinati per reclaimable bytes, e un warning `COMPACTION_RECOMMENDED` quando il volume ha abbastanza free pages da giustificare la manutenzione.
+   Il report include anche metriche SQLite, i top candidate di compattazione ordinati per reclaimable bytes, mismatch sui `blob reference count`, e un warning `COMPACTION_RECOMMENDED` quando il volume ha abbastanza free pages da giustificare la manutenzione.
 2. Esegui `virtual-volumes compact <volumeId>` per forzare checkpoint WAL, `VACUUM` e `PRAGMA optimize`.
 3. Se vuoi tracciare l'intervento, aggiungi `--output <path>` e conserva l'artifact del compattamento.
 4. Riesegui `virtual-volumes doctor <volumeId>` se vuoi validare il volume anche dopo la compattazione.
+   Se emergono mismatch sui `blob reference count`, `virtual-volumes doctor --fix` li riallinea senza toccare il contenuto dei file.
 
 Per manutenzione batch di tutti i volumi gestiti:
 
