@@ -154,12 +154,13 @@ Per manutenzione batch di tutti i volumi gestiti:
    Il dry-run espone anche il dettaglio dei volumi `planned`, `blocked`, `filtered` e `deferred`, con il motivo operativo di ciascuno.
    Il report quantifica anche i free bytes reclaimable per bucket, cosi' puoi stimare subito l'impatto atteso del batch.
 2. Se vuoi limitare il blast radius, aggiungi `--limit <n>` per processare solo i primi N volumi ordinati per free bytes reclaimable.
-3. Se vuoi restringere ulteriormente il batch, aggiungi `--min-free-bytes <bytes>` e/o `--min-free-ratio <ratio>` per includere solo i volumi che superano soglie minime esplicite.
-4. Per default il batch blocca i volumi che hanno anche issue diverse da `COMPACTION_RECOMMENDED`; usa `--include-unsafe` solo quando vuoi forzare esplicitamente la compattazione su volumi ancora diagnostically unhealthy.
-5. Esegui `virtual-volumes compact-recommended` per compattare solo i volumi oggi marcati con `COMPACTION_RECOMMENDED`.
+3. Se vuoi mettere un tetto al batch per dimensione, aggiungi `--max-reclaimable-bytes <bytes>` per non superare il budget cumulativo di reclaimable bytes pianificati.
+4. Se vuoi restringere ulteriormente il batch, aggiungi `--min-free-bytes <bytes>` e/o `--min-free-ratio <ratio>` per includere solo i volumi che superano soglie minime esplicite.
+5. Per default il batch blocca i volumi che hanno anche issue diverse da `COMPACTION_RECOMMENDED`; usa `--include-unsafe` solo quando vuoi forzare esplicitamente la compattazione su volumi ancora diagnostically unhealthy.
+6. Esegui `virtual-volumes compact-recommended` per compattare solo i volumi oggi marcati con `COMPACTION_RECOMMENDED`.
    Se vuoi usare il batch in automazione, aggiungi `--strict-plan` per fallire quando restano volumi `blocked`, `filtered`, `deferred` o `failed`.
-6. Se vuoi audit strutturato, aggiungi `--output <path>` anche al batch.
-7. Riesegui `virtual-volumes doctor` se vuoi confermare che la frammentazione raccomandata sia stata assorbita.
+7. Se vuoi audit strutturato, aggiungi `--output <path>` anche al batch.
+8. Riesegui `virtual-volumes doctor` se vuoi confermare che la frammentazione raccomandata sia stata assorbita.
 
 Per un restore di emergenza:
 

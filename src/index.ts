@@ -336,6 +336,18 @@ const main = async (): Promise<void> => {
       },
     )
     .option(
+      '--max-reclaimable-bytes <bytes>',
+      'Only plan compactions while the cumulative reclaimable free-byte budget stays within this cap',
+      (value: string) => {
+        const parsed = Number.parseInt(value, 10);
+        if (!Number.isInteger(parsed) || parsed <= 0) {
+          throw new Error('--max-reclaimable-bytes must be a positive integer');
+        }
+
+        return parsed;
+      },
+    )
+    .option(
       '--strict-plan',
       'Fail with a non-zero exit code when the batch still contains blocked, filtered, deferred, or failed volumes',
     )
@@ -350,6 +362,7 @@ const main = async (): Promise<void> => {
           limit?: number;
           minFreeBytes?: number;
           minFreeRatio?: number;
+          maxReclaimableBytes?: number;
           output?: string;
           strictPlan?: boolean;
         },
@@ -362,6 +375,7 @@ const main = async (): Promise<void> => {
             limit: options.limit,
             minFreeBytes: options.minFreeBytes,
             minFreeRatio: options.minFreeRatio,
+            maxReclaimableBytes: options.maxReclaimableBytes,
           });
           const artifactPath = options.output
             ? await writeCliJsonArtifact(

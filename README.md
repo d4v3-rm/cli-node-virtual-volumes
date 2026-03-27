@@ -274,6 +274,7 @@ virtual-volumes restore ./backups/finance.sqlite
 virtual-volumes compact-recommended --dry-run
 virtual-volumes compact-recommended --dry-run --strict-plan
 virtual-volumes compact-recommended --limit 5
+virtual-volumes compact-recommended --max-reclaimable-bytes 2097152
 virtual-volumes compact-recommended --min-free-bytes 1048576 --min-free-ratio 0.25
 virtual-volumes compact-recommended --include-unsafe
 virtual-volumes compact vol_finance_01
@@ -321,6 +322,7 @@ Each standard backup produces:
 - uses dry-run output as a true fleet plan, showing `planned`, `blocked`, `filtered`, and `deferred` volumes with explicit reasons
 - quantifies reclaimable bytes across `eligible`, `planned`, `blocked`, `filtered`, and `deferred` buckets so operators can size the batch before running it
 - supports `--limit <n>` to process only the top N recommended volumes by reclaimable free bytes
+- supports `--max-reclaimable-bytes` to cap the cumulative reclaimable-byte budget of the current batch
 - supports `--min-free-bytes` and `--min-free-ratio` to tighten the batch to only the volumes that exceed explicit operator thresholds
 - supports `--strict-plan` when operators or schedulers want a non-zero exit code unless the batch is fully actionable
 - supports `--include-unsafe` when you intentionally want to compact even volumes that still have other doctor findings

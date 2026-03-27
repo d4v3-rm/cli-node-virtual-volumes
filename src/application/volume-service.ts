@@ -256,6 +256,7 @@ export class VolumeService {
       limit?: number;
       minFreeBytes?: number;
       minFreeRatio?: number;
+      maxReclaimableBytes?: number;
     } = {},
   ): Promise<VolumeCompactionBatchResult> {
     return this.runAuditedOperation(
@@ -268,6 +269,7 @@ export class VolumeService {
           limit: options.limit ?? null,
           minFreeBytes: options.minFreeBytes ?? null,
           minFreeRatio: options.minFreeRatio ?? null,
+          maxReclaimableBytes: options.maxReclaimableBytes ?? null,
         },
       },
       async () => {
@@ -344,7 +346,13 @@ export class VolumeService {
             continue;
           }
 
-          if (options.limit !== undefined && plannedVolumes >= options.limit) {
+          const deferReason = this.getCompactionDeferredReason(
+            maintenance.freeBytes,
+            plannedVolumes,
+            plannedReclaimableBytes,
+            options,
+          );
+          if (deferReason) {
             deferredVolumes += 1;
             deferredReclaimableBytes += maintenance.freeBytes;
             volumes.push({
@@ -356,7 +364,7 @@ export class VolumeService {
               freeBytes: maintenance.freeBytes,
               freeRatio: maintenance.freeRatio,
               status: 'deferred',
-              reason: `Deferred by --limit ${options.limit}.`,
+              reason: deferReason,
             });
             continue;
           }
@@ -430,6 +438,7 @@ export class VolumeService {
           deferredReclaimableBytes,
           minimumFreeBytes: options.minFreeBytes ?? null,
           minimumFreeRatio: options.minFreeRatio ?? null,
+          maximumReclaimableBytes: options.maxReclaimableBytes ?? null,
           totalReclaimedBytes,
           volumes,
         };
@@ -448,6 +457,7 @@ export class VolumeService {
         deferredVolumes: result.deferredVolumes,
         minimumFreeBytes: result.minimumFreeBytes,
         minimumFreeRatio: result.minimumFreeRatio,
+        maximumReclaimableBytes: result.maximumReclaimableBytes,
         totalReclaimedBytes: result.totalReclaimedBytes,
       }),
     );
@@ -485,6 +495,29 @@ export class VolumeService {
     }
 
     return `Below --min-free-ratio threshold of ${(options.minFreeRatio! * 100).toFixed(1)}%.`;
+  }
+
+  private getCompactionDeferredReason(
+    freeBytes: number,
+    plannedVolumes: number,
+    plannedReclaimableBytes: number,
+    options: {
+      limit?: number;
+      maxReclaimableBytes?: number;
+    },
+  ): string | null {
+    if (options.limit !== undefined && plannedVolumes >= options.limit) {
+      return `Deferred by --limit ${options.limit}.`;
+    }
+
+    if (
+      options.maxReclaimableBytes !== undefined &&
+      plannedReclaimableBytes + freeBytes > options.maxReclaimableBytes
+    ) {
+      return `Deferred by --max-reclaimable-bytes ${options.maxReclaimableBytes} because planning this volume would exceed the current reclaim budget.`;
+    }
+
+    return null;
   }
 
   public async runDoctor(volumeId?: string): Promise<StorageDoctorReport> {

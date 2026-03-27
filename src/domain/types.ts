@@ -269,6 +269,7 @@ export interface VolumeCompactionBatchResult {
   deferredReclaimableBytes: number;
   minimumFreeBytes: number | null;
   minimumFreeRatio: number | null;
+  maximumReclaimableBytes: number | null;
   totalReclaimedBytes: number;
   volumes: VolumeCompactionBatchItem[];
 }
