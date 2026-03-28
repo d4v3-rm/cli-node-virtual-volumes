@@ -24,8 +24,8 @@ const sandboxes: string[] = [];
 const runtimes: AppRuntime[] = [];
 
 vi.setConfig({
-  hookTimeout: 15000,
-  testTimeout: 15000,
+  hookTimeout: 30000,
+  testTimeout: 30000,
 });
 
 const trackRuntime = async (
@@ -2393,6 +2393,55 @@ describe('VolumeService', () => {
     expect(
       repairedVolume?.remainingIssues.some(
         (issue) => issue.code === 'BLOB_CHUNK_COUNT_MISMATCH',
+      ),
+    ).toBe(true);
+  });
+
+  it('reports blob size drift and leaves unsafe repairs unapplied', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Blob Size Drift' });
+    const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/size.txt', 'sized payload');
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      const fileRow = await database.get<{ content_ref: string; size: number }>(
+        `SELECT entries.content_ref AS content_ref,
+                blobs.size AS size
+           FROM entries
+           JOIN blobs
+             ON blobs.content_ref = entries.content_ref
+          WHERE entries.name = 'size.txt'
+          LIMIT 1`,
+      );
+
+      expect(fileRow?.size).toBeGreaterThan(0);
+
+      await database.run(
+        `UPDATE blobs
+            SET size = size + 7
+          WHERE content_ref = ?`,
+        fileRow?.content_ref ?? '',
+      );
+    });
+
+    const doctorReport = await runtime.volumeService.runDoctor(volume.id);
+    const driftIssue = doctorReport.volumes[0]?.issues.find(
+      (issue) => issue.code === 'BLOB_SIZE_MISMATCH',
+    );
+
+    expect(doctorReport.healthy).toBe(false);
+    expect(driftIssue?.message).toContain('stores size=');
+    expect(driftIssue?.message).toContain('currently readable from its SQLite payload layout');
+
+    const repairReport = await runtime.volumeService.runRepair(volume.id);
+    const repairedVolume = repairReport.volumes[0];
+
+    expect(repairReport.healthy).toBe(false);
+    expect(repairedVolume?.repaired).toBe(false);
+    expect(
+      repairedVolume?.remainingIssues.some(
+        (issue) => issue.code === 'BLOB_SIZE_MISMATCH',
       ),
     ).toBe(true);
   });

@@ -1410,7 +1410,9 @@ export class VolumeRepository {
         const persistedBlobReferenceCounts =
           await this.listPersistedBlobReferenceCounts(database);
         const persistedBlobChunkCounts = await this.listPersistedBlobChunkCounts(database);
+        const persistedBlobSizes = await this.listPersistedBlobSizes(database);
         const actualBlobChunkCounts = await this.listActualBlobChunkCounts(database);
+        const actualBlobSizes = await this.listActualBlobSizes(database);
         const maintenance = await this.collectStorageMaintenanceStats(database, databasePath);
         const sqliteIssues = await this.collectSqliteDoctorIssues(database, volumeId);
         const issues = [
@@ -1420,6 +1422,8 @@ export class VolumeRepository {
             persistedBlobReferenceCounts,
             persistedBlobChunkCounts,
             actualBlobChunkCounts,
+            persistedBlobSizes,
+            actualBlobSizes,
           ),
           ...this.collectMaintenanceDoctorIssues(record.manifest.id, maintenance),
         ];
@@ -1452,12 +1456,16 @@ export class VolumeRepository {
           database,
         );
         let persistedBlobChunkCounts = await this.listPersistedBlobChunkCounts(database);
+        let persistedBlobSizes = await this.listPersistedBlobSizes(database);
         let actualBlobChunkCounts = await this.listActualBlobChunkCounts(database);
+        let actualBlobSizes = await this.listActualBlobSizes(database);
         const issuesBefore = this.collectDoctorIssues(
           record,
           persistedBlobReferenceCounts,
           persistedBlobChunkCounts,
           actualBlobChunkCounts,
+          persistedBlobSizes,
+          actualBlobSizes,
         );
 
         for (const issue of issuesBefore) {
@@ -1508,12 +1516,16 @@ export class VolumeRepository {
 
         persistedBlobReferenceCounts = await this.listPersistedBlobReferenceCounts(database);
         persistedBlobChunkCounts = await this.listPersistedBlobChunkCounts(database);
+        persistedBlobSizes = await this.listPersistedBlobSizes(database);
         actualBlobChunkCounts = await this.listActualBlobChunkCounts(database);
+        actualBlobSizes = await this.listActualBlobSizes(database);
         const remainingIssues = this.collectDoctorIssues(
           record,
           persistedBlobReferenceCounts,
           persistedBlobChunkCounts,
           actualBlobChunkCounts,
+          persistedBlobSizes,
+          actualBlobSizes,
         );
 
         await database.exec('COMMIT');
@@ -1609,6 +1621,18 @@ export class VolumeRepository {
     return new Map(blobRows.map((row) => [row.content_ref, row.chunk_count] as const));
   }
 
+  private async listPersistedBlobSizes(
+    database: SqliteVolumeDatabase,
+  ): Promise<Map<string, number>> {
+    const blobRows = await database.all<{ content_ref: string; size: number }[]>(
+      `SELECT content_ref,
+              size
+         FROM blobs`,
+    );
+
+    return new Map(blobRows.map((row) => [row.content_ref, row.size] as const));
+  }
+
   private async listActualBlobChunkCounts(
     database: SqliteVolumeDatabase,
   ): Promise<Map<string, number>> {
@@ -1622,6 +1646,26 @@ export class VolumeRepository {
     );
 
     return new Map(blobRows.map((row) => [row.content_ref, row.chunk_count] as const));
+  }
+
+  private async listActualBlobSizes(
+    database: SqliteVolumeDatabase,
+  ): Promise<Map<string, number>> {
+    const blobRows = await database.all<{ content_ref: string; size: number }[]>(
+      `SELECT blobs.content_ref AS content_ref,
+              CASE
+                WHEN blobs.chunk_count = 0
+                  THEN MAX(LENGTH(blobs.content))
+                ELSE COALESCE(SUM(LENGTH(blob_chunks.content)), 0)
+              END AS size
+         FROM blobs
+         LEFT JOIN blob_chunks
+           ON blob_chunks.content_ref = blobs.content_ref
+     GROUP BY blobs.content_ref,
+              blobs.chunk_count`,
+    );
+
+    return new Map(blobRows.map((row) => [row.content_ref, row.size] as const));
   }
 
   private async collectSqliteDoctorIssues(
@@ -1707,6 +1751,8 @@ export class VolumeRepository {
     persistedBlobReferenceCounts: Map<string, number>,
     persistedBlobChunkCounts: Map<string, number>,
     actualBlobChunkCounts: Map<string, number>,
+    persistedBlobSizes: Map<string, number>,
+    actualBlobSizes: Map<string, number>,
   ): StorageDoctorIssue[] {
     const issues: StorageDoctorIssue[] = [];
     const entries = Object.values(record.state.entries);
@@ -1802,6 +1848,8 @@ export class VolumeRepository {
         referencedBlobReferenceCounts.get(persistedBlobRef) ?? 0;
       const persistedChunkCount = persistedBlobChunkCounts.get(persistedBlobRef) ?? 0;
       const actualChunkCount = actualBlobChunkCounts.get(persistedBlobRef) ?? 0;
+      const persistedSize = persistedBlobSizes.get(persistedBlobRef) ?? 0;
+      const actualSize = actualBlobSizes.get(persistedBlobRef) ?? 0;
 
       if (actualReferenceCount === 0) {
         issues.push({
@@ -1826,6 +1874,15 @@ export class VolumeRepository {
           code: 'BLOB_CHUNK_COUNT_MISMATCH',
           severity: 'error',
           message: `Blob ${persistedBlobRef} stores chunk_count=${persistedChunkCount}, but ${actualChunkCount} blob chunk row(s) were found in SQLite.`,
+          contentRef: persistedBlobRef,
+        });
+      }
+
+      if (actualSize !== persistedSize) {
+        issues.push({
+          code: 'BLOB_SIZE_MISMATCH',
+          severity: 'error',
+          message: `Blob ${persistedBlobRef} stores size=${persistedSize}, but ${actualSize} byte(s) are currently readable from its SQLite payload layout.`,
           contentRef: persistedBlobRef,
         });
       }
