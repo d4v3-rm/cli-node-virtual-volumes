@@ -1409,11 +1409,18 @@ export class VolumeRepository {
         const record = await this.loadVolumeFromDatabase(database, volumeId);
         const persistedBlobReferenceCounts =
           await this.listPersistedBlobReferenceCounts(database);
+        const persistedBlobChunkCounts = await this.listPersistedBlobChunkCounts(database);
+        const actualBlobChunkCounts = await this.listActualBlobChunkCounts(database);
         const maintenance = await this.collectStorageMaintenanceStats(database, databasePath);
         const sqliteIssues = await this.collectSqliteDoctorIssues(database, volumeId);
         const issues = [
           ...sqliteIssues,
-          ...this.collectDoctorIssues(record, persistedBlobReferenceCounts),
+          ...this.collectDoctorIssues(
+            record,
+            persistedBlobReferenceCounts,
+            persistedBlobChunkCounts,
+            actualBlobChunkCounts,
+          ),
           ...this.collectMaintenanceDoctorIssues(record.manifest.id, maintenance),
         ];
 
@@ -1444,7 +1451,14 @@ export class VolumeRepository {
         let persistedBlobReferenceCounts = await this.listPersistedBlobReferenceCounts(
           database,
         );
-        const issuesBefore = this.collectDoctorIssues(record, persistedBlobReferenceCounts);
+        let persistedBlobChunkCounts = await this.listPersistedBlobChunkCounts(database);
+        let actualBlobChunkCounts = await this.listActualBlobChunkCounts(database);
+        const issuesBefore = this.collectDoctorIssues(
+          record,
+          persistedBlobReferenceCounts,
+          persistedBlobChunkCounts,
+          actualBlobChunkCounts,
+        );
 
         for (const issue of issuesBefore) {
           if (issue.code !== 'ORPHAN_BLOB' || !issue.contentRef) {
@@ -1493,9 +1507,13 @@ export class VolumeRepository {
         }
 
         persistedBlobReferenceCounts = await this.listPersistedBlobReferenceCounts(database);
+        persistedBlobChunkCounts = await this.listPersistedBlobChunkCounts(database);
+        actualBlobChunkCounts = await this.listActualBlobChunkCounts(database);
         const remainingIssues = this.collectDoctorIssues(
           record,
           persistedBlobReferenceCounts,
+          persistedBlobChunkCounts,
+          actualBlobChunkCounts,
         );
 
         await database.exec('COMMIT');
@@ -1579,6 +1597,33 @@ export class VolumeRepository {
     );
   }
 
+  private async listPersistedBlobChunkCounts(
+    database: SqliteVolumeDatabase,
+  ): Promise<Map<string, number>> {
+    const blobRows = await database.all<{ content_ref: string; chunk_count: number }[]>(
+      `SELECT content_ref,
+              chunk_count
+         FROM blobs`,
+    );
+
+    return new Map(blobRows.map((row) => [row.content_ref, row.chunk_count] as const));
+  }
+
+  private async listActualBlobChunkCounts(
+    database: SqliteVolumeDatabase,
+  ): Promise<Map<string, number>> {
+    const blobRows = await database.all<{ content_ref: string; chunk_count: number }[]>(
+      `SELECT blobs.content_ref AS content_ref,
+              COUNT(blob_chunks.chunk_index) AS chunk_count
+         FROM blobs
+         LEFT JOIN blob_chunks
+           ON blob_chunks.content_ref = blobs.content_ref
+     GROUP BY blobs.content_ref`,
+    );
+
+    return new Map(blobRows.map((row) => [row.content_ref, row.chunk_count] as const));
+  }
+
   private async collectSqliteDoctorIssues(
     database: SqliteVolumeDatabase,
     volumeId: string,
@@ -1660,6 +1705,8 @@ export class VolumeRepository {
   private collectDoctorIssues(
     record: VolumeRecord,
     persistedBlobReferenceCounts: Map<string, number>,
+    persistedBlobChunkCounts: Map<string, number>,
+    actualBlobChunkCounts: Map<string, number>,
   ): StorageDoctorIssue[] {
     const issues: StorageDoctorIssue[] = [];
     const entries = Object.values(record.state.entries);
@@ -1753,6 +1800,8 @@ export class VolumeRepository {
     ] of persistedBlobReferenceCounts.entries()) {
       const actualReferenceCount =
         referencedBlobReferenceCounts.get(persistedBlobRef) ?? 0;
+      const persistedChunkCount = persistedBlobChunkCounts.get(persistedBlobRef) ?? 0;
+      const actualChunkCount = actualBlobChunkCounts.get(persistedBlobRef) ?? 0;
 
       if (actualReferenceCount === 0) {
         issues.push({
@@ -1768,6 +1817,15 @@ export class VolumeRepository {
           code: 'BLOB_REFERENCE_COUNT_MISMATCH',
           severity: 'error',
           message: `Blob ${persistedBlobRef} stores reference_count=${persistedReferenceCount}, but ${actualReferenceCount} file reference(s) were computed from the current entries.`,
+          contentRef: persistedBlobRef,
+        });
+      }
+
+      if (actualChunkCount !== persistedChunkCount) {
+        issues.push({
+          code: 'BLOB_CHUNK_COUNT_MISMATCH',
+          severity: 'error',
+          message: `Blob ${persistedBlobRef} stores chunk_count=${persistedChunkCount}, but ${actualChunkCount} blob chunk row(s) were found in SQLite.`,
           contentRef: persistedBlobRef,
         });
       }

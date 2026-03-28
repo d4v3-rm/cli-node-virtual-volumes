@@ -2347,6 +2347,56 @@ describe('VolumeService', () => {
     });
   });
 
+  it('reports blob chunk-count drift and leaves unsafe repairs unapplied', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Blob Chunk Drift' });
+    const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+    const largePayload = 'x'.repeat(600_000);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/large.txt', largePayload);
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      const fileRow = await database.get<{ content_ref: string; chunk_count: number }>(
+        `SELECT entries.content_ref AS content_ref,
+                blobs.chunk_count AS chunk_count
+           FROM entries
+           JOIN blobs
+             ON blobs.content_ref = entries.content_ref
+          WHERE entries.name = 'large.txt'
+          LIMIT 1`,
+      );
+
+      expect(fileRow?.chunk_count).toBeGreaterThan(1);
+
+      await database.run(
+        `UPDATE blobs
+            SET chunk_count = 1
+          WHERE content_ref = ?`,
+        fileRow?.content_ref ?? '',
+      );
+    });
+
+    const doctorReport = await runtime.volumeService.runDoctor(volume.id);
+    const driftIssue = doctorReport.volumes[0]?.issues.find(
+      (issue) => issue.code === 'BLOB_CHUNK_COUNT_MISMATCH',
+    );
+
+    expect(doctorReport.healthy).toBe(false);
+    expect(driftIssue?.message).toContain('chunk_count=1');
+    expect(driftIssue?.message).toContain('blob chunk row(s) were found');
+
+    const repairReport = await runtime.volumeService.runRepair(volume.id);
+    const repairedVolume = repairReport.volumes[0];
+
+    expect(repairReport.healthy).toBe(false);
+    expect(repairedVolume?.repaired).toBe(false);
+    expect(
+      repairedVolume?.remainingIssues.some(
+        (issue) => issue.code === 'BLOB_CHUNK_COUNT_MISMATCH',
+      ),
+    ).toBe(true);
+  });
+
   it('deletes directory subtrees recursively', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Cleanup' });
