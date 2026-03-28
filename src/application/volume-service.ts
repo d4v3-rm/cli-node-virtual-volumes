@@ -22,6 +22,7 @@ import type {
   ImportSummary,
   MoveEntryInput,
   RestoreVolumeBackupOptions,
+  StorageDoctorOptions,
   StorageDoctorReport,
   StorageRepairReport,
   VolumeCompactionBatchResult,
@@ -520,18 +521,22 @@ export class VolumeService {
     return null;
   }
 
-  public async runDoctor(volumeId?: string): Promise<StorageDoctorReport> {
+  public async runDoctor(
+    volumeId?: string,
+    options: StorageDoctorOptions = {},
+  ): Promise<StorageDoctorReport> {
     return this.runAuditedOperation(
       {
         eventType: 'storage.doctor',
         resourceType: 'storage',
         volumeId,
       },
-      () => this.repository.runDoctor(volumeId),
+      () => this.repository.runDoctor(volumeId, options),
       (report) => ({
         checkedVolumes: report.checkedVolumes,
         issueCount: report.issueCount,
         healthy: report.healthy,
+        integrityDepth: report.integrityDepth ?? 'metadata',
       }),
     );
   }

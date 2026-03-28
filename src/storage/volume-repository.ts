@@ -16,6 +16,7 @@ import type {
   CreateVolumeInput,
   DirectoryEntry,
   FileEntry,
+  StorageDoctorOptions,
   RestoreVolumeBackupOptions,
   StorageDoctorIssue,
   StorageDoctorMaintenanceSummary,
@@ -341,12 +342,17 @@ export class VolumeRepository {
     });
   }
 
-  public async runDoctor(volumeId?: string): Promise<StorageDoctorReport> {
+  public async runDoctor(
+    volumeId?: string,
+    options: StorageDoctorOptions = {},
+  ): Promise<StorageDoctorReport> {
     const volumeIds = volumeId
       ? [volumeId]
       : await this.listDiscoveredVolumeIds();
     const volumeReports = await Promise.all(
-      volumeIds.map(async (discoveredVolumeId) => this.inspectVolume(discoveredVolumeId)),
+      volumeIds.map(async (discoveredVolumeId) =>
+        this.inspectVolume(discoveredVolumeId, options),
+      ),
     );
     const issueCount = volumeReports.reduce(
       (total, report) => total + report.issueCount,
@@ -396,6 +402,7 @@ export class VolumeRepository {
       healthy: issueCount === 0,
       checkedVolumes: volumeReports.length,
       issueCount,
+      integrityDepth: options.verifyBlobPayloads ? 'deep' : 'metadata',
       maintenanceSummary,
       volumes: volumeReports,
     };
@@ -1396,7 +1403,10 @@ export class VolumeRepository {
     }
   }
 
-  private async inspectVolume(volumeId: string): Promise<StorageDoctorVolumeReport> {
+  private async inspectVolume(
+    volumeId: string,
+    options: StorageDoctorOptions = {},
+  ): Promise<StorageDoctorVolumeReport> {
     const databasePath = this.getVolumeDatabasePath(volumeId);
     if (!(await pathExists(databasePath))) {
       throw new VolumeError('NOT_FOUND', `Volume ${volumeId} does not exist.`, {
@@ -1415,6 +1425,17 @@ export class VolumeRepository {
         const actualBlobSizes = await this.listActualBlobSizes(database);
         const maintenance = await this.collectStorageMaintenanceStats(database, databasePath);
         const sqliteIssues = await this.collectSqliteDoctorIssues(database, volumeId);
+        const blobPayloadIssues = options.verifyBlobPayloads
+          ? await this.collectBlobPayloadDoctorIssues(
+              database,
+              new Set(
+                Object.values(record.state.entries)
+                  .filter((entry): entry is FileEntry => entry.kind === 'file')
+                  .map((entry) => entry.contentRef)
+                  .filter((contentRef) => contentRef.length > 0),
+              ),
+            )
+          : [];
         const issues = [
           ...sqliteIssues,
           ...this.collectDoctorIssues(
@@ -1425,6 +1446,7 @@ export class VolumeRepository {
             persistedBlobSizes,
             actualBlobSizes,
           ),
+          ...blobPayloadIssues,
           ...this.collectMaintenanceDoctorIssues(record.manifest.id, maintenance),
         ];
 
@@ -1666,6 +1688,67 @@ export class VolumeRepository {
     );
 
     return new Map(blobRows.map((row) => [row.content_ref, row.size] as const));
+  }
+
+  private async collectBlobPayloadDoctorIssues(
+    database: SqliteVolumeDatabase,
+    contentRefs: Set<string>,
+  ): Promise<StorageDoctorIssue[]> {
+    const issues: StorageDoctorIssue[] = [];
+
+    for (const contentRef of contentRefs) {
+      const blobRow = await database.get<{
+        content_ref: string;
+        chunk_count: number;
+        content: Buffer | null;
+      }>(
+        `SELECT content_ref,
+                chunk_count,
+                content
+           FROM blobs
+          WHERE content_ref = ?`,
+        contentRef,
+      );
+
+      if (!blobRow) {
+        continue;
+      }
+
+      const hash = createHash('sha256');
+
+      if (blobRow.chunk_count === 0) {
+        hash.update(blobRow.content ?? Buffer.alloc(0));
+      } else {
+        for (let chunkIndex = 0; chunkIndex < blobRow.chunk_count; chunkIndex += 1) {
+          const chunkRow = await database.get<{ content: Buffer }>(
+            `SELECT content
+               FROM blob_chunks
+              WHERE content_ref = ?
+                AND chunk_index = ?`,
+            blobRow.content_ref,
+            chunkIndex,
+          );
+
+          if (!chunkRow) {
+            break;
+          }
+
+          hash.update(chunkRow.content);
+        }
+      }
+
+      const actualContentRef = hash.digest('hex');
+      if (actualContentRef !== contentRef) {
+        issues.push({
+          code: 'BLOB_CONTENT_REF_MISMATCH',
+          severity: 'error',
+          message: `Blob ${contentRef} hashes to ${actualContentRef} when its SQLite payload is read back.`,
+          contentRef,
+        });
+      }
+    }
+
+    return issues;
   }
 
   private async collectSqliteDoctorIssues(

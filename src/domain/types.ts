@@ -277,6 +277,7 @@ export interface VolumeCompactionBatchResult {
 export interface StorageDoctorIssue {
   code:
     | 'BLOB_CHUNK_COUNT_MISMATCH'
+    | 'BLOB_CONTENT_REF_MISMATCH'
     | 'BLOB_REFERENCE_COUNT_MISMATCH'
     | 'BLOB_SIZE_MISMATCH'
     | 'DATABASE_OPEN_FAILED'
@@ -343,8 +344,13 @@ export interface StorageDoctorReport {
   healthy: boolean;
   checkedVolumes: number;
   issueCount: number;
+  integrityDepth?: 'metadata' | 'deep';
   maintenanceSummary: StorageDoctorMaintenanceSummary;
   volumes: StorageDoctorVolumeReport[];
+}
+
+export interface StorageDoctorOptions {
+  verifyBlobPayloads?: boolean;
 }
 
 export interface StorageRepairAction {

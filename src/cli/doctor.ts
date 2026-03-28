@@ -58,6 +58,7 @@ export const formatDoctorReport = (report: StorageDoctorReport): string => {
   const lines = [
     `Storage doctor: ${report.healthy ? 'HEALTHY' : 'ISSUES FOUND'}`,
     `Generated at: ${report.generatedAt}`,
+    `Integrity depth: ${report.integrityDepth ?? 'metadata'}`,
     `Checked volumes: ${report.checkedVolumes}`,
     `Total issues: ${report.issueCount}`,
     `Volumes with maintenance stats: ${report.maintenanceSummary.volumesWithStats}`,

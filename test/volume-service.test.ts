@@ -2446,6 +2446,51 @@ describe('VolumeService', () => {
     ).toBe(true);
   });
 
+  it('verifies blob payload hashes only when deep doctor verification is requested', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Blob Payload Verification' });
+    const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/payload.txt', 'stable bytes');
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      const fileRow = await database.get<{ content_ref: string }>(
+        `SELECT content_ref
+           FROM entries
+          WHERE name = 'payload.txt'
+          LIMIT 1`,
+      );
+
+      await database.run(
+        `UPDATE blob_chunks
+            SET content = ?
+          WHERE content_ref = ?
+            AND chunk_index = 0`,
+        Buffer.from('tamper data!'),
+        fileRow?.content_ref ?? '',
+      );
+    });
+
+    const metadataDoctor = await runtime.volumeService.runDoctor(volume.id);
+    expect(metadataDoctor.integrityDepth).toBe('metadata');
+    expect(
+      metadataDoctor.volumes[0]?.issues.some(
+        (issue) => issue.code === 'BLOB_CONTENT_REF_MISMATCH',
+      ),
+    ).toBe(false);
+
+    const deepDoctor = await runtime.volumeService.runDoctor(volume.id, {
+      verifyBlobPayloads: true,
+    });
+    const driftIssue = deepDoctor.volumes[0]?.issues.find(
+      (issue) => issue.code === 'BLOB_CONTENT_REF_MISMATCH',
+    );
+
+    expect(deepDoctor.integrityDepth).toBe('deep');
+    expect(deepDoctor.healthy).toBe(false);
+    expect(driftIssue?.message).toContain('hashes to');
+  });
+
   it('deletes directory subtrees recursively', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Cleanup' });
