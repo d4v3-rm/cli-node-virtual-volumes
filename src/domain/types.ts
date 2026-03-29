@@ -277,6 +277,7 @@ export interface VolumeCompactionBatchResult {
 export interface StorageDoctorIssue {
   code:
     | 'BLOB_CHUNK_COUNT_MISMATCH'
+    | 'BLOB_CHUNK_INDEX_GAP'
     | 'BLOB_CONTENT_REF_MISMATCH'
     | 'BLOB_REFERENCE_COUNT_MISMATCH'
     | 'BLOB_SIZE_MISMATCH'
