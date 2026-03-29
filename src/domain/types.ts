@@ -354,7 +354,11 @@ export interface StorageDoctorOptions {
 }
 
 export interface StorageRepairAction {
-  code: 'DELETE_ORPHAN_BLOB' | 'REBUILD_MANIFEST' | 'SYNC_BLOB_REFERENCE_COUNTS';
+  code:
+    | 'DELETE_ORPHAN_BLOB'
+    | 'REBUILD_MANIFEST'
+    | 'SYNC_BLOB_LAYOUT_METADATA'
+    | 'SYNC_BLOB_REFERENCE_COUNTS';
   message: string;
   contentRef?: string;
 }

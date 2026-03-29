@@ -85,6 +85,13 @@ interface VolumeBackupArtifactMetadata {
   snapshot: VolumeDatabaseSnapshot;
 }
 
+interface BlobPayloadStats {
+  actualContentRef: string;
+  actualSize: number;
+  actualChunkCount: number;
+  contiguousChunkIndexes: boolean;
+}
+
 const escapeSqliteStringLiteral = (value: string): string => value.replaceAll("'", "''");
 const BACKUP_MANIFEST_SUFFIX = '.manifest.json';
 const BACKUP_MANIFEST_FORMAT_VERSION = 1 as const;
@@ -1504,6 +1511,62 @@ export class VolumeRepository {
           });
         }
 
+        const blobLayoutSyncTargets = new Set(
+          issuesBefore
+            .filter(
+              (
+                issue,
+              ): issue is StorageDoctorIssue & {
+                contentRef: string;
+              } =>
+                issue.contentRef !== undefined &&
+                (issue.code === 'BLOB_CHUNK_COUNT_MISMATCH' ||
+                  issue.code === 'BLOB_SIZE_MISMATCH'),
+            )
+            .map((issue) => issue.contentRef),
+        );
+
+        for (const contentRef of blobLayoutSyncTargets) {
+          const payloadStats = await this.readBlobPayloadStats(database, contentRef);
+          if (
+            payloadStats?.actualContentRef !== contentRef ||
+            !payloadStats?.contiguousChunkIndexes
+          ) {
+            continue;
+          }
+
+          const persistedBlob = await database.get<{ size: number; chunk_count: number }>(
+            `SELECT size,
+                    chunk_count
+               FROM blobs
+              WHERE content_ref = ?`,
+            contentRef,
+          );
+
+          if (
+            !persistedBlob ||
+            (persistedBlob.size === payloadStats.actualSize &&
+              persistedBlob.chunk_count === payloadStats.actualChunkCount)
+          ) {
+            continue;
+          }
+
+          await database.run(
+            `UPDATE blobs
+                SET size = ?,
+                    chunk_count = ?
+              WHERE content_ref = ?`,
+            payloadStats.actualSize,
+            payloadStats.actualChunkCount,
+            contentRef,
+          );
+          actions.push({
+            code: 'SYNC_BLOB_LAYOUT_METADATA',
+            message: 'Synchronized blob size and chunk-count metadata from the current SQLite payload layout.',
+            contentRef,
+          });
+        }
+
         if (
           issuesBefore.some(
             (issue) =>
@@ -1690,6 +1753,62 @@ export class VolumeRepository {
     return new Map(blobRows.map((row) => [row.content_ref, row.size] as const));
   }
 
+  private async readBlobPayloadStats(
+    database: SqliteVolumeDatabase,
+    contentRef: string,
+  ): Promise<BlobPayloadStats | null> {
+    const blobRow = await database.get<{
+      content_ref: string;
+      content: Buffer | null;
+    }>(
+      `SELECT content_ref,
+              content
+         FROM blobs
+        WHERE content_ref = ?`,
+      contentRef,
+    );
+
+    if (!blobRow) {
+      return null;
+    }
+
+    const chunkRows = await database.all<{ chunk_index: number; content: Buffer }[]>(
+      `SELECT chunk_index,
+              content
+         FROM blob_chunks
+        WHERE content_ref = ?
+     ORDER BY chunk_index`,
+      contentRef,
+    );
+
+    const hash = createHash('sha256');
+    let actualSize = 0;
+    let contiguousChunkIndexes = true;
+
+    if (chunkRows.length === 0) {
+      const inlineContent = blobRow.content ?? Buffer.alloc(0);
+      hash.update(inlineContent);
+      actualSize = inlineContent.byteLength;
+    } else {
+      for (let index = 0; index < chunkRows.length; index += 1) {
+        const chunkRow = chunkRows[index];
+        if (chunkRow && chunkRow.chunk_index !== index) {
+          contiguousChunkIndexes = false;
+        }
+        const chunk = chunkRow?.content ?? Buffer.alloc(0);
+        actualSize += chunk.byteLength;
+        hash.update(chunk);
+      }
+    }
+
+    return {
+      actualContentRef: hash.digest('hex'),
+      actualSize,
+      actualChunkCount: chunkRows.length,
+      contiguousChunkIndexes,
+    };
+  }
+
   private async collectBlobPayloadDoctorIssues(
     database: SqliteVolumeDatabase,
     contentRefs: Set<string>,
@@ -1697,52 +1816,16 @@ export class VolumeRepository {
     const issues: StorageDoctorIssue[] = [];
 
     for (const contentRef of contentRefs) {
-      const blobRow = await database.get<{
-        content_ref: string;
-        chunk_count: number;
-        content: Buffer | null;
-      }>(
-        `SELECT content_ref,
-                chunk_count,
-                content
-           FROM blobs
-          WHERE content_ref = ?`,
-        contentRef,
-      );
-
-      if (!blobRow) {
+      const payloadStats = await this.readBlobPayloadStats(database, contentRef);
+      if (!payloadStats) {
         continue;
       }
 
-      const hash = createHash('sha256');
-
-      if (blobRow.chunk_count === 0) {
-        hash.update(blobRow.content ?? Buffer.alloc(0));
-      } else {
-        for (let chunkIndex = 0; chunkIndex < blobRow.chunk_count; chunkIndex += 1) {
-          const chunkRow = await database.get<{ content: Buffer }>(
-            `SELECT content
-               FROM blob_chunks
-              WHERE content_ref = ?
-                AND chunk_index = ?`,
-            blobRow.content_ref,
-            chunkIndex,
-          );
-
-          if (!chunkRow) {
-            break;
-          }
-
-          hash.update(chunkRow.content);
-        }
-      }
-
-      const actualContentRef = hash.digest('hex');
-      if (actualContentRef !== contentRef) {
+      if (payloadStats.actualContentRef !== contentRef) {
         issues.push({
           code: 'BLOB_CONTENT_REF_MISMATCH',
           severity: 'error',
-          message: `Blob ${contentRef} hashes to ${actualContentRef} when its SQLite payload is read back.`,
+          message: `Blob ${contentRef} hashes to ${payloadStats.actualContentRef} when its SQLite payload is read back.`,
           contentRef,
         });
       }

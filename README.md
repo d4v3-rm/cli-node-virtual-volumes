@@ -335,10 +335,12 @@ Each standard backup produces:
 - free-page bytes and free-page ratio
 - top compaction candidates in descending reclaimable-byte order
 - blob reference-count mismatches when blob liveness metadata drifts from actual file references
+- safe blob layout drifts such as `size` or `chunk_count` mismatches against the current SQLite payload layout
 - `COMPACTION_RECOMMENDED` when a volume is fragmented enough to justify running `compact`
 - `Integrity depth: metadata` for the fast default pass, or `Integrity depth: deep` when `--verify-blobs` is enabled
 
 Use `virtual-volumes doctor <volumeId> --verify-blobs` when you need a slower payload scrub that re-hashes referenced blobs and catches content drift even when metadata still looks consistent.
+Use `virtual-volumes doctor --fix` when you want the CLI to auto-repair safe metadata drifts like orphan blobs, manifest counters, blob reference counts, and blob layout metadata that can be recomputed from the current SQLite payload.
 
 For the full operational procedure, drills, and audit checklist, see [docs/BACKUP-RESTORE-RUNBOOK.md](./docs/BACKUP-RESTORE-RUNBOOK.md).
 
