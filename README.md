@@ -88,6 +88,8 @@ In pratica ottieni volumi virtuali persistenti, con spazio logico configurabile,
 - Export di file dal volume alla macchina host.
 - Export ricorsivo di directory.
 - Feedback di avanzamento durante transfer lunghi.
+- Transfer di file grandi tramite chunk persistiti in SQLite.
+- Verifica di integrita' automatica su import ed export.
 
 ### Tooling
 
@@ -194,6 +196,7 @@ Il progetto legge la configurazione da `.env`, flag CLI e default interni. E' di
 
 - Di default i volumi vengono salvati nella directory corrente da cui lanci il programma, a meno che tu non sovrascriva il path via config.
 - Dentro `VOLUME_DATA_DIR/volumes` ogni volume viene persistito come file singolo `.sqlite`.
+- I contenuti file grandi vengono salvati a chunk all'interno dello stesso database SQLite del volume.
 - I log sono pensati per stare su file; l'output su terminale e' utile in debug, ma puo' interferire con la TUI fullscreen.
 
 ## ⌨️ Controlli TUI
@@ -272,6 +275,7 @@ Durante l'operazione la status area mostra:
 - progress bar
 - messaggio contestuale
 - esito finale `SUCCESS` o `ERROR`
+- verifica di integrita' sui file importati
 
 ### Export
 
@@ -283,6 +287,7 @@ L'export funziona in modo speculare:
 - confermi l'operazione
 
 L'export supporta sia file singoli sia directory ricorsive.
+Al termine dell'export viene eseguita anche una verifica di integrita' del file scritto sulla macchina host.
 
 ## 🧠 API Node.js
 

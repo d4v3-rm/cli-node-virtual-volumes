@@ -1381,7 +1381,7 @@ export class TerminalApp {
     this.notify(
       'success',
       `Imported ${summary.filesImported} files and ${summary.directoriesImported} directories.`,
-      `Destination ${destinationPath}  ${formatBytes(summary.bytesImported)} transferred  Conflicts ${summary.conflictsResolved}`,
+      `Destination ${destinationPath}  ${formatBytes(summary.bytesImported)} transferred  Conflicts ${summary.conflictsResolved}  Integrity ${summary.integrityChecksPassed}`,
     );
     await this.openVolume(this.currentVolumeId, destinationPath);
   }
@@ -1424,7 +1424,7 @@ export class TerminalApp {
     this.notify(
       'success',
       `Exported ${summary.filesExported} files and ${summary.directoriesExported} directories.`,
-      `Destination ${destinationHostDirectory}  ${formatBytes(summary.bytesExported)} transferred  Conflicts ${summary.conflictsResolved}`,
+      `Destination ${destinationHostDirectory}  ${formatBytes(summary.bytesExported)} transferred  Conflicts ${summary.conflictsResolved}  Integrity ${summary.integrityChecksPassed}`,
     );
     this.render();
   }
@@ -2934,16 +2934,26 @@ export class TerminalApp {
 
   private formatImportProgress(progress: ImportProgress): string {
     const currentTarget = path.basename(progress.currentHostPath) || progress.currentHostPath;
-    const phaseLabel = progress.phase === 'directory' ? 'dir' : 'file';
+    const phaseLabel =
+      progress.phase === 'directory'
+        ? 'dir'
+        : progress.phase === 'integrity'
+          ? 'verify'
+          : 'file';
 
-    return `Current ${phaseLabel}: ${currentTarget}  Imported ${progress.summary.filesImported} files / ${progress.summary.directoriesImported} dirs / ${formatBytes(progress.summary.bytesImported)}`;
+    return `Current ${phaseLabel}: ${currentTarget}  Imported ${progress.summary.filesImported} files / ${progress.summary.directoriesImported} dirs / ${formatBytes(progress.summary.bytesImported)} / Integrity ${progress.summary.integrityChecksPassed}`;
   }
 
   private formatExportProgress(progress: ExportProgress): string {
     const currentTarget = path.basename(progress.currentVirtualPath) || progress.currentVirtualPath;
-    const phaseLabel = progress.phase === 'directory' ? 'dir' : 'file';
+    const phaseLabel =
+      progress.phase === 'directory'
+        ? 'dir'
+        : progress.phase === 'integrity'
+          ? 'verify'
+          : 'file';
 
-    return `Current ${phaseLabel}: ${currentTarget}  Exported ${progress.summary.filesExported} files / ${progress.summary.directoriesExported} dirs / ${formatBytes(progress.summary.bytesExported)}`;
+    return `Current ${phaseLabel}: ${currentTarget}  Exported ${progress.summary.filesExported} files / ${progress.summary.directoriesExported} dirs / ${formatBytes(progress.summary.bytesExported)} / Integrity ${progress.summary.integrityChecksPassed}`;
   }
 
   private focusShell(): void {
