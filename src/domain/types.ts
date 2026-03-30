@@ -354,6 +354,10 @@ export interface StorageDoctorOptions {
   verifyBlobPayloads?: boolean;
 }
 
+export interface StorageRepairOptions {
+  verifyBlobPayloads?: boolean;
+}
+
 export interface StorageRepairAction {
   code:
     | 'DELETE_ORPHAN_BLOB'
@@ -382,6 +386,7 @@ export interface StorageRepairReport {
   checkedVolumes: number;
   repairedVolumes: number;
   actionsApplied: number;
+  integrityDepth?: 'metadata' | 'deep';
   volumes: StorageRepairVolumeReport[];
 }
 

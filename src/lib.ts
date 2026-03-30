@@ -25,6 +25,7 @@ export type {
   StorageDoctorReport,
   StorageDoctorVolumeReport,
   StorageRepairAction,
+  StorageRepairOptions,
   StorageRepairReport,
   StorageRepairVolumeReport,
   SupportBundleChecksumManifest,

@@ -24,6 +24,7 @@ import type {
   StorageDoctorReport,
   StorageDoctorVolumeReport,
   StorageRepairAction,
+  StorageRepairOptions,
   StorageRepairReport,
   StorageRepairVolumeReport,
   VolumeCompactionResult,
@@ -415,12 +416,15 @@ export class VolumeRepository {
     };
   }
 
-  public async runRepair(volumeId?: string): Promise<StorageRepairReport> {
+  public async runRepair(
+    volumeId?: string,
+    options: StorageRepairOptions = {},
+  ): Promise<StorageRepairReport> {
     const manifests = volumeId
       ? [(await this.loadVolume(volumeId)).manifest]
       : await this.listVolumes();
     const volumeReports = await Promise.all(
-      manifests.map(async (manifest) => this.repairVolume(manifest.id)),
+      manifests.map(async (manifest) => this.repairVolume(manifest.id, options)),
     );
 
     return {
@@ -432,6 +436,7 @@ export class VolumeRepository {
         (total, report) => total + report.actions.length,
         0,
       ),
+      integrityDepth: options.verifyBlobPayloads ? 'deep' : 'metadata',
       volumes: volumeReports,
     };
   }
@@ -1436,12 +1441,7 @@ export class VolumeRepository {
         const blobPayloadIssues = options.verifyBlobPayloads
           ? await this.collectBlobPayloadDoctorIssues(
               database,
-              new Set(
-                Object.values(record.state.entries)
-                  .filter((entry): entry is FileEntry => entry.kind === 'file')
-                  .map((entry) => entry.contentRef)
-                  .filter((contentRef) => contentRef.length > 0),
-              ),
+              this.collectReferencedFileContentRefs(record),
             )
           : [];
         const issues = [
@@ -1474,7 +1474,10 @@ export class VolumeRepository {
     }
   }
 
-  private async repairVolume(volumeId: string): Promise<StorageRepairVolumeReport> {
+  private async repairVolume(
+    volumeId: string,
+    options: StorageRepairOptions = {},
+  ): Promise<StorageRepairVolumeReport> {
     const databasePath = this.getVolumeDatabasePath(volumeId);
 
     return withVolumeDatabase(databasePath, async (database) => {
@@ -1491,15 +1494,25 @@ export class VolumeRepository {
         let blobChunkIndexContiguity = await this.listBlobChunkIndexContiguity(database);
         let actualBlobChunkCounts = await this.listActualBlobChunkCounts(database);
         let actualBlobSizes = await this.listActualBlobSizes(database);
-        const issuesBefore = this.collectDoctorIssues(
-          record,
-          persistedBlobReferenceCounts,
-          persistedBlobChunkCounts,
-          actualBlobChunkCounts,
-          persistedBlobSizes,
-          actualBlobSizes,
-          blobChunkIndexContiguity,
-        );
+        const issuesBefore = [
+          ...this.collectDoctorIssues(
+            record,
+            persistedBlobReferenceCounts,
+            persistedBlobChunkCounts,
+            actualBlobChunkCounts,
+            persistedBlobSizes,
+            actualBlobSizes,
+            blobChunkIndexContiguity,
+          ),
+          ...(
+            options.verifyBlobPayloads
+              ? await this.collectBlobPayloadDoctorIssues(
+                  database,
+                  this.collectReferencedFileContentRefs(record),
+                )
+              : []
+          ),
+        ];
 
         for (const issue of issuesBefore) {
           if (issue.code !== 'ORPHAN_BLOB' || !issue.contentRef) {
@@ -1629,15 +1642,25 @@ export class VolumeRepository {
         blobChunkIndexContiguity = await this.listBlobChunkIndexContiguity(database);
         actualBlobChunkCounts = await this.listActualBlobChunkCounts(database);
         actualBlobSizes = await this.listActualBlobSizes(database);
-        const remainingIssues = this.collectDoctorIssues(
-          record,
-          persistedBlobReferenceCounts,
-          persistedBlobChunkCounts,
-          actualBlobChunkCounts,
-          persistedBlobSizes,
-          actualBlobSizes,
-          blobChunkIndexContiguity,
-        );
+        const remainingIssues = [
+          ...this.collectDoctorIssues(
+            record,
+            persistedBlobReferenceCounts,
+            persistedBlobChunkCounts,
+            actualBlobChunkCounts,
+            persistedBlobSizes,
+            actualBlobSizes,
+            blobChunkIndexContiguity,
+          ),
+          ...(
+            options.verifyBlobPayloads
+              ? await this.collectBlobPayloadDoctorIssues(
+                  database,
+                  this.collectReferencedFileContentRefs(record),
+                )
+              : []
+          ),
+        ];
 
         await database.exec('COMMIT');
 
@@ -1921,6 +1944,15 @@ export class VolumeRepository {
     }
 
     return issues;
+  }
+
+  private collectReferencedFileContentRefs(record: VolumeRecord): Set<string> {
+    return new Set(
+      Object.values(record.state.entries)
+        .filter((entry): entry is FileEntry => entry.kind === 'file')
+        .map((entry) => entry.contentRef)
+        .filter((contentRef) => contentRef.length > 0),
+    );
   }
 
   private async collectSqliteDoctorIssues(

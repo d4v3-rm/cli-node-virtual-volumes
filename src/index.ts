@@ -437,7 +437,9 @@ const main = async (): Promise<void> => {
         await withRuntime(async (runtime) => {
           const correlationId = runtime.correlationId;
           if (options.fix) {
-            const report = await runtime.volumeService.runRepair(volumeId);
+            const report = await runtime.volumeService.runRepair(volumeId, {
+              verifyBlobPayloads: options.verifyBlobs,
+            });
             const artifactPath = options.output
               ? await writeCliJsonArtifact(
                   'doctor --fix',
