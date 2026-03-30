@@ -18,7 +18,10 @@ import {
   formatSupportBundleResult,
 } from './cli/support-bundle.js';
 import {
+  evaluateStorageRepairBatchPolicy,
   evaluateVolumeCompactionBatchPolicy,
+  formatStorageRepairBatchPolicyStatus,
+  formatStorageRepairBatchResult,
   formatVolumeCompactionBatchPolicyStatus,
   formatVolumeCompactionBatchResult,
   formatVolumeCompactionResult,
@@ -401,6 +404,88 @@ const main = async (): Promise<void> => {
           });
           if (options.strictPlan) {
             console.error(formatVolumeCompactionBatchPolicyStatus(policyStatus));
+          }
+
+          if (!options.dryRun && result.failedVolumes > 0) {
+            process.exitCode = 1;
+          }
+          if (!policyStatus.satisfied) {
+            process.exitCode = 1;
+          }
+        });
+      },
+    );
+
+  program
+    .command('repair-safe')
+    .description(
+      'Repair all managed volumes that only expose safe doctor drifts and are ready for automated batch repair.',
+    )
+    .option('--dry-run', 'Report which volumes would be repaired without mutating them')
+    .option(
+      '--verify-blobs',
+      'Hash and verify referenced blob payloads while planning and executing batch repairs',
+    )
+    .option(
+      '--limit <count>',
+      'Only process the first N repairable volumes in the current batch plan',
+      (value: string) => {
+        const parsed = Number.parseInt(value, 10);
+        if (!Number.isInteger(parsed) || parsed <= 0) {
+          throw new Error('--limit must be a positive integer');
+        }
+
+        return parsed;
+      },
+    )
+    .option(
+      '--strict-plan',
+      'Fail with a non-zero exit code when the batch still contains blocked, deferred, or failed volumes',
+    )
+    .option('--json', 'Output the batch result as JSON')
+    .option('--output <path>', 'Write the structured JSON result to this file')
+    .action(
+      async (
+        options: {
+          dryRun?: boolean;
+          verifyBlobs?: boolean;
+          strictPlan?: boolean;
+          json?: boolean;
+          output?: string;
+          limit?: number;
+        },
+      ) => {
+        await withRuntime(async (runtime) => {
+          const correlationId = runtime.correlationId;
+          const result = await runtime.volumeService.repairSafeVolumes({
+            dryRun: options.dryRun,
+            verifyBlobPayloads: options.verifyBlobs,
+            limit: options.limit,
+          });
+          const artifactPath = options.output
+            ? await writeCliJsonArtifact(
+                'repair-safe',
+                sanitizeArtifactPayload(result, runtime.config.redactSensitiveDetails),
+                options.output,
+                {
+                  correlationId,
+                },
+              )
+            : null;
+
+          console.log(
+            renderCliResult(result, formatStorageRepairBatchResult, {
+              artifactPath,
+              correlationId,
+              json: options.json,
+            }),
+          );
+
+          const policyStatus = evaluateStorageRepairBatchPolicy(result, {
+            strictPlan: options.strictPlan,
+          });
+          if (options.strictPlan) {
+            console.error(formatStorageRepairBatchPolicyStatus(policyStatus));
           }
 
           if (!options.dryRun && result.failedVolumes > 0) {

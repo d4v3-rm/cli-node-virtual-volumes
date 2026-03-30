@@ -1,4 +1,6 @@
 import type {
+  StorageRepairBatchItem,
+  StorageRepairBatchResult,
   VolumeCompactionBatchItem,
   VolumeCompactionBatchResult,
   VolumeCompactionResult,
@@ -6,6 +8,12 @@ import type {
 import { formatBytes, formatDateTime } from '../utils/formatters.js';
 
 export interface VolumeCompactionBatchPolicyStatus {
+  strictPlan: boolean;
+  satisfied: boolean;
+  messages: string[];
+}
+
+export interface StorageRepairBatchPolicyStatus {
   strictPlan: boolean;
   satisfied: boolean;
   messages: string[];
@@ -147,6 +155,129 @@ export const evaluateVolumeCompactionBatchPolicy = (
 
 export const formatVolumeCompactionBatchPolicyStatus = (
   status: VolumeCompactionBatchPolicyStatus,
+): string => {
+  const lines = [
+    `Strict plan gate: ${status.satisfied ? 'PASSED' : 'FAILED'}`,
+  ];
+
+  if (status.messages.length > 0) {
+    lines.push(...status.messages.map((message) => `- ${message}`));
+  }
+
+  return lines.join('\n');
+};
+
+const formatRepairBatchItem = (item: StorageRepairBatchItem): string => {
+  const prefix = `  - ${item.status.toUpperCase()} ${item.volumeName} (${item.volumeId}) revision=${item.revision}`;
+  const issueSummary = `issues=${item.issueCount} repairable=${item.repairableIssueCodes.join(',')}`;
+
+  if (item.status === 'blocked') {
+    const blockingIssues = item.blockingIssueCodes?.join(',') ?? 'unknown';
+    const reason = item.reason ? ` reason=${item.reason}` : '';
+    return `${prefix} ${issueSummary} blocking=${blockingIssues}${reason}`;
+  }
+
+  if (item.status === 'deferred') {
+    return `${prefix} ${issueSummary} reason=${item.reason ?? 'unknown'}`;
+  }
+
+  if (item.status === 'planned') {
+    return `${prefix} ${issueSummary}`;
+  }
+
+  if (item.status === 'repaired' && item.repair) {
+    return `${prefix} before=${item.repair.issueCountBefore} after=${item.repair.issueCountAfter} actions=${item.repair.actions.length} ${issueSummary}`;
+  }
+
+  if (item.status === 'failed') {
+    const repairSummary = item.repair
+      ? ` before=${item.repair.issueCountBefore} after=${item.repair.issueCountAfter} actions=${item.repair.actions.length}`
+      : '';
+    return `${prefix}${repairSummary} ${issueSummary} error=${item.error ?? 'unknown'}`;
+  }
+
+  return `${prefix} ${issueSummary}`;
+};
+
+export const formatStorageRepairBatchResult = (
+  result: StorageRepairBatchResult,
+): string => {
+  const status = result.dryRun
+    ? 'DRY RUN'
+    : result.failedVolumes > 0
+      ? 'COMPLETED WITH FAILURES'
+      : 'COMPLETED';
+  const lines = [
+    `Safe repair batch: ${status}`,
+    `Generated at: ${formatDateTime(result.generatedAt)}`,
+    `Integrity depth: ${result.integrityDepth}`,
+    `Checked volumes: ${result.checkedVolumes}`,
+    `Repairable volumes: ${result.repairableVolumes}`,
+    `Planned volumes: ${result.plannedVolumes}`,
+    `Blocked volumes: ${result.blockedVolumes}`,
+    `Deferred volumes: ${result.deferredVolumes}`,
+    `Skipped volumes: ${result.skippedVolumes}`,
+    `Repaired volumes: ${result.repairedVolumes}`,
+    `Failed volumes: ${result.failedVolumes}`,
+    `Actions applied: ${result.actionsApplied}`,
+  ];
+
+  if (result.volumes.length === 0) {
+    lines.push('No volumes currently require safe batch repair.');
+    return lines.join('\n');
+  }
+
+  lines.push('');
+  lines.push(...result.volumes.map((item) => formatRepairBatchItem(item)));
+  return lines.join('\n');
+};
+
+export const evaluateStorageRepairBatchPolicy = (
+  result: Pick<
+    StorageRepairBatchResult,
+    'blockedVolumes' | 'deferredVolumes' | 'failedVolumes'
+  >,
+  options: {
+    strictPlan?: boolean;
+  } = {},
+): StorageRepairBatchPolicyStatus => {
+  if (!options.strictPlan) {
+    return {
+      strictPlan: false,
+      satisfied: true,
+      messages: [],
+    };
+  }
+
+  const messages: string[] = [];
+
+  if (result.blockedVolumes > 0) {
+    messages.push(
+      `${result.blockedVolumes} volume(s) still mix safe repair drifts with non-safe doctor findings.`,
+    );
+  }
+
+  if (result.deferredVolumes > 0) {
+    messages.push(
+      `${result.deferredVolumes} volume(s) remain deferred outside the current batch limit.`,
+    );
+  }
+
+  if (result.failedVolumes > 0) {
+    messages.push(
+      `${result.failedVolumes} volume(s) did not finish healthy after repair execution.`,
+    );
+  }
+
+  return {
+    strictPlan: true,
+    satisfied: messages.length === 0,
+    messages,
+  };
+};
+
+export const formatStorageRepairBatchPolicyStatus = (
+  status: StorageRepairBatchPolicyStatus,
 ): string => {
   const lines = [
     `Strict plan gate: ${status.satisfied ? 'PASSED' : 'FAILED'}`,

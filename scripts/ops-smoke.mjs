@@ -6,6 +6,9 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { open } from 'sqlite';
+import sqlite3 from 'sqlite3';
+
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const distCliPath = path.join(rootDir, 'dist', 'index.js');
 const distLibPath = path.join(rootDir, 'dist', 'lib.js');
@@ -28,6 +31,38 @@ const pathExists = async (targetPath) => {
 
 const readJson = async (filePath) =>
   JSON.parse(await fs.readFile(filePath, 'utf8'));
+
+const tamperBlobSize = async (databasePath, entryName, deltaBytes) => {
+  const database = await open({
+    filename: databasePath,
+    driver: sqlite3.Database,
+  });
+
+  try {
+    const fileRow = await database.get(
+      `SELECT entries.content_ref AS content_ref
+         FROM entries
+        WHERE entries.name = ?
+        LIMIT 1`,
+      entryName,
+    );
+
+    assert(
+      fileRow?.content_ref,
+      `Unable to locate ${entryName} while preparing repair-safe smoke drift.`,
+    );
+
+    await database.run(
+      `UPDATE blobs
+          SET size = size + ?
+        WHERE content_ref = ?`,
+      deltaBytes,
+      fileRow.content_ref,
+    );
+  } finally {
+    await database.close();
+  }
+};
 
 const runCli = (args, runtimePaths) => {
   const result = spawnSync(
@@ -300,6 +335,7 @@ try {
   );
 
   const compactReportPath = path.join(reportsDir, 'compact-report.json');
+  const repairSafeReportPath = path.join(reportsDir, 'repair-safe-report.json');
   const compactRun = runCli(
     ['compact', volume.id, '--json', '--output', compactReportPath],
     runtimePaths,
@@ -333,6 +369,44 @@ try {
         compactArtifact.payload.bytesBefore - compactArtifact.payload.bytesAfter,
       ),
     'Compaction artifact should report reclaimed bytes consistently.',
+  );
+
+  await tamperBlobSize(compactArtifact.payload.databasePath, 'baseline.txt', 7);
+
+  const repairSafeRun = runCli(
+    [
+      'repair-safe',
+      '--verify-blobs',
+      '--strict-plan',
+      '--json',
+      '--output',
+      repairSafeReportPath,
+    ],
+    runtimePaths,
+  );
+  const repairSafeResult = JSON.parse(repairSafeRun.stdout);
+  const repairSafeArtifact = await readJson(repairSafeReportPath);
+
+  assert(
+    repairSafeResult.repairableVolumes === 1,
+    'Safe batch repair should detect the tampered metadata drift.',
+  );
+  assert(
+    repairSafeResult.repairedVolumes === 1,
+    'Safe batch repair should fix the tampered metadata drift.',
+  );
+  assert(
+    repairSafeResult.failedVolumes === 0,
+    'Safe batch repair should finish without failed volumes.',
+  );
+  assertArtifactEnvelope(
+    repairSafeArtifact,
+    'repair-safe',
+    packageJson.version,
+  );
+  assert(
+    repairSafeArtifact.payload.actionsApplied >= 1,
+    'Safe batch repair artifact should report at least one applied action.',
   );
 
   const doctorReportPath = path.join(reportsDir, 'doctor-report.json');
@@ -540,7 +614,7 @@ try {
   );
 
   process.stdout.write(
-    `[ops-smoke] verified backup, inspect, restore drill, restore, compact-recommended, compact, doctor, support bundle, and support bundle inspection flows for ${volume.id}\n`,
+    `[ops-smoke] verified backup, inspect, restore drill, restore, compact-recommended, compact, repair-safe, doctor, support bundle, and support bundle inspection flows for ${volume.id}\n`,
   );
 } catch (error) {
   const message = error instanceof Error ? error.message : 'Unknown smoke failure.';

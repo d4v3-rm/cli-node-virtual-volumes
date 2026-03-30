@@ -1648,6 +1648,167 @@ describe('VolumeService', () => {
     expect(issueCodesAfter).not.toContain('COMPACTION_RECOMMENDED');
   });
 
+  it('plans and executes safe batch repairs while blocking mixed unsafe volumes', async () => {
+    const runtime = await createIsolatedRuntime();
+    const alphaVolume = await runtime.volumeService.createVolume({ name: 'Alpha safe' });
+    const betaVolume = await runtime.volumeService.createVolume({ name: 'Beta safe' });
+    const blockedVolume = await runtime.volumeService.createVolume({ name: 'Blocked mix' });
+    const cleanVolume = await runtime.volumeService.createVolume({ name: 'Clean' });
+
+    await runtime.volumeService.writeTextFile(alphaVolume.id, '/alpha.txt', 'alpha payload');
+    await runtime.volumeService.writeTextFile(
+      betaVolume.id,
+      '/beta.txt',
+      'b'.repeat(600_000),
+    );
+    await runtime.volumeService.writeTextFile(
+      blockedVolume.id,
+      '/blocked.txt',
+      'blocked stable payload',
+    );
+    await runtime.volumeService.writeTextFile(cleanVolume.id, '/steady.txt', 'steady');
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, alphaVolume.id), async (database) => {
+      const fileRow = await database.get<{ content_ref: string }>(
+        `SELECT content_ref
+           FROM entries
+          WHERE name = 'alpha.txt'
+          LIMIT 1`,
+      );
+
+      await database.run(
+        `UPDATE blobs
+            SET size = size + 7
+          WHERE content_ref = ?`,
+        fileRow?.content_ref ?? '',
+      );
+    });
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, betaVolume.id), async (database) => {
+      const fileRow = await database.get<{ content_ref: string; chunk_count: number }>(
+        `SELECT entries.content_ref AS content_ref,
+                blobs.chunk_count AS chunk_count
+           FROM entries
+           JOIN blobs
+             ON blobs.content_ref = entries.content_ref
+          WHERE entries.name = 'beta.txt'
+          LIMIT 1`,
+      );
+
+      expect(fileRow?.chunk_count).toBeGreaterThan(1);
+
+      await database.run(
+        `UPDATE blobs
+            SET chunk_count = 1
+          WHERE content_ref = ?`,
+        fileRow?.content_ref ?? '',
+      );
+    });
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, blockedVolume.id), async (database) => {
+      const fileRow = await database.get<{ content_ref: string }>(
+        `SELECT content_ref
+           FROM entries
+          WHERE name = 'blocked.txt'
+          LIMIT 1`,
+      );
+
+      await database.run(
+        `UPDATE blobs
+            SET size = size + 7
+          WHERE content_ref = ?`,
+        fileRow?.content_ref ?? '',
+      );
+      await database.run(
+        `UPDATE blob_chunks
+            SET content = ?
+          WHERE content_ref = ?
+            AND chunk_index = 0`,
+        Buffer.from('tamper data!'),
+        fileRow?.content_ref ?? '',
+      );
+    });
+
+    const dryRun = await runtime.volumeService.repairSafeVolumes({
+      dryRun: true,
+      limit: 1,
+      verifyBlobPayloads: true,
+    });
+    const alphaPlan = dryRun.volumes.find((item) => item.volumeId === alphaVolume.id);
+    const betaPlan = dryRun.volumes.find((item) => item.volumeId === betaVolume.id);
+    const blockedPlan = dryRun.volumes.find((item) => item.volumeId === blockedVolume.id);
+
+    expect(dryRun.integrityDepth).toBe('deep');
+    expect(dryRun.checkedVolumes).toBe(4);
+    expect(dryRun.repairableVolumes).toBe(3);
+    expect(dryRun.plannedVolumes).toBe(1);
+    expect(dryRun.blockedVolumes).toBe(1);
+    expect(dryRun.deferredVolumes).toBe(1);
+    expect(dryRun.skippedVolumes).toBe(1);
+    expect(alphaPlan?.status).toBe('planned');
+    expect(betaPlan?.status).toBe('deferred');
+    expect(betaPlan?.reason).toContain('--limit 1');
+    expect(blockedPlan?.status).toBe('blocked');
+    expect(blockedPlan?.blockingIssueCodes).toEqual(
+      expect.arrayContaining(['BLOB_CONTENT_REF_MISMATCH']),
+    );
+
+    const batchResult = await runtime.volumeService.repairSafeVolumes({
+      limit: 1,
+      verifyBlobPayloads: true,
+    });
+    const alphaRepair = batchResult.volumes.find((item) => item.volumeId === alphaVolume.id);
+    const betaRepair = batchResult.volumes.find((item) => item.volumeId === betaVolume.id);
+    const blockedRepair = batchResult.volumes.find(
+      (item) => item.volumeId === blockedVolume.id,
+    );
+    const followUpDoctor = await runtime.volumeService.runDoctor(undefined, {
+      verifyBlobPayloads: true,
+    });
+    const alphaIssues =
+      followUpDoctor.volumes.find((volumeReport) => volumeReport.volumeId === alphaVolume.id)
+        ?.issues ?? [];
+    const betaIssues =
+      followUpDoctor.volumes.find((volumeReport) => volumeReport.volumeId === betaVolume.id)
+        ?.issues ?? [];
+    const blockedIssues =
+      followUpDoctor.volumes.find((volumeReport) => volumeReport.volumeId === blockedVolume.id)
+        ?.issues ?? [];
+    const cleanIssues =
+      followUpDoctor.volumes.find((volumeReport) => volumeReport.volumeId === cleanVolume.id)
+        ?.issues ?? [];
+
+    expect(batchResult.integrityDepth).toBe('deep');
+    expect(batchResult.repairableVolumes).toBe(3);
+    expect(batchResult.plannedVolumes).toBe(1);
+    expect(batchResult.blockedVolumes).toBe(1);
+    expect(batchResult.deferredVolumes).toBe(1);
+    expect(batchResult.repairedVolumes).toBe(1);
+    expect(batchResult.failedVolumes).toBe(0);
+    expect(batchResult.actionsApplied).toBeGreaterThan(0);
+    expect(alphaRepair?.status).toBe('repaired');
+    expect(
+      alphaRepair?.repair?.actions.some(
+        (action) => action.code === 'SYNC_BLOB_LAYOUT_METADATA',
+      ),
+    ).toBe(true);
+    expect(betaRepair?.status).toBe('deferred');
+    expect(blockedRepair?.status).toBe('blocked');
+    expect(
+      alphaIssues.some((issue) => issue.code === 'BLOB_SIZE_MISMATCH'),
+    ).toBe(false);
+    expect(
+      betaIssues.some((issue) => issue.code === 'BLOB_CHUNK_COUNT_MISMATCH'),
+    ).toBe(true);
+    expect(
+      blockedIssues.some((issue) => issue.code === 'BLOB_SIZE_MISMATCH'),
+    ).toBe(true);
+    expect(
+      blockedIssues.some((issue) => issue.code === 'BLOB_CONTENT_REF_MISMATCH'),
+    ).toBe(true);
+    expect(cleanIssues).toEqual([]);
+  });
+
   it('rejects restore when the backup manifest checksum does not match the artifact', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Tamper Detection' });

@@ -380,6 +380,35 @@ export interface StorageRepairVolumeReport {
   remainingIssues: StorageDoctorIssue[];
 }
 
+export interface StorageRepairBatchItem {
+  volumeId: string;
+  volumeName: string;
+  revision: number;
+  issueCount: number;
+  repairableIssueCodes: StorageDoctorIssue['code'][];
+  status: 'blocked' | 'deferred' | 'planned' | 'repaired' | 'failed';
+  blockingIssueCodes?: StorageDoctorIssue['code'][];
+  reason?: string;
+  error?: string;
+  repair?: StorageRepairVolumeReport;
+}
+
+export interface StorageRepairBatchResult {
+  generatedAt: string;
+  dryRun: boolean;
+  checkedVolumes: number;
+  integrityDepth: 'metadata' | 'deep';
+  repairableVolumes: number;
+  plannedVolumes: number;
+  blockedVolumes: number;
+  deferredVolumes: number;
+  repairedVolumes: number;
+  failedVolumes: number;
+  skippedVolumes: number;
+  actionsApplied: number;
+  volumes: StorageRepairBatchItem[];
+}
+
 export interface StorageRepairReport {
   generatedAt: string;
   healthy: boolean;

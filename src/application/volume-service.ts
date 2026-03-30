@@ -24,7 +24,10 @@ import type {
   RestoreVolumeBackupOptions,
   StorageDoctorOptions,
   StorageDoctorReport,
+  StorageDoctorIssue,
   StorageRepairOptions,
+  StorageRepairBatchItem,
+  StorageRepairBatchResult,
   StorageRepairReport,
   VolumeCompactionBatchResult,
   VolumeCompactionBatchItem,
@@ -80,6 +83,7 @@ type AuditEventType =
   | 'volume.compact.batch'
   | 'storage.doctor'
   | 'storage.repair'
+  | 'storage.repair.batch'
   | 'entry.directory.create'
   | 'entry.file.write'
   | 'entry.move'
@@ -95,6 +99,20 @@ interface AuditOperationOptions {
   volumeId?: string;
   details?: Record<string, unknown>;
 }
+
+const SAFE_BATCH_REPAIR_ISSUE_CODES = new Set<StorageDoctorIssue['code']>([
+  'BLOB_CHUNK_COUNT_MISMATCH',
+  'BLOB_CHUNK_INDEX_GAP',
+  'BLOB_REFERENCE_COUNT_MISMATCH',
+  'BLOB_SIZE_MISMATCH',
+  'MANIFEST_ENTRY_COUNT_MISMATCH',
+  'MANIFEST_USAGE_MISMATCH',
+  'ORPHAN_BLOB',
+]);
+
+const NON_BLOCKING_BATCH_REPAIR_ISSUE_CODES = new Set<StorageDoctorIssue['code']>([
+  'COMPACTION_RECOMMENDED',
+]);
 
 export class VolumeService {
   public constructor(
@@ -465,6 +483,209 @@ export class VolumeService {
     );
   }
 
+  public async repairSafeVolumes(
+    options: {
+      dryRun?: boolean;
+      verifyBlobPayloads?: boolean;
+      limit?: number;
+    } = {},
+  ): Promise<StorageRepairBatchResult> {
+    return this.runAuditedOperation(
+      {
+        eventType: 'storage.repair.batch',
+        resourceType: 'storage',
+        details: {
+          dryRun: options.dryRun === true,
+          verifyBlobPayloads: options.verifyBlobPayloads === true,
+          limit: options.limit ?? null,
+        },
+      },
+      async () => {
+        const doctorReport = await this.repository.runDoctor(undefined, {
+          verifyBlobPayloads: options.verifyBlobPayloads,
+        });
+        const candidateVolumes = doctorReport.volumes
+          .map((report) => {
+            const repairableIssueCodes = this.collectDistinctIssueCodes(
+              report.issues.filter((issue) =>
+                SAFE_BATCH_REPAIR_ISSUE_CODES.has(issue.code),
+              ),
+            );
+            const blockingIssueCodes = this.collectDistinctIssueCodes(
+              report.issues.filter(
+                (issue) =>
+                  !SAFE_BATCH_REPAIR_ISSUE_CODES.has(issue.code) &&
+                  !NON_BLOCKING_BATCH_REPAIR_ISSUE_CODES.has(issue.code),
+              ),
+            );
+
+            return {
+              report,
+              repairableIssueCodes,
+              blockingIssueCodes,
+            };
+          })
+          .filter((candidate) => candidate.repairableIssueCodes.length > 0)
+          .sort((left, right) => {
+            const repairableDelta =
+              right.repairableIssueCodes.length - left.repairableIssueCodes.length;
+            if (repairableDelta !== 0) {
+              return repairableDelta;
+            }
+
+            const issueDelta = right.report.issueCount - left.report.issueCount;
+            if (issueDelta !== 0) {
+              return issueDelta;
+            }
+
+            return left.report.volumeName.localeCompare(right.report.volumeName);
+          });
+
+        const volumes: StorageRepairBatchItem[] = [];
+        let plannedVolumes = 0;
+        let blockedVolumes = 0;
+        let deferredVolumes = 0;
+        let repairedVolumes = 0;
+        let failedVolumes = 0;
+        let actionsApplied = 0;
+
+        for (const candidate of candidateVolumes) {
+          if (candidate.blockingIssueCodes.length > 0) {
+            blockedVolumes += 1;
+            volumes.push({
+              volumeId: candidate.report.volumeId,
+              volumeName: candidate.report.volumeName,
+              revision: candidate.report.revision,
+              issueCount: candidate.report.issueCount,
+              repairableIssueCodes: candidate.repairableIssueCodes,
+              status: 'blocked',
+              blockingIssueCodes: candidate.blockingIssueCodes,
+              reason:
+                'Additional non-safe doctor findings must be cleared before batch repair can automate this volume.',
+            });
+            continue;
+          }
+
+          const deferReason = this.getRepairDeferredReason(plannedVolumes, options);
+          if (deferReason) {
+            deferredVolumes += 1;
+            volumes.push({
+              volumeId: candidate.report.volumeId,
+              volumeName: candidate.report.volumeName,
+              revision: candidate.report.revision,
+              issueCount: candidate.report.issueCount,
+              repairableIssueCodes: candidate.repairableIssueCodes,
+              status: 'deferred',
+              reason: deferReason,
+            });
+            continue;
+          }
+
+          plannedVolumes += 1;
+
+          if (options.dryRun) {
+            volumes.push({
+              volumeId: candidate.report.volumeId,
+              volumeName: candidate.report.volumeName,
+              revision: candidate.report.revision,
+              issueCount: candidate.report.issueCount,
+              repairableIssueCodes: candidate.repairableIssueCodes,
+              status: 'planned',
+            });
+            continue;
+          }
+
+          try {
+            const repairReport = await this.runRepair(candidate.report.volumeId, {
+              verifyBlobPayloads: options.verifyBlobPayloads,
+            });
+            const volumeRepair = repairReport.volumes[0];
+            actionsApplied += repairReport.actionsApplied;
+
+            if (!volumeRepair) {
+              failedVolumes += 1;
+              volumes.push({
+                volumeId: candidate.report.volumeId,
+                volumeName: candidate.report.volumeName,
+                revision: candidate.report.revision,
+                issueCount: candidate.report.issueCount,
+                repairableIssueCodes: candidate.repairableIssueCodes,
+                status: 'failed',
+                error: 'Repair completed without returning a per-volume report.',
+              });
+              continue;
+            }
+
+            if (!volumeRepair.healthy) {
+              failedVolumes += 1;
+              volumes.push({
+                volumeId: candidate.report.volumeId,
+                volumeName: candidate.report.volumeName,
+                revision: candidate.report.revision,
+                issueCount: candidate.report.issueCount,
+                repairableIssueCodes: candidate.repairableIssueCodes,
+                status: 'failed',
+                error: this.describeRepairFailure(volumeRepair.remainingIssues),
+                repair: volumeRepair,
+              });
+              continue;
+            }
+
+            repairedVolumes += 1;
+            volumes.push({
+              volumeId: candidate.report.volumeId,
+              volumeName: candidate.report.volumeName,
+              revision: candidate.report.revision,
+              issueCount: candidate.report.issueCount,
+              repairableIssueCodes: candidate.repairableIssueCodes,
+              status: 'repaired',
+              repair: volumeRepair,
+            });
+          } catch (error) {
+            failedVolumes += 1;
+            volumes.push({
+              volumeId: candidate.report.volumeId,
+              volumeName: candidate.report.volumeName,
+              revision: candidate.report.revision,
+              issueCount: candidate.report.issueCount,
+              repairableIssueCodes: candidate.repairableIssueCodes,
+              status: 'failed',
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+
+        return {
+          generatedAt: new Date().toISOString(),
+          dryRun: options.dryRun === true,
+          checkedVolumes: doctorReport.checkedVolumes,
+          integrityDepth: options.verifyBlobPayloads ? 'deep' : 'metadata',
+          repairableVolumes: candidateVolumes.length,
+          plannedVolumes,
+          blockedVolumes,
+          deferredVolumes,
+          repairedVolumes,
+          failedVolumes,
+          skippedVolumes: Math.max(0, doctorReport.checkedVolumes - candidateVolumes.length),
+          actionsApplied,
+          volumes,
+        };
+      },
+      (result) => ({
+        checkedVolumes: result.checkedVolumes,
+        repairableVolumes: result.repairableVolumes,
+        plannedVolumes: result.plannedVolumes,
+        blockedVolumes: result.blockedVolumes,
+        deferredVolumes: result.deferredVolumes,
+        repairedVolumes: result.repairedVolumes,
+        failedVolumes: result.failedVolumes,
+        actionsApplied: result.actionsApplied,
+        dryRun: result.dryRun,
+        integrityDepth: result.integrityDepth,
+      }),
+    );
+  }
+
   private isSafeForBatchCompaction(
     issues: StorageDoctorReport['volumes'][number]['issues'],
   ): boolean {
@@ -520,6 +741,36 @@ export class VolumeService {
     }
 
     return null;
+  }
+
+  private getRepairDeferredReason(
+    plannedVolumes: number,
+    options: {
+      limit?: number;
+    },
+  ): string | null {
+    if (options.limit !== undefined && plannedVolumes >= options.limit) {
+      return `Deferred by --limit ${options.limit}.`;
+    }
+
+    return null;
+  }
+
+  private collectDistinctIssueCodes(
+    issues: readonly Pick<StorageDoctorIssue, 'code'>[],
+  ): StorageDoctorIssue['code'][] {
+    const uniqueCodes = new Set<StorageDoctorIssue['code']>();
+
+    for (const issue of issues) {
+      uniqueCodes.add(issue.code);
+    }
+
+    return [...uniqueCodes];
+  }
+
+  private describeRepairFailure(remainingIssues: StorageDoctorIssue[]): string {
+    const uniqueCodes = this.collectDistinctIssueCodes(remainingIssues);
+    return `Repair completed but ${remainingIssues.length} issue(s) remain: ${uniqueCodes.join(', ')}.`;
   }
 
   public async runDoctor(

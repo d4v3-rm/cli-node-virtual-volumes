@@ -163,6 +163,16 @@ Per manutenzione batch di tutti i volumi gestiti:
 7. Se vuoi audit strutturato, aggiungi `--output <path>` anche al batch.
 8. Riesegui `virtual-volumes doctor` se vuoi confermare che la frammentazione raccomandata sia stata assorbita.
 
+Per remediation batch dei drift safe a livello fleet:
+
+1. Esegui `virtual-volumes repair-safe --dry-run` per vedere quali volumi hanno solo drift auto-riparabili.
+2. Se vuoi una scansione piu' severa del payload, aggiungi `--verify-blobs`.
+3. Se vuoi limitare il batch operativo, aggiungi `--limit <n>`.
+4. I volumi `blocked` hanno anche finding non safe e non vengono auto-riparati nel batch.
+5. Esegui `virtual-volumes repair-safe` per applicare solo le riparazioni safe pianificate.
+6. Se usi il batch in automazione, aggiungi `--strict-plan` per fallire quando restano volumi `blocked`, `deferred` o `failed`.
+7. Riesegui `virtual-volumes doctor --verify-blobs` se vuoi una validazione deep dopo la remediation.
+
 Per un restore di emergenza:
 
 1. Esegui `virtual-volumes inspect-backup`.

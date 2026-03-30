@@ -25,6 +25,8 @@ export type {
   StorageDoctorReport,
   StorageDoctorVolumeReport,
   StorageRepairAction,
+  StorageRepairBatchItem,
+  StorageRepairBatchResult,
   StorageRepairOptions,
   StorageRepairReport,
   StorageRepairVolumeReport,

@@ -6,6 +6,9 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
+import { open } from 'sqlite';
+import sqlite3 from 'sqlite3';
+
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const packageJsonPath = path.join(rootDir, 'package.json');
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -27,6 +30,38 @@ const pathExists = async (targetPath) => {
 
 const readJson = async (filePath) =>
   JSON.parse(await fs.readFile(filePath, 'utf8'));
+
+const tamperBlobSize = async (databasePath, entryName, deltaBytes) => {
+  const database = await open({
+    filename: databasePath,
+    driver: sqlite3.Database,
+  });
+
+  try {
+    const fileRow = await database.get(
+      `SELECT entries.content_ref AS content_ref
+         FROM entries
+        WHERE entries.name = ?
+        LIMIT 1`,
+      entryName,
+    );
+
+    assert(
+      fileRow?.content_ref,
+      `Unable to locate ${entryName} while preparing packaged repair-safe smoke drift.`,
+    );
+
+    await database.run(
+      `UPDATE blobs
+          SET size = size + ?
+        WHERE content_ref = ?`,
+      deltaBytes,
+      fileRow.content_ref,
+    );
+  } finally {
+    await database.close();
+  }
+};
 
 const parseTrailingJson = (value) => {
   const trimmed = value.trim();
@@ -158,6 +193,7 @@ try {
     'compact-recommended-report.json',
   );
   const compactArtifactPath = path.join(runtimeRoot, 'compact-report.json');
+  const repairSafeArtifactPath = path.join(runtimeRoot, 'repair-safe-report.json');
   const restoreDrillArtifactPath = path.join(runtimeRoot, 'restore-drill-report.json');
   const supportBundlePath = path.join(runtimeRoot, 'support-bundle');
   const supportBundleSummaryPath = path.join(
@@ -380,8 +416,53 @@ try {
       Math.max(
         0,
         compactArtifact.payload.bytesBefore - compactArtifact.payload.bytesAfter,
-    ),
+      ),
     'Installed CLI compact artifact should report reclaimed bytes consistently.',
+  );
+
+  await tamperBlobSize(compactArtifact.payload.databasePath, 'package.txt', 7);
+
+  const repairSafeRun = runCommand(
+    process.execPath,
+    [
+      installedCliPath,
+      '--data-dir',
+      dataDir,
+      '--log-dir',
+      logDir,
+      '--log-level',
+      'silent',
+      'repair-safe',
+      '--verify-blobs',
+      '--strict-plan',
+      '--json',
+      '--output',
+      repairSafeArtifactPath,
+    ],
+    { cwd: consumerRoot },
+  );
+  const repairSafePayload = JSON.parse(repairSafeRun.stdout);
+  const repairSafeArtifact = await readJson(repairSafeArtifactPath);
+
+  assert(
+    repairSafePayload.repairableVolumes === 1,
+    'Installed CLI repair-safe should detect the tampered metadata drift.',
+  );
+  assert(
+    repairSafePayload.repairedVolumes === 1,
+    'Installed CLI repair-safe should repair the tampered metadata drift.',
+  );
+  assert(
+    repairSafePayload.failedVolumes === 0,
+    'Installed CLI repair-safe should finish without failed volumes.',
+  );
+  assert(
+    repairSafeArtifact.command === 'repair-safe',
+    'Installed CLI repair-safe artifact should include the command metadata.',
+  );
+  assert(
+    repairSafeArtifact.payload.actionsApplied >= 1,
+    'Installed CLI repair-safe artifact should report at least one applied action.',
   );
 
   const doctorRun = runCommand(
@@ -562,7 +643,7 @@ try {
   );
 
   process.stdout.write(
-    `[package-smoke] installed ${path.basename(tarballPath)} and verified package import + CLI backup + restore drill + compact-recommended + compact + doctor + support bundle + support bundle inspection flows\n`,
+    `[package-smoke] installed ${path.basename(tarballPath)} and verified package import + CLI backup + restore drill + compact-recommended + compact + repair-safe + doctor + support bundle + support bundle inspection flows\n`,
   );
 } catch (error) {
   const message =

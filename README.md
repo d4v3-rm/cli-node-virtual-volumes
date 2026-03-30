@@ -260,6 +260,7 @@ The CLI exposes a full recovery workflow:
 | `virtual-volumes restore <backupPath> --force` | Replace an existing volume with rollback protection |
 | `virtual-volumes compact <volumeId>` | Compact a managed SQLite volume and reclaim free pages |
 | `virtual-volumes compact-recommended` | Compact every managed volume currently flagged by doctor for SQLite maintenance |
+| `virtual-volumes repair-safe` | Auto-repair only the volumes whose current doctor findings are safe for batch automation |
 | `virtual-volumes doctor [volumeId]` | Run metadata-level consistency checks after restore |
 | `virtual-volumes doctor [volumeId] --verify-blobs` | Run a deeper doctor pass that hashes referenced blob payloads |
 | `virtual-volumes support-bundle <destinationPath> [volumeId]` | Export doctor data, checksum inventory, runtime metadata, and log snapshot for support |
@@ -278,6 +279,8 @@ virtual-volumes compact-recommended --limit 5
 virtual-volumes compact-recommended --max-reclaimable-bytes 2097152
 virtual-volumes compact-recommended --min-free-bytes 1048576 --min-free-ratio 0.25
 virtual-volumes compact-recommended --include-unsafe
+virtual-volumes repair-safe --dry-run --verify-blobs
+virtual-volumes repair-safe --limit 5 --strict-plan
 virtual-volumes compact vol_finance_01
 virtual-volumes doctor vol_finance_01
 virtual-volumes doctor vol_finance_01 --verify-blobs
@@ -341,6 +344,13 @@ Each standard backup produces:
 
 Use `virtual-volumes doctor <volumeId> --verify-blobs` when you need a slower payload scrub that re-hashes referenced blobs and catches content drift even when metadata still looks consistent.
 Use `virtual-volumes doctor --fix` when you want the CLI to auto-repair safe metadata drifts like orphan blobs, manifest counters, blob reference counts, and blob layout metadata that can be recomputed from the current SQLite payload.
+Use `virtual-volumes repair-safe` when you want to turn that same safe-repair logic into a fleet workflow that:
+
+- scans all managed volumes with the same doctor depth you requested
+- plans only the volumes that currently expose safe auto-repairable drifts
+- blocks mixed volumes that also carry non-safe findings like missing blobs or payload corruption
+- supports `--dry-run` and `--strict-plan` so schedulers can preview or gate the batch before execution
+- supports `--limit <n>` to cap the current repair batch without losing visibility on deferred volumes
 
 For the full operational procedure, drills, and audit checklist, see [docs/BACKUP-RESTORE-RUNBOOK.md](./docs/BACKUP-RESTORE-RUNBOOK.md).
 
