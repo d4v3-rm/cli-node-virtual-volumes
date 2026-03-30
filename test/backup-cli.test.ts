@@ -197,6 +197,13 @@ describe('backup cli formatters', () => {
           totalFreeBytes: 0,
           topCompactionCandidates: [],
         },
+        repairSummary: {
+          repairableVolumes: 0,
+          readyBatchRepairVolumes: 0,
+          blockedBatchRepairVolumes: 0,
+          totalRepairableIssues: 0,
+          topRepairCandidates: [],
+        },
         volumes: [],
       },
     };

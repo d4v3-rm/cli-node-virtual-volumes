@@ -17,6 +17,13 @@ describe('doctor cli formatters', () => {
         totalFreeBytes: 0,
         topCompactionCandidates: [],
       },
+      repairSummary: {
+        repairableVolumes: 0,
+        readyBatchRepairVolumes: 0,
+        blockedBatchRepairVolumes: 0,
+        totalRepairableIssues: 0,
+        topRepairCandidates: [],
+      },
       volumes: [
         {
           volumeId: 'volume-1',
@@ -51,6 +58,10 @@ describe('doctor cli formatters', () => {
         'Recommended compactions: 0',
         'Total SQLite artifacts: 1.0 MB',
         'Total reclaimable free bytes: 0 B',
+        'Repairable volumes: 0',
+        'Ready batch repairs: 0',
+        'Blocked batch repairs: 0',
+        'Total safe repair issues: 0',
         '',
         'OK Finance (volume-1) revision=7 issues=0',
         '  - Maintenance: artifacts=1.0 MB db=1.0 MB wal=0 B free=0 B (0.0%) compact=not-needed',
@@ -91,6 +102,34 @@ describe('doctor cli formatters', () => {
           },
         ],
       },
+      repairSummary: {
+        repairableVolumes: 2,
+        readyBatchRepairVolumes: 1,
+        blockedBatchRepairVolumes: 1,
+        totalRepairableIssues: 3,
+        topRepairCandidates: [
+          {
+            volumeId: 'volume-2',
+            volumeName: 'Ops',
+            revision: 4,
+            issueCount: 1,
+            repairableIssueCount: 2,
+            repairableIssueCodes: ['BLOB_SIZE_MISMATCH', 'MANIFEST_USAGE_MISMATCH'],
+            readyForBatchRepair: true,
+            blockingIssueCodes: [],
+          },
+          {
+            volumeId: 'volume-3',
+            volumeName: 'Archive',
+            revision: 6,
+            issueCount: 2,
+            repairableIssueCount: 1,
+            repairableIssueCodes: ['BLOB_CHUNK_COUNT_MISMATCH'],
+            readyForBatchRepair: false,
+            blockingIssueCodes: ['BLOB_CONTENT_REF_MISMATCH'],
+          },
+        ],
+      },
       volumes: [],
     };
 
@@ -105,9 +144,16 @@ describe('doctor cli formatters', () => {
         'Recommended compactions: 2',
         'Total SQLite artifacts: 12.0 MB',
         'Total reclaimable free bytes: 3.5 MB',
+        'Repairable volumes: 2',
+        'Ready batch repairs: 1',
+        'Blocked batch repairs: 1',
+        'Total safe repair issues: 3',
         'Top compaction candidates:',
         '  1. Ops (volume-2) free=2.0 MB (25.0%) artifacts=8.0 MB issues=1',
         '  2. Archive (volume-3) free=1.5 MB (37.5%) artifacts=4.0 MB issues=1',
+        'Top repair candidates:',
+        '  1. Ops (volume-2) safe=2 ready=yes issues=1',
+        '  2. Archive (volume-3) safe=1 ready=no issues=2 blocking=BLOB_CONTENT_REF_MISMATCH',
       ].join('\n'),
     );
   });

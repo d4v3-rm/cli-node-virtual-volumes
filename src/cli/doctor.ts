@@ -33,6 +33,18 @@ const formatMaintenanceCandidate = (
 ): string =>
   `  ${index}. ${candidate.volumeName} (${candidate.volumeId}) free=${formatBytes(candidate.freeBytes)} (${(candidate.freeRatio * 100).toFixed(1)}%) artifacts=${formatBytes(candidate.artifactBytes)} issues=${candidate.issueCount}`;
 
+const formatRepairCandidate = (
+  index: number,
+  candidate: StorageDoctorReport['repairSummary']['topRepairCandidates'][number],
+): string => {
+  const blockingSummary =
+    candidate.blockingIssueCodes.length > 0
+      ? ` blocking=${candidate.blockingIssueCodes.join(',')}`
+      : '';
+
+  return `  ${index}. ${candidate.volumeName} (${candidate.volumeId}) safe=${candidate.repairableIssueCount} ready=${candidate.readyForBatchRepair ? 'yes' : 'no'} issues=${candidate.issueCount}${blockingSummary}`;
+};
+
 const formatVolumeReport = (report: StorageDoctorVolumeReport): string => {
   const lines = [
     `${report.healthy ? 'OK' : 'FAIL'} ${report.volumeName} (${report.volumeId}) revision=${report.revision} issues=${report.issueCount}`,
@@ -65,6 +77,10 @@ export const formatDoctorReport = (report: StorageDoctorReport): string => {
     `Recommended compactions: ${report.maintenanceSummary.recommendedCompactions}`,
     `Total SQLite artifacts: ${formatBytes(report.maintenanceSummary.totalArtifactBytes)}`,
     `Total reclaimable free bytes: ${formatBytes(report.maintenanceSummary.totalFreeBytes)}`,
+    `Repairable volumes: ${report.repairSummary.repairableVolumes}`,
+    `Ready batch repairs: ${report.repairSummary.readyBatchRepairVolumes}`,
+    `Blocked batch repairs: ${report.repairSummary.blockedBatchRepairVolumes}`,
+    `Total safe repair issues: ${report.repairSummary.totalRepairableIssues}`,
   ];
 
   if (report.maintenanceSummary.topCompactionCandidates.length > 0) {
@@ -72,6 +88,15 @@ export const formatDoctorReport = (report: StorageDoctorReport): string => {
     lines.push(
       ...report.maintenanceSummary.topCompactionCandidates.map((candidate, index) =>
         formatMaintenanceCandidate(index + 1, candidate),
+      ),
+    );
+  }
+
+  if (report.repairSummary.topRepairCandidates.length > 0) {
+    lines.push('Top repair candidates:');
+    lines.push(
+      ...report.repairSummary.topRepairCandidates.map((candidate, index) =>
+        formatRepairCandidate(index + 1, candidate),
       ),
     );
   }

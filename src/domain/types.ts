@@ -322,6 +322,17 @@ export interface StorageDoctorMaintenanceCandidate {
   freeRatio: number;
 }
 
+export interface StorageDoctorRepairCandidate {
+  volumeId: string;
+  volumeName: string;
+  revision: number;
+  issueCount: number;
+  repairableIssueCount: number;
+  repairableIssueCodes: StorageDoctorIssue['code'][];
+  readyForBatchRepair: boolean;
+  blockingIssueCodes: StorageDoctorIssue['code'][];
+}
+
 export interface StorageDoctorVolumeReport {
   volumeId: string;
   volumeName: string;
@@ -340,6 +351,14 @@ export interface StorageDoctorMaintenanceSummary {
   topCompactionCandidates: StorageDoctorMaintenanceCandidate[];
 }
 
+export interface StorageDoctorRepairSummary {
+  repairableVolumes: number;
+  readyBatchRepairVolumes: number;
+  blockedBatchRepairVolumes: number;
+  totalRepairableIssues: number;
+  topRepairCandidates: StorageDoctorRepairCandidate[];
+}
+
 export interface StorageDoctorReport {
   generatedAt: string;
   healthy: boolean;
@@ -347,6 +366,7 @@ export interface StorageDoctorReport {
   issueCount: number;
   integrityDepth?: 'metadata' | 'deep';
   maintenanceSummary: StorageDoctorMaintenanceSummary;
+  repairSummary: StorageDoctorRepairSummary;
   volumes: StorageDoctorVolumeReport[];
 }
 

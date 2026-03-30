@@ -22,6 +22,8 @@ export type {
   VolumeBackupInspectionResult,
   StorageDoctorIssue,
   StorageDoctorOptions,
+  StorageDoctorRepairCandidate,
+  StorageDoctorRepairSummary,
   StorageDoctorReport,
   StorageDoctorVolumeReport,
   StorageRepairAction,

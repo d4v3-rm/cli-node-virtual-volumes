@@ -5,6 +5,10 @@ import { nanoid } from 'nanoid';
 import type { Logger } from 'pino';
 
 import type { AppConfig } from '../config/env.js';
+import {
+  collectDistinctStorageIssueCodes,
+  summarizeSafeBatchRepairIssues,
+} from '../domain/storage-repair-policy.js';
 import { isVolumeError, VolumeError } from '../domain/errors.js';
 import type {
   CreateVolumeInput,
@@ -99,20 +103,6 @@ interface AuditOperationOptions {
   volumeId?: string;
   details?: Record<string, unknown>;
 }
-
-const SAFE_BATCH_REPAIR_ISSUE_CODES = new Set<StorageDoctorIssue['code']>([
-  'BLOB_CHUNK_COUNT_MISMATCH',
-  'BLOB_CHUNK_INDEX_GAP',
-  'BLOB_REFERENCE_COUNT_MISMATCH',
-  'BLOB_SIZE_MISMATCH',
-  'MANIFEST_ENTRY_COUNT_MISMATCH',
-  'MANIFEST_USAGE_MISMATCH',
-  'ORPHAN_BLOB',
-]);
-
-const NON_BLOCKING_BATCH_REPAIR_ISSUE_CODES = new Set<StorageDoctorIssue['code']>([
-  'COMPACTION_RECOMMENDED',
-]);
 
 export class VolumeService {
   public constructor(
@@ -506,18 +496,8 @@ export class VolumeService {
         });
         const candidateVolumes = doctorReport.volumes
           .map((report) => {
-            const repairableIssueCodes = this.collectDistinctIssueCodes(
-              report.issues.filter((issue) =>
-                SAFE_BATCH_REPAIR_ISSUE_CODES.has(issue.code),
-              ),
-            );
-            const blockingIssueCodes = this.collectDistinctIssueCodes(
-              report.issues.filter(
-                (issue) =>
-                  !SAFE_BATCH_REPAIR_ISSUE_CODES.has(issue.code) &&
-                  !NON_BLOCKING_BATCH_REPAIR_ISSUE_CODES.has(issue.code),
-              ),
-            );
+            const { repairableIssueCodes, blockingIssueCodes } =
+              summarizeSafeBatchRepairIssues(report.issues);
 
             return {
               report,
@@ -759,13 +739,7 @@ export class VolumeService {
   private collectDistinctIssueCodes(
     issues: readonly Pick<StorageDoctorIssue, 'code'>[],
   ): StorageDoctorIssue['code'][] {
-    const uniqueCodes = new Set<StorageDoctorIssue['code']>();
-
-    for (const issue of issues) {
-      uniqueCodes.add(issue.code);
-    }
-
-    return [...uniqueCodes];
+    return collectDistinctStorageIssueCodes(issues);
   }
 
   private describeRepairFailure(remainingIssues: StorageDoctorIssue[]): string {

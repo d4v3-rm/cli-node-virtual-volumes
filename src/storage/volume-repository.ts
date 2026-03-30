@@ -11,6 +11,7 @@ import {
   isCompatibleBackupRuntimeVersion,
   parseSemanticVersion,
 } from '../config/app-metadata.js';
+import { summarizeSafeBatchRepairIssues } from '../domain/storage-repair-policy.js';
 import { VolumeError } from '../domain/errors.js';
 import type {
   CreateVolumeInput,
@@ -366,6 +367,43 @@ export class VolumeRepository {
       (total, report) => total + report.issueCount,
       0,
     );
+    const repairCandidates = volumeReports
+      .map((report) => {
+        const { repairableIssueCodes, blockingIssueCodes } =
+          summarizeSafeBatchRepairIssues(report.issues);
+
+        return {
+          volumeId: report.volumeId,
+          volumeName: report.volumeName,
+          revision: report.revision,
+          issueCount: report.issueCount,
+          repairableIssueCount: repairableIssueCodes.length,
+          repairableIssueCodes,
+          readyForBatchRepair: blockingIssueCodes.length === 0,
+          blockingIssueCodes,
+        };
+      })
+      .filter((candidate) => candidate.repairableIssueCount > 0)
+      .sort((left, right) => {
+        const readinessDelta =
+          Number(right.readyForBatchRepair) - Number(left.readyForBatchRepair);
+        if (readinessDelta !== 0) {
+          return readinessDelta;
+        }
+
+        const repairableDelta =
+          right.repairableIssueCount - left.repairableIssueCount;
+        if (repairableDelta !== 0) {
+          return repairableDelta;
+        }
+
+        const issueDelta = right.issueCount - left.issueCount;
+        if (issueDelta !== 0) {
+          return issueDelta;
+        }
+
+        return left.volumeName.localeCompare(right.volumeName);
+      });
     const maintenanceSummary = volumeReports.reduce<StorageDoctorMaintenanceSummary>(
       (summary, report) => {
         if (!report.maintenance) {
@@ -388,6 +426,23 @@ export class VolumeRepository {
         topCompactionCandidates: [],
       },
     );
+    const repairSummary = {
+      repairableVolumes: repairCandidates.length,
+      readyBatchRepairVolumes: repairCandidates.filter(
+        (candidate) => candidate.readyForBatchRepair,
+      ).length,
+      blockedBatchRepairVolumes: repairCandidates.filter(
+        (candidate) => !candidate.readyForBatchRepair,
+      ).length,
+      totalRepairableIssues: repairCandidates.reduce(
+        (total, candidate) => total + candidate.repairableIssueCount,
+        0,
+      ),
+      topRepairCandidates: repairCandidates.slice(
+        0,
+        MAINTENANCE_SUMMARY_TOP_CANDIDATE_LIMIT,
+      ),
+    };
     maintenanceSummary.topCompactionCandidates = volumeReports
       .filter((report) => report.maintenance?.compactionRecommended)
       .sort(
@@ -412,6 +467,7 @@ export class VolumeRepository {
       issueCount,
       integrityDepth: options.verifyBlobPayloads ? 'deep' : 'metadata',
       maintenanceSummary,
+      repairSummary,
       volumes: volumeReports,
     };
   }
