@@ -10,6 +10,7 @@ import type { AppRuntime } from '../src/bootstrap/create-runtime.js';
 import { APP_VERSION } from '../src/config/app-metadata.js';
 import { resolveAppLogFilePath, resolveAuditLogFilePath } from '../src/logging/logger.js';
 import { createSupportBundle, inspectSupportBundle } from '../src/ops/support-bundle.js';
+import { getVolumeDatabasePath, withVolumeDatabase } from '../src/storage/sqlite-volume.js';
 import type {
   SupportBundleChecksumManifest,
   SupportBundleFileRecord,
@@ -111,6 +112,7 @@ describe('support bundle', () => {
     expect(result.bundleVersion).toBe(1);
     expect(result.cliVersion).toBe(APP_VERSION);
     expect(result.correlationId).toBe(runtime.correlationId);
+    expect(result.doctorIntegrityDepth).toBe('metadata');
     expect(result.config.logRetentionDays).toBeNull();
     expect(result.config.redactSensitiveDetails).toBe(false);
     expect(result.bundlePath).toBe(path.resolve(bundlePath));
@@ -145,9 +147,11 @@ describe('support bundle', () => {
       'support bundle log',
     );
     expect(handoffReport).toContain('# Support Bundle Handoff Report');
+    expect(handoffReport).toContain('- Doctor integrity depth: metadata');
     expect(handoffReport).toContain('- Sharing: internal-only');
     expect(handoffReport).toContain('- Retention: 7 days');
     expect(handoffReport).toContain('- Doctor report: doctor-report.json');
+    expect(handoffReport).toContain('- No immediate storage remediation is recommended from this snapshot.');
     expect(manifest).toEqual(result);
     expect(doctorReport).toMatchObject({
       healthy: true,
@@ -254,6 +258,74 @@ describe('support bundle', () => {
     expect(result.contentProfile.includesAuditLogSnapshot).toBe(true);
   });
 
+  it('supports deep doctor verification and operational next actions in support bundle handoff reports', async () => {
+    const runtime = await createIsolatedRuntime();
+    const repairVolume = await runtime.volumeService.createVolume({ name: 'Repair Fleet' });
+    const compactVolume = await runtime.volumeService.createVolume({ name: 'Compact Fleet' });
+    const bundlePath = path.join(runtime.config.dataDir, '..', 'deep-support-bundle');
+
+    await runtime.volumeService.writeTextFile(repairVolume.id, '/repair.txt', 'repair me');
+    await runtime.volumeService.writeTextFile(
+      compactVolume.id,
+      '/deleted.txt',
+      'c'.repeat(2 * 1024 * 1024),
+    );
+    await runtime.volumeService.deleteEntry(compactVolume.id, '/deleted.txt');
+
+    await withVolumeDatabase(
+      getVolumeDatabasePath(runtime.config.dataDir, repairVolume.id),
+      async (database) => {
+        const fileRow = await database.get<{ content_ref: string }>(
+          `SELECT content_ref
+             FROM entries
+            WHERE name = 'repair.txt'
+            LIMIT 1`,
+        );
+
+        await database.run(
+          `UPDATE blobs
+              SET size = size + 7
+            WHERE content_ref = ?`,
+          fileRow?.content_ref ?? '',
+        );
+      },
+    );
+
+    const result = await createSupportBundle(runtime, {
+      destinationPath: bundlePath,
+      verifyBlobPayloads: true,
+    });
+    const doctorReport = JSON.parse(
+      await fs.readFile(result.doctorReportPath, 'utf8'),
+    ) as {
+      integrityDepth?: 'metadata' | 'deep';
+      repairSummary: {
+        repairableVolumes: number;
+        readyBatchRepairVolumes: number;
+      };
+      maintenanceSummary: {
+        recommendedCompactions: number;
+      };
+    };
+    const handoffReport = await fs.readFile(result.handoffReportPath!, 'utf8');
+
+    expect(result.doctorIntegrityDepth).toBe('deep');
+    expect(doctorReport.integrityDepth).toBe('deep');
+    expect(doctorReport.repairSummary.repairableVolumes).toBe(1);
+    expect(doctorReport.repairSummary.readyBatchRepairVolumes).toBe(1);
+    expect(doctorReport.maintenanceSummary.recommendedCompactions).toBe(1);
+    expect(handoffReport).toContain('- Doctor integrity depth: deep');
+    expect(handoffReport).toContain('## Fleet Posture');
+    expect(handoffReport).toContain('## Top Compaction Candidates');
+    expect(handoffReport).toContain('## Top Repair Candidates');
+    expect(handoffReport).toContain(
+      '- Run virtual-volumes repair-safe --verify-blobs --dry-run to preview safe fleet repairs before execution.',
+    );
+    expect(handoffReport).toContain(
+      '- Run virtual-volumes compact-recommended --dry-run to size the current SQLite maintenance batch.',
+    );
+  });
+
   it('omits log snapshots when support bundle creation disables them explicitly', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'No Logs Bundle' });
@@ -323,6 +395,8 @@ describe('support bundle', () => {
       sharingRecommendation: 'external-shareable',
       recommendedRetentionDays: 30,
     });
+    expect(result.doctorIntegrityDepth).toBe('metadata');
+    expect(inspection.doctorIntegrityDepth).toBe('metadata');
   });
 
   it('rejects existing bundle destinations without overwrite', async () => {
@@ -386,6 +460,7 @@ describe('support bundle', () => {
       bundleVersion: 1,
       bundleCliVersion: APP_VERSION,
       bundleCorrelationId: runtime.correlationId,
+      doctorIntegrityDepth: 'metadata',
       volumeId: volume.id,
       handoffReportPath: path.join(path.resolve(bundlePath), 'handoff-report.md'),
       issueCount: 0,
@@ -546,6 +621,7 @@ describe('support bundle', () => {
     const inspection = await inspectSupportBundle(bundlePath);
 
     expect(inspection.healthy).toBe(true);
+    expect(inspection.doctorIntegrityDepth).toBe('metadata');
     expect(inspection.contentProfile).toMatchObject({
       redacted: true,
       includesAppLogSnapshot: false,

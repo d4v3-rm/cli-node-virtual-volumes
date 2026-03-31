@@ -21,6 +21,7 @@ describe('support bundle cli formatter', () => {
       cliVersion: APP_VERSION,
       correlationId: 'corr_support-bundle',
       generatedAt: '2026-04-15T20:30:00.000Z',
+      doctorIntegrityDepth: 'deep',
       supportedVolumeSchemaVersion: 3,
       volumeId: 'volume-1',
       backupPath: 'C:\\backups\\finance.sqlite',
@@ -88,12 +89,13 @@ describe('support bundle cli formatter', () => {
         'Manifest: C:\\reports\\support-bundle\\manifest.json',
         'Checksums: C:\\reports\\support-bundle\\checksums.json',
         'Correlation ID: corr_support-bundle',
+        'Doctor integrity depth: deep',
         'Sensitivity: restricted',
         'Sharing: internal-only',
         'Retention: 7 days',
         'Scope: volume-1',
-        'Volumes checked: 1',
         'Backup path: C:\\backups\\finance.sqlite',
+        'Volumes checked: 1',
         'Issues detected: 0',
         'Doctor report: C:\\reports\\support-bundle\\doctor-report.json',
         'Handoff report: C:\\reports\\support-bundle\\handoff-report.md',
@@ -122,6 +124,7 @@ describe('support bundle cli formatter', () => {
       cliVersion: APP_VERSION,
       correlationId: 'corr_support-bundle-all',
       generatedAt: '2026-04-15T20:30:00.000Z',
+      doctorIntegrityDepth: 'metadata',
       supportedVolumeSchemaVersion: 3,
       volumeId: null,
       backupPath: null,
@@ -180,6 +183,9 @@ describe('support bundle cli formatter', () => {
     expect(formatSupportBundleResult(result)).toContain(
       'Correlation ID: corr_support-bundle-all',
     );
+    expect(formatSupportBundleResult(result)).toContain(
+      'Doctor integrity depth: metadata',
+    );
     expect(formatSupportBundleResult(result)).toContain('Sensitivity: sanitized');
     expect(formatSupportBundleResult(result)).toContain(
       'Sharing: external-shareable',
@@ -211,6 +217,7 @@ describe('support bundle cli formatter', () => {
       bundleCliVersion: APP_VERSION,
       bundleCorrelationId: 'corr_bundle-inspect',
       bundleCreatedAt: '2026-04-15T21:20:00.000Z',
+      doctorIntegrityDepth: 'deep',
       volumeId: 'volume-1',
       handoffReportPath: 'C:\\reports\\support-bundle\\handoff-report.md',
       issueCount: 0,
@@ -245,6 +252,7 @@ describe('support bundle cli formatter', () => {
         'Bundle version: 1',
         `Created with: ${APP_VERSION}`,
         'Bundle correlation ID: corr_bundle-inspect',
+        'Doctor integrity depth: deep',
         'Sensitivity: sanitized',
         'Sharing: external-shareable',
         'Retention: 30 days',
@@ -274,6 +282,7 @@ describe('support bundle cli formatter', () => {
       bundleCliVersion: null,
       bundleCorrelationId: null,
       bundleCreatedAt: null,
+      doctorIntegrityDepth: null,
       volumeId: null,
       handoffReportPath: null,
       issueCount: 2,
@@ -304,6 +313,9 @@ describe('support bundle cli formatter', () => {
     );
     expect(formatSupportBundleInspectionResult(result)).toContain(
       'Bundle correlation ID: unknown',
+    );
+    expect(formatSupportBundleInspectionResult(result)).toContain(
+      'Doctor integrity depth: unknown',
     );
     expect(formatSupportBundleInspectionResult(result)).toContain(
       'Sensitivity: unknown',

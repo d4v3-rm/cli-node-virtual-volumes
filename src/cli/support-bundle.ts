@@ -88,6 +88,7 @@ export const formatSupportBundleResult = (
     `Manifest: ${result.manifestPath}`,
     `Checksums: ${result.checksumsPath}`,
     `Correlation ID: ${result.correlationId}`,
+    `Doctor integrity depth: ${result.doctorIntegrityDepth ?? 'unknown'}`,
     `Sensitivity: ${result.contentProfile.sensitivity}`,
     `Sharing: ${result.contentProfile.sharingRecommendation}`,
     `Retention: ${result.contentProfile.recommendedRetentionDays} days`,
@@ -137,6 +138,7 @@ export const formatSupportBundleInspectionResult = (
     `Bundle version: ${result.bundleVersion ?? 'unknown'}`,
     `Created with: ${result.bundleCliVersion ?? 'unknown'}`,
     `Bundle correlation ID: ${result.bundleCorrelationId ?? 'unknown'}`,
+    `Doctor integrity depth: ${result.doctorIntegrityDepth ?? 'unknown'}`,
     `Sensitivity: ${result.contentProfile?.sensitivity ?? 'unknown'}`,
     `Sharing: ${result.contentProfile?.sharingRecommendation ?? 'unknown'}`,
     `Retention: ${result.contentProfile?.recommendedRetentionDays ?? 'unknown'}${

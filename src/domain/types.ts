@@ -169,6 +169,7 @@ export interface CreateSupportBundleInput {
   volumeId?: string;
   backupPath?: string;
   includeLogs?: boolean;
+  verifyBlobPayloads?: boolean;
   overwrite?: boolean;
 }
 
@@ -525,6 +526,7 @@ export interface SupportBundleInspectionResult {
   bundleCliVersion: string | null;
   bundleCorrelationId: string | null;
   bundleCreatedAt: string | null;
+  doctorIntegrityDepth: 'metadata' | 'deep' | null;
   volumeId: string | null;
   handoffReportPath: string | null;
   issueCount: number;
@@ -539,6 +541,7 @@ export interface SupportBundleResult {
   cliVersion: string;
   correlationId: string;
   generatedAt: string;
+  doctorIntegrityDepth?: 'metadata' | 'deep';
   supportedVolumeSchemaVersion: number;
   volumeId: string | null;
   backupPath: string | null;
