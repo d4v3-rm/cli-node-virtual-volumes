@@ -478,6 +478,9 @@ try {
     path.join(supportBundlePath, 'manifest.json'),
   );
   const supportBundleArtifact = await readJson(supportBundleSummaryPath);
+  const supportBundleActionPlan = await readJson(
+    path.join(supportBundlePath, 'action-plan.json'),
+  );
 
   assert(
     supportBundleResult.bundlePath === path.resolve(supportBundlePath),
@@ -501,6 +504,11 @@ try {
     supportBundleManifest.doctorReportPath ===
       path.join(path.resolve(supportBundlePath), 'doctor-report.json'),
     'Support bundle manifest should include the doctor report path.',
+  );
+  assert(
+    supportBundleManifest.actionPlanPath ===
+      path.join(path.resolve(supportBundlePath), 'action-plan.json'),
+    'Support bundle manifest should include the action plan path.',
   );
   assert(
     supportBundleManifest.backupInspectionReportPath ===
@@ -540,6 +548,10 @@ try {
     'Support bundle doctor report was not created.',
   );
   assert(
+    await pathExists(supportBundleManifest.actionPlanPath),
+    'Support bundle action plan was not created.',
+  );
+  assert(
     await pathExists(supportBundleManifest.handoffReportPath),
     'Support bundle handoff report was not created.',
   );
@@ -562,6 +574,11 @@ try {
   assert(
     await pathExists(supportBundleManifest.logSnapshotPath),
     'Support bundle log snapshot was not created.',
+  );
+  assert(
+    Array.isArray(supportBundleActionPlan.steps) &&
+      supportBundleActionPlan.steps.length >= 1,
+    'Support bundle action plan should include at least one recommended step.',
   );
   const checksumManifest = await readJson(supportBundleManifest.checksumsPath);
   assert(
@@ -598,6 +615,10 @@ try {
     supportBundleInspection.contentProfile?.sharingRecommendation === 'internal-only',
     'Support bundle inspection should expose the expected sharing recommendation.',
   );
+  assert(
+    supportBundleInspection.actionPlanPath === supportBundleManifest.actionPlanPath,
+    'Support bundle inspection should expose the action plan path.',
+  );
   assertArtifactEnvelope(
     supportBundleInspectionArtifact,
     'inspect-support-bundle',
@@ -611,6 +632,11 @@ try {
     supportBundleInspectionArtifact.payload.bundleCorrelationId ===
       supportBundleManifest.correlationId,
     'Support bundle inspection should expose the bundle correlation id.',
+  );
+  assert(
+    supportBundleInspectionArtifact.payload.actionPlanPath ===
+      supportBundleManifest.actionPlanPath,
+    'Support bundle inspection artifact should expose the action plan path.',
   );
 
   process.stdout.write(

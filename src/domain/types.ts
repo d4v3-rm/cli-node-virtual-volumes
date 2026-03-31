@@ -174,6 +174,7 @@ export interface CreateSupportBundleInput {
 }
 
 export type SupportBundleFileRole =
+  | 'action-plan'
   | 'audit-log-snapshot'
   | 'backup-inspection'
   | 'backup-manifest'
@@ -498,6 +499,32 @@ export interface SupportBundleContentProfile {
   disposalNotes: string[];
 }
 
+export interface SupportBundleActionPlanStep {
+  kind:
+    | 'compact-recommended'
+    | 'inspect-support-bundle'
+    | 'manual-investigation'
+    | 'no-op'
+    | 'repair-safe';
+  priority: 'high' | 'medium' | 'low';
+  title: string;
+  reason: string;
+  command: string | null;
+}
+
+export interface SupportBundleActionPlan {
+  bundleVersion: 1;
+  generatedAt: string;
+  doctorIntegrityDepth: 'metadata' | 'deep';
+  healthy: boolean;
+  issueCount: number;
+  recommendedCompactions: number;
+  repairableVolumes: number;
+  readyBatchRepairVolumes: number;
+  blockedBatchRepairVolumes: number;
+  steps: SupportBundleActionPlanStep[];
+}
+
 export interface SupportBundleInspectionIssue {
   code:
     | 'CHECKSUM_MISMATCH'
@@ -529,6 +556,7 @@ export interface SupportBundleInspectionResult {
   doctorIntegrityDepth: 'metadata' | 'deep' | null;
   volumeId: string | null;
   handoffReportPath: string | null;
+  actionPlanPath: string | null;
   issueCount: number;
   expectedFiles: number;
   verifiedFiles: number;
@@ -552,6 +580,7 @@ export interface SupportBundleResult {
   manifestPath: string;
   doctorReportPath: string;
   handoffReportPath: string | null;
+  actionPlanPath: string | null;
   backupInspectionReportPath: string | null;
   backupManifestCopyPath: string | null;
   checksumsPath: string;
