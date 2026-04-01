@@ -5,6 +5,8 @@ import type {
 } from '../domain/types.js';
 import { formatDateTime } from '../utils/formatters.js';
 
+export type SupportBundleIntegrityDepth = 'deep' | 'metadata';
+
 const supportBundleSharingRecommendationRank: Record<
   SupportBundleSharingRecommendation,
   number
@@ -13,8 +15,22 @@ const supportBundleSharingRecommendationRank: Record<
   'external-shareable': 1,
 };
 
+const supportBundleIntegrityDepthRank: Record<
+  SupportBundleIntegrityDepth,
+  number
+> = {
+  metadata: 0,
+  deep: 1,
+};
+
 export interface SupportBundleSharingRequirementStatus {
   required: SupportBundleSharingRecommendation;
+  satisfied: boolean;
+  message: string | null;
+}
+
+export interface SupportBundleIntegrityRequirementStatus {
+  required: SupportBundleIntegrityDepth;
   satisfied: boolean;
   message: string | null;
 }
@@ -33,6 +49,23 @@ export const parseSupportBundleSharingRecommendation = (
 
   throw new Error(
     `Unsupported support bundle sharing policy "${value}". Expected one of: external-shareable, internal-only.`,
+  );
+};
+
+export const isSupportBundleIntegrityDepth = (
+  value: string,
+): value is SupportBundleIntegrityDepth =>
+  value === 'metadata' || value === 'deep';
+
+export const parseSupportBundleIntegrityDepth = (
+  value: string,
+): SupportBundleIntegrityDepth => {
+  if (isSupportBundleIntegrityDepth(value)) {
+    return value;
+  }
+
+  throw new Error(
+    `Unsupported support bundle integrity depth "${value}". Expected one of: metadata, deep.`,
   );
 };
 
@@ -64,11 +97,54 @@ export const evaluateSupportBundleSharingRequirement = (
   };
 };
 
+export const evaluateSupportBundleIntegrityRequirement = (
+  result: Pick<SupportBundleInspectionResult, 'doctorIntegrityDepth'>,
+  required: SupportBundleIntegrityDepth,
+): SupportBundleIntegrityRequirementStatus => {
+  const actual = result.doctorIntegrityDepth;
+
+  if (!actual) {
+    return {
+      required,
+      satisfied: false,
+      message:
+        'Support bundle integrity depth is unknown, so the required verification depth cannot be verified.',
+    };
+  }
+
+  const satisfied =
+    supportBundleIntegrityDepthRank[actual] >=
+    supportBundleIntegrityDepthRank[required];
+
+  return {
+    required,
+    satisfied,
+    message: satisfied
+      ? null
+      : `Support bundle was generated with ${actual} integrity depth, but ${required} was required.`,
+  };
+};
+
 export const formatSupportBundleSharingRequirementStatus = (
   status: SupportBundleSharingRequirementStatus,
 ): string => {
   const lines = [
     `Required sharing: ${status.required}`,
+    `Policy gate: ${status.satisfied ? 'PASSED' : 'FAILED'}`,
+  ];
+
+  if (status.message) {
+    lines.push(`Policy note: ${status.message}`);
+  }
+
+  return lines.join('\n');
+};
+
+export const formatSupportBundleIntegrityRequirementStatus = (
+  status: SupportBundleIntegrityRequirementStatus,
+): string => {
+  const lines = [
+    `Required integrity depth: ${status.required}`,
     `Policy gate: ${status.satisfied ? 'PASSED' : 'FAILED'}`,
   ];
 

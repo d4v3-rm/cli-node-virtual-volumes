@@ -611,6 +611,8 @@ try {
       supportBundlePath,
       '--require-sharing',
       'internal-only',
+      '--require-integrity-depth',
+      'metadata',
       '--json',
       '--output',
       supportBundleInspectionArtifactPath,

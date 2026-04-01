@@ -412,6 +412,7 @@ const buildSupportBundleActionPlan = (
 ): SupportBundleActionPlan => {
   const deepVerificationFlag =
     doctorReport.integrityDepth === 'deep' ? ' --verify-blobs' : '';
+  const requiredIntegrityDepth = result.doctorIntegrityDepth ?? 'metadata';
   const steps: SupportBundleActionPlan['steps'] = [];
 
   if (doctorReport.repairSummary.readyBatchRepairVolumes > 0) {
@@ -453,7 +454,7 @@ const buildSupportBundleActionPlan = (
     title: 'Validate bundle before handoff',
     reason:
       'Re-run bundle inspection with the intended sharing policy before handing it to another team.',
-    command: `virtual-volumes inspect-support-bundle "${result.bundlePath}" --require-sharing ${result.contentProfile.sharingRecommendation}`,
+    command: `virtual-volumes inspect-support-bundle "${result.bundlePath}" --require-sharing ${result.contentProfile.sharingRecommendation} --require-integrity-depth ${requiredIntegrityDepth}`,
   });
 
   if (
