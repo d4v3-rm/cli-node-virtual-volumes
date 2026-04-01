@@ -377,6 +377,7 @@ Use `virtual-volumes support-bundle ... --verify-blobs` when you want the embedd
 
 - required metadata files
 - manifest path consistency
+- `action-plan.json` structure and consistency with the bundle manifest
 - checksum inventory structure
 - file size and SHA-256 integrity for the tracked files
 - bundle sensitivity, sharing, and handling metadata so operators can see whether the artifact is external-shareable or internal-only and how long it should be retained

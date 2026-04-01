@@ -527,8 +527,10 @@ export interface SupportBundleActionPlan {
 
 export interface SupportBundleInspectionIssue {
   code:
+    | 'ACTION_PLAN_MISMATCH'
     | 'CHECKSUM_MISMATCH'
     | 'FILE_SIZE_MISMATCH'
+    | 'INVALID_ACTION_PLAN'
     | 'INVALID_BUNDLE_MANIFEST'
     | 'INVALID_CHECKSUM_MANIFEST'
     | 'MANIFEST_PATH_MISMATCH'

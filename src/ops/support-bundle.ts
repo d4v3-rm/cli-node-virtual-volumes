@@ -127,6 +127,50 @@ const isSupportBundleContentProfile = (
   );
 };
 
+const isSupportBundleActionPlanStep = (
+  value: unknown,
+): value is SupportBundleActionPlan['steps'][number] => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    (value.kind === 'compact-recommended' ||
+      value.kind === 'inspect-support-bundle' ||
+      value.kind === 'manual-investigation' ||
+      value.kind === 'no-op' ||
+      value.kind === 'repair-safe') &&
+    (value.priority === 'high' ||
+      value.priority === 'medium' ||
+      value.priority === 'low') &&
+    typeof value.title === 'string' &&
+    typeof value.reason === 'string' &&
+    isStringOrNull(value.command)
+  );
+};
+
+const isSupportBundleActionPlan = (
+  value: unknown,
+): value is SupportBundleActionPlan => {
+  if (!isRecord(value) || !Array.isArray(value.steps)) {
+    return false;
+  }
+
+  return (
+    value.bundleVersion === SUPPORT_BUNDLE_VERSION &&
+    typeof value.generatedAt === 'string' &&
+    (value.doctorIntegrityDepth === 'metadata' ||
+      value.doctorIntegrityDepth === 'deep') &&
+    typeof value.healthy === 'boolean' &&
+    isNonNegativeNumber(value.issueCount) &&
+    isNonNegativeNumber(value.recommendedCompactions) &&
+    isNonNegativeNumber(value.repairableVolumes) &&
+    isNonNegativeNumber(value.readyBatchRepairVolumes) &&
+    isNonNegativeNumber(value.blockedBatchRepairVolumes) &&
+    value.steps.every((step) => isSupportBundleActionPlanStep(step))
+  );
+};
+
 const isSupportBundleResultLike = (
   value: unknown,
 ): value is Omit<SupportBundleResult, 'contentProfile'> & {
@@ -1126,6 +1170,53 @@ export const inspectSupportBundle = async (
       'Support bundle manifest points to an unexpected checksum manifest path.',
     );
     addRetentionIssueIfExpired(issues, manifest, manifestPath);
+
+    if (manifest.actionPlanPath && (await pathExists(manifest.actionPlanPath))) {
+      try {
+        const actionPlanCandidate = await readJsonFileSafe(manifest.actionPlanPath);
+        if (isSupportBundleActionPlan(actionPlanCandidate)) {
+          const expectedIntegrityDepth = manifest.doctorIntegrityDepth ?? 'metadata';
+          if (actionPlanCandidate.doctorIntegrityDepth !== expectedIntegrityDepth) {
+            addInspectionIssue(issues, {
+              code: 'ACTION_PLAN_MISMATCH',
+              severity: 'error',
+              message:
+                'Support bundle action plan integrity depth does not match the bundle manifest.',
+              path: manifest.actionPlanPath,
+              relativePath: toBundleRelativePath(
+                absoluteBundlePath,
+                manifest.actionPlanPath,
+              ) ?? undefined,
+              role: 'action-plan',
+            });
+          }
+        } else {
+          addInspectionIssue(issues, {
+            code: 'INVALID_ACTION_PLAN',
+            severity: 'error',
+            message: 'Support bundle action plan has an invalid structure.',
+            path: manifest.actionPlanPath,
+            relativePath: toBundleRelativePath(
+              absoluteBundlePath,
+              manifest.actionPlanPath,
+            ) ?? undefined,
+            role: 'action-plan',
+          });
+        }
+      } catch {
+        addInspectionIssue(issues, {
+          code: 'INVALID_ACTION_PLAN',
+          severity: 'error',
+          message: 'Support bundle action plan could not be parsed as JSON.',
+          path: manifest.actionPlanPath,
+          relativePath: toBundleRelativePath(
+            absoluteBundlePath,
+            manifest.actionPlanPath,
+          ) ?? undefined,
+          role: 'action-plan',
+        });
+      }
+    }
 
     if (checksumManifest) {
       for (const expectedFile of getExpectedBundleFiles(manifest)) {
