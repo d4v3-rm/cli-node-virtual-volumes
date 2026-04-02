@@ -171,6 +171,146 @@ const isSupportBundleActionPlan = (
   );
 };
 
+const isStorageDoctorIssue = (
+  value: unknown,
+): value is StorageDoctorReport['volumes'][number]['issues'][number] => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    (value.code === 'BLOB_CHUNK_COUNT_MISMATCH' ||
+      value.code === 'BLOB_CHUNK_INDEX_GAP' ||
+      value.code === 'BLOB_CONTENT_REF_MISMATCH' ||
+      value.code === 'BLOB_REFERENCE_COUNT_MISMATCH' ||
+      value.code === 'BLOB_SIZE_MISMATCH' ||
+      value.code === 'DATABASE_OPEN_FAILED' ||
+      value.code === 'BROKEN_ROOT' ||
+      value.code === 'COMPACTION_RECOMMENDED' ||
+      value.code === 'DUPLICATE_CHILD_NAME' ||
+      value.code === 'MANIFEST_ENTRY_COUNT_MISMATCH' ||
+      value.code === 'MANIFEST_USAGE_MISMATCH' ||
+      value.code === 'MISSING_BLOB' ||
+      value.code === 'MISSING_CONTENT_REF' ||
+      value.code === 'MISSING_PARENT' ||
+      value.code === 'ORPHAN_BLOB' ||
+      value.code === 'PARENT_NOT_DIRECTORY' ||
+      value.code === 'SQLITE_FOREIGN_KEY_VIOLATION' ||
+      value.code === 'SQLITE_INTEGRITY_CHECK_FAILED') &&
+    (value.severity === 'error' || value.severity === 'warn') &&
+    typeof value.message === 'string' &&
+    (typeof value.contentRef === 'string' || typeof value.contentRef === 'undefined') &&
+    (typeof value.entryId === 'string' || typeof value.entryId === 'undefined')
+  );
+};
+
+const isStorageDoctorMaintenanceCandidate = (
+  value: unknown,
+): value is StorageDoctorReport['maintenanceSummary']['topCompactionCandidates'][number] => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.volumeId === 'string' &&
+    typeof value.volumeName === 'string' &&
+    isNonNegativeNumber(value.revision) &&
+    isNonNegativeNumber(value.issueCount) &&
+    isNonNegativeNumber(value.artifactBytes) &&
+    isNonNegativeNumber(value.freeBytes) &&
+    isNonNegativeNumber(value.freeRatio)
+  );
+};
+
+const isStorageDoctorRepairCandidate = (
+  value: unknown,
+): value is StorageDoctorReport['repairSummary']['topRepairCandidates'][number] => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.volumeId === 'string' &&
+    typeof value.volumeName === 'string' &&
+    isNonNegativeNumber(value.revision) &&
+    isNonNegativeNumber(value.issueCount) &&
+    isNonNegativeNumber(value.repairableIssueCount) &&
+    Array.isArray(value.repairableIssueCodes) &&
+    value.repairableIssueCodes.every((code) => typeof code === 'string') &&
+    typeof value.readyForBatchRepair === 'boolean' &&
+    Array.isArray(value.blockingIssueCodes) &&
+    value.blockingIssueCodes.every((code) => typeof code === 'string')
+  );
+};
+
+const isStorageDoctorVolumeReport = (
+  value: unknown,
+): value is StorageDoctorReport['volumes'][number] => {
+  if (!isRecord(value) || !Array.isArray(value.issues)) {
+    return false;
+  }
+
+  return (
+    typeof value.volumeId === 'string' &&
+    typeof value.volumeName === 'string' &&
+    isNonNegativeNumber(value.revision) &&
+    typeof value.healthy === 'boolean' &&
+    isNonNegativeNumber(value.issueCount) &&
+    value.issues.every((issue) => isStorageDoctorIssue(issue)) &&
+    (typeof value.maintenance === 'undefined' ||
+      (isRecord(value.maintenance) &&
+        isNonNegativeNumber(value.maintenance.databaseBytes) &&
+        isNonNegativeNumber(value.maintenance.walBytes) &&
+        isNonNegativeNumber(value.maintenance.artifactBytes) &&
+        isNonNegativeNumber(value.maintenance.pageSizeBytes) &&
+        isNonNegativeNumber(value.maintenance.pageCount) &&
+        isNonNegativeNumber(value.maintenance.freelistCount) &&
+        isNonNegativeNumber(value.maintenance.freeBytes) &&
+        isNonNegativeNumber(value.maintenance.freeRatio) &&
+        typeof value.maintenance.compactionRecommended === 'boolean'))
+  );
+};
+
+const isStorageDoctorReport = (
+  value: unknown,
+): value is StorageDoctorReport => {
+  if (
+    !isRecord(value) ||
+    !isRecord(value.maintenanceSummary) ||
+    !isRecord(value.repairSummary) ||
+    !Array.isArray(value.volumes)
+  ) {
+    return false;
+  }
+
+  return (
+    typeof value.generatedAt === 'string' &&
+    typeof value.healthy === 'boolean' &&
+    isNonNegativeNumber(value.checkedVolumes) &&
+    isNonNegativeNumber(value.issueCount) &&
+    (value.integrityDepth === 'metadata' ||
+      value.integrityDepth === 'deep' ||
+      typeof value.integrityDepth === 'undefined') &&
+    isNonNegativeNumber(value.maintenanceSummary.volumesWithStats) &&
+    isNonNegativeNumber(value.maintenanceSummary.recommendedCompactions) &&
+    isNonNegativeNumber(value.maintenanceSummary.totalArtifactBytes) &&
+    isNonNegativeNumber(value.maintenanceSummary.totalFreeBytes) &&
+    Array.isArray(value.maintenanceSummary.topCompactionCandidates) &&
+    value.maintenanceSummary.topCompactionCandidates.every((candidate) =>
+      isStorageDoctorMaintenanceCandidate(candidate),
+    ) &&
+    isNonNegativeNumber(value.repairSummary.repairableVolumes) &&
+    isNonNegativeNumber(value.repairSummary.readyBatchRepairVolumes) &&
+    isNonNegativeNumber(value.repairSummary.blockedBatchRepairVolumes) &&
+    isNonNegativeNumber(value.repairSummary.totalRepairableIssues) &&
+    Array.isArray(value.repairSummary.topRepairCandidates) &&
+    value.repairSummary.topRepairCandidates.every((candidate) =>
+      isStorageDoctorRepairCandidate(candidate),
+    ) &&
+    value.volumes.every((volume) => isStorageDoctorVolumeReport(volume))
+  );
+};
+
 const isSupportBundleResultLike = (
   value: unknown,
 ): value is Omit<SupportBundleResult, 'contentProfile'> & {
@@ -1170,6 +1310,78 @@ export const inspectSupportBundle = async (
       'Support bundle manifest points to an unexpected checksum manifest path.',
     );
     addRetentionIssueIfExpired(issues, manifest, manifestPath);
+
+    if (await pathExists(manifest.doctorReportPath)) {
+      try {
+        const doctorReportCandidate = await readJsonFileSafe(manifest.doctorReportPath);
+        if (isStorageDoctorReport(doctorReportCandidate)) {
+          const expectedIntegrityDepth = manifest.doctorIntegrityDepth ?? 'metadata';
+          const reportedIntegrityDepth = doctorReportCandidate.integrityDepth ?? 'metadata';
+          const aggregatedIssueCount = doctorReportCandidate.volumes.reduce(
+            (sum, volume) => sum + volume.issueCount,
+            0,
+          );
+          const volumeHealthyMismatch = doctorReportCandidate.volumes.some(
+            (volume) => volume.healthy !== (volume.issueCount === 0),
+          );
+          const scopeMismatch =
+            manifest.volumeId !== null
+              ? doctorReportCandidate.volumes.length !== 1 ||
+                doctorReportCandidate.volumes[0]?.volumeId !== manifest.volumeId
+              : doctorReportCandidate.checkedVolumes !==
+                doctorReportCandidate.volumes.length;
+
+          if (
+            reportedIntegrityDepth !== expectedIntegrityDepth ||
+            doctorReportCandidate.checkedVolumes !== doctorReportCandidate.volumes.length ||
+            doctorReportCandidate.issueCount !== aggregatedIssueCount ||
+            doctorReportCandidate.healthy !== (doctorReportCandidate.issueCount === 0) ||
+            volumeHealthyMismatch ||
+            scopeMismatch ||
+            doctorReportCandidate.checkedVolumes !== manifest.checkedVolumes ||
+            doctorReportCandidate.issueCount !== manifest.issueCount ||
+            doctorReportCandidate.healthy !== manifest.healthy
+          ) {
+            addInspectionIssue(issues, {
+              code: 'DOCTOR_REPORT_MISMATCH',
+              severity: 'error',
+              message:
+                'Support bundle doctor report is structurally valid but inconsistent with the bundle manifest or doctor summary.',
+              path: manifest.doctorReportPath,
+              relativePath: toBundleRelativePath(
+                absoluteBundlePath,
+                manifest.doctorReportPath,
+              ) ?? undefined,
+              role: 'doctor-report',
+            });
+          }
+        } else {
+          addInspectionIssue(issues, {
+            code: 'INVALID_DOCTOR_REPORT',
+            severity: 'error',
+            message: 'Support bundle doctor report has an invalid structure.',
+            path: manifest.doctorReportPath,
+            relativePath: toBundleRelativePath(
+              absoluteBundlePath,
+              manifest.doctorReportPath,
+            ) ?? undefined,
+            role: 'doctor-report',
+          });
+        }
+      } catch {
+        addInspectionIssue(issues, {
+          code: 'INVALID_DOCTOR_REPORT',
+          severity: 'error',
+          message: 'Support bundle doctor report could not be parsed as JSON.',
+          path: manifest.doctorReportPath,
+          relativePath: toBundleRelativePath(
+            absoluteBundlePath,
+            manifest.doctorReportPath,
+          ) ?? undefined,
+          role: 'doctor-report',
+        });
+      }
+    }
 
     if (manifest.actionPlanPath && (await pathExists(manifest.actionPlanPath))) {
       try {

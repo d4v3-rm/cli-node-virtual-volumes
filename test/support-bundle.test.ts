@@ -598,6 +598,84 @@ describe('support bundle', () => {
     expect(issueCodes).toContain('MISSING_BUNDLE_FILE');
   });
 
+  it('reports invalid doctor reports even when the checksum inventory matches the tampered file', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Broken Doctor Report' });
+    const bundlePath = path.join(runtime.config.dataDir, '..', 'broken-doctor-report');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/hello.txt', 'tamper doctor');
+
+    await createSupportBundle(runtime, {
+      destinationPath: bundlePath,
+      volumeId: volume.id,
+      includeLogs: false,
+    });
+
+    await rewriteBundleFileAndRefreshChecksum(
+      bundlePath,
+      'doctor-report.json',
+      JSON.stringify(
+        {
+          generatedAt: new Date().toISOString(),
+          healthy: true,
+          checkedVolumes: 1,
+          issueCount: 0,
+          integrityDepth: 'metadata',
+          maintenanceSummary: 'not-an-object',
+          repairSummary: {},
+          volumes: [],
+        },
+        null,
+        2,
+      ),
+    );
+
+    const inspection = await inspectSupportBundle(bundlePath);
+
+    expect(inspection.healthy).toBe(false);
+    expect(inspection.issues).toContainEqual(
+      expect.objectContaining({
+        code: 'INVALID_DOCTOR_REPORT',
+        role: 'doctor-report',
+      }),
+    );
+  });
+
+  it('reports doctor report mismatches even when the checksum inventory matches', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Mismatched Doctor Report' });
+    const bundlePath = path.join(runtime.config.dataDir, '..', 'mismatched-doctor-report');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/hello.txt', 'tamper doctor');
+
+    const bundle = await createSupportBundle(runtime, {
+      destinationPath: bundlePath,
+      volumeId: volume.id,
+      includeLogs: false,
+    });
+    const doctorReport = JSON.parse(
+      await fs.readFile(bundle.doctorReportPath, 'utf8'),
+    ) as Record<string, unknown>;
+
+    doctorReport.checkedVolumes = 2;
+
+    await rewriteBundleFileAndRefreshChecksum(
+      bundlePath,
+      'doctor-report.json',
+      JSON.stringify(doctorReport, null, 2),
+    );
+
+    const inspection = await inspectSupportBundle(bundlePath);
+
+    expect(inspection.healthy).toBe(false);
+    expect(inspection.issues).toContainEqual(
+      expect.objectContaining({
+        code: 'DOCTOR_REPORT_MISMATCH',
+        role: 'doctor-report',
+      }),
+    );
+  });
+
   it('reports invalid action plans even when the checksum inventory matches the tampered file', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Broken Action Plan' });
