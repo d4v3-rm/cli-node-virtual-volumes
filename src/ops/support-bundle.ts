@@ -17,6 +17,8 @@ import type {
   SupportBundleInspectionIssue,
   SupportBundleInspectionResult,
   SupportBundleResult,
+  VolumeBackupInspectionResult,
+  VolumeBackupManifest,
 } from '../domain/types.js';
 import type { AppRuntime } from '../bootstrap/create-runtime.js';
 import { resolveAppLogFilePath, resolveAuditLogFilePath } from '../logging/logger.js';
@@ -168,6 +170,49 @@ const isSupportBundleActionPlan = (
     isNonNegativeNumber(value.readyBatchRepairVolumes) &&
     isNonNegativeNumber(value.blockedBatchRepairVolumes) &&
     value.steps.every((step) => isSupportBundleActionPlanStep(step))
+  );
+};
+
+const isVolumeBackupManifest = (
+  value: unknown,
+): value is VolumeBackupManifest => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    value.formatVersion === 1 &&
+    typeof value.volumeId === 'string' &&
+    typeof value.volumeName === 'string' &&
+    isNonNegativeNumber(value.revision) &&
+    isNonNegativeNumber(value.schemaVersion) &&
+    typeof value.createdWithVersion === 'string' &&
+    isNonNegativeNumber(value.bytesWritten) &&
+    typeof value.checksumSha256 === 'string' &&
+    typeof value.createdAt === 'string'
+  );
+};
+
+const isVolumeBackupInspectionResult = (
+  value: unknown,
+): value is VolumeBackupInspectionResult => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.volumeId === 'string' &&
+    typeof value.volumeName === 'string' &&
+    isNonNegativeNumber(value.revision) &&
+    isNonNegativeNumber(value.schemaVersion) &&
+    typeof value.backupPath === 'string' &&
+    isStringOrNull(value.manifestPath) &&
+    (value.formatVersion === 1 || value.formatVersion === null) &&
+    isStringOrNull(value.createdWithVersion) &&
+    typeof value.checksumSha256 === 'string' &&
+    isNonNegativeNumber(value.bytesWritten) &&
+    isStringOrNull(value.createdAt) &&
+    typeof value.validatedWithManifest === 'boolean'
   );
 };
 
@@ -1426,6 +1471,132 @@ export const inspectSupportBundle = async (
             manifest.actionPlanPath,
           ) ?? undefined,
           role: 'action-plan',
+        });
+      }
+    }
+
+    if (
+      manifest.backupInspectionReportPath &&
+      (await pathExists(manifest.backupInspectionReportPath))
+    ) {
+      try {
+        const backupInspectionCandidate = await readJsonFileSafe(
+          manifest.backupInspectionReportPath,
+        );
+        if (isVolumeBackupInspectionResult(backupInspectionCandidate)) {
+          const manifestBackedBackup = manifest.backupManifestCopyPath !== null;
+          const backupInspectionMismatch =
+            (manifest.backupPath !== null &&
+              backupInspectionCandidate.backupPath !== manifest.backupPath) ||
+            (manifest.volumeId !== null &&
+              backupInspectionCandidate.volumeId !== manifest.volumeId) ||
+            backupInspectionCandidate.validatedWithManifest !== manifestBackedBackup ||
+            (manifestBackedBackup && backupInspectionCandidate.manifestPath === null);
+
+          if (backupInspectionMismatch) {
+            addInspectionIssue(issues, {
+              code: 'BACKUP_INSPECTION_MISMATCH',
+              severity: 'error',
+              message:
+                'Support bundle backup inspection is structurally valid but inconsistent with the bundle manifest.',
+              path: manifest.backupInspectionReportPath,
+              relativePath: toBundleRelativePath(
+                absoluteBundlePath,
+                manifest.backupInspectionReportPath,
+              ) ?? undefined,
+              role: 'backup-inspection',
+            });
+          }
+
+          if (
+            manifest.backupManifestCopyPath &&
+            (await pathExists(manifest.backupManifestCopyPath))
+          ) {
+            try {
+              const backupManifestCandidate = await readJsonFileSafe(
+                manifest.backupManifestCopyPath,
+              );
+              if (isVolumeBackupManifest(backupManifestCandidate)) {
+                if (
+                  backupManifestCandidate.volumeId !== backupInspectionCandidate.volumeId ||
+                  backupManifestCandidate.volumeName !==
+                    backupInspectionCandidate.volumeName ||
+                  backupManifestCandidate.revision !== backupInspectionCandidate.revision ||
+                  backupManifestCandidate.schemaVersion !==
+                    backupInspectionCandidate.schemaVersion ||
+                  backupManifestCandidate.createdWithVersion !==
+                    backupInspectionCandidate.createdWithVersion ||
+                  backupManifestCandidate.bytesWritten !==
+                    backupInspectionCandidate.bytesWritten ||
+                  backupManifestCandidate.checksumSha256 !==
+                    backupInspectionCandidate.checksumSha256 ||
+                  backupManifestCandidate.createdAt !== backupInspectionCandidate.createdAt
+                ) {
+                  addInspectionIssue(issues, {
+                    code: 'BACKUP_MANIFEST_COPY_MISMATCH',
+                    severity: 'error',
+                    message:
+                      'Support bundle backup manifest copy does not match the bundled backup inspection report.',
+                    path: manifest.backupManifestCopyPath,
+                    relativePath: toBundleRelativePath(
+                      absoluteBundlePath,
+                      manifest.backupManifestCopyPath,
+                    ) ?? undefined,
+                    role: 'backup-manifest',
+                  });
+                }
+              } else {
+                addInspectionIssue(issues, {
+                  code: 'INVALID_BACKUP_MANIFEST_COPY',
+                  severity: 'error',
+                  message: 'Support bundle backup manifest copy has an invalid structure.',
+                  path: manifest.backupManifestCopyPath,
+                  relativePath: toBundleRelativePath(
+                    absoluteBundlePath,
+                    manifest.backupManifestCopyPath,
+                  ) ?? undefined,
+                  role: 'backup-manifest',
+                });
+              }
+            } catch {
+              addInspectionIssue(issues, {
+                code: 'INVALID_BACKUP_MANIFEST_COPY',
+                severity: 'error',
+                message:
+                  'Support bundle backup manifest copy could not be parsed as JSON.',
+                path: manifest.backupManifestCopyPath,
+                relativePath: toBundleRelativePath(
+                  absoluteBundlePath,
+                  manifest.backupManifestCopyPath,
+                ) ?? undefined,
+                role: 'backup-manifest',
+              });
+            }
+          }
+        } else {
+          addInspectionIssue(issues, {
+            code: 'INVALID_BACKUP_INSPECTION',
+            severity: 'error',
+            message: 'Support bundle backup inspection has an invalid structure.',
+            path: manifest.backupInspectionReportPath,
+            relativePath: toBundleRelativePath(
+              absoluteBundlePath,
+              manifest.backupInspectionReportPath,
+            ) ?? undefined,
+            role: 'backup-inspection',
+          });
+        }
+      } catch {
+        addInspectionIssue(issues, {
+          code: 'INVALID_BACKUP_INSPECTION',
+          severity: 'error',
+          message: 'Support bundle backup inspection could not be parsed as JSON.',
+          path: manifest.backupInspectionReportPath,
+          relativePath: toBundleRelativePath(
+            absoluteBundlePath,
+            manifest.backupInspectionReportPath,
+          ) ?? undefined,
+          role: 'backup-inspection',
         });
       }
     }
