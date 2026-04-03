@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - main
-      - "release/**"
-  workflow_dispatch:
 
 concurrency:
   group: release-${{ github.workflow }}-${{ github.ref }}
