@@ -378,6 +378,7 @@ Use `virtual-volumes support-bundle ... --verify-blobs` when you want the embedd
 - required metadata files
 - `doctor-report.json` structure and consistency with the bundle manifest and scope
 - manifest path consistency
+- `contentProfile` consistency with the actual included artifacts, sharing posture, and retention policy
 - `action-plan.json` structure and consistency with the bundle manifest
 - `backup-inspection.json` and copied backup manifest consistency when a backup artifact is bundled
 - `handoff-report.md` structure and consistency with the bundle manifest, action plan, and embedded guidance

@@ -489,6 +489,23 @@ const buildContentProfile = (options: {
   };
 };
 
+const areSupportBundleContentProfilesEqual = (
+  left: SupportBundleContentProfile,
+  right: SupportBundleContentProfile,
+): boolean =>
+  left.redacted === right.redacted &&
+  left.includesAppLogSnapshot === right.includesAppLogSnapshot &&
+  left.includesAuditLogSnapshot === right.includesAuditLogSnapshot &&
+  left.includesBackupInspection === right.includesBackupInspection &&
+  left.includesBackupManifestCopy === right.includesBackupManifestCopy &&
+  left.sensitivity === right.sensitivity &&
+  left.sharingRecommendation === right.sharingRecommendation &&
+  left.recommendedRetentionDays === right.recommendedRetentionDays &&
+  left.sharingNotes.length === right.sharingNotes.length &&
+  left.sharingNotes.every((note, index) => note === right.sharingNotes[index]) &&
+  left.disposalNotes.length === right.disposalNotes.length &&
+  left.disposalNotes.every((note, index) => note === right.disposalNotes[index]);
+
 const coerceSupportBundleResult = (value: unknown): SupportBundleResult | null => {
   if (!isSupportBundleResultLike(value)) {
     return null;
@@ -1442,6 +1459,26 @@ export const inspectSupportBundle = async (
       'Support bundle manifest points to an unexpected checksum manifest path.',
     );
     addRetentionIssueIfExpired(issues, manifest, manifestPath);
+
+    const expectedContentProfile = buildContentProfile({
+      redacted: manifest.config.redactSensitiveDetails,
+      includesAppLogSnapshot: manifest.logSnapshotPath !== null,
+      includesAuditLogSnapshot: manifest.auditLogSnapshotPath !== null,
+      includesBackupInspection: manifest.backupInspectionReportPath !== null,
+      includesBackupManifestCopy: manifest.backupManifestCopyPath !== null,
+    });
+
+    if (!areSupportBundleContentProfilesEqual(manifest.contentProfile, expectedContentProfile)) {
+      addInspectionIssue(issues, {
+        code: 'CONTENT_PROFILE_MISMATCH',
+        severity: 'error',
+        message:
+          'Support bundle content profile is inconsistent with the manifest paths, retention policy, or sharing policy implied by the bundle contents.',
+        path: manifestPath,
+        relativePath: 'manifest.json',
+        role: 'manifest',
+      });
+    }
 
     if (await pathExists(manifest.doctorReportPath)) {
       try {
