@@ -814,6 +814,91 @@ const buildSupportBundleHandoffReport = (
   return `${lines.join('\n')}\n`;
 };
 
+const validateSupportBundleHandoffReport = (options: {
+  bundlePath: string;
+  handoffReport: string;
+  manifest: SupportBundleResult;
+  doctorReport: StorageDoctorReport | null;
+  actionPlan: SupportBundleActionPlan | null;
+}): {
+  code: 'HANDOFF_REPORT_MISMATCH' | 'INVALID_HANDOFF_REPORT' | null;
+  message: string | null;
+} => {
+  const { bundlePath, handoffReport, manifest, doctorReport, actionPlan } = options;
+  const normalized = handoffReport.replace(/\r\n/g, '\n');
+  const requiredSections = [
+    '# Support Bundle Handoff Report',
+    '## Summary',
+    '## Included Artifacts',
+    '## Sharing Notes',
+    '## Disposal Notes',
+    '## Recommended Next Actions',
+  ];
+
+  if (requiredSections.some((section) => !normalized.includes(section))) {
+    return {
+      code: 'INVALID_HANDOFF_REPORT',
+      message: 'Support bundle handoff report is missing one or more required sections.',
+    };
+  }
+
+  const requiredLines = [
+    `- Status: ${manifest.healthy ? 'HEALTHY' : 'UNHEALTHY'}`,
+    `- Generated at: ${manifest.generatedAt}`,
+    `- Correlation ID: ${manifest.correlationId}`,
+    `- Doctor integrity depth: ${manifest.doctorIntegrityDepth ?? 'metadata'}`,
+    `- Scope: ${manifest.volumeId ?? 'all volumes'}`,
+    `- Volumes checked: ${manifest.checkedVolumes}`,
+    `- Issues detected: ${manifest.issueCount}`,
+    `- Sensitivity: ${manifest.contentProfile.sensitivity}`,
+    `- Sharing: ${manifest.contentProfile.sharingRecommendation}`,
+    `- Retention: ${manifest.contentProfile.recommendedRetentionDays} days`,
+    `- Doctor report: ${toBundleRelativePath(bundlePath, manifest.doctorReportPath) ?? 'not included'}`,
+    `- Action plan: ${toBundleRelativePath(bundlePath, manifest.actionPlanPath) ?? 'not included'}`,
+    `- Backup inspection: ${toBundleRelativePath(bundlePath, manifest.backupInspectionReportPath) ?? 'not included'}`,
+    `- Backup manifest copy: ${toBundleRelativePath(bundlePath, manifest.backupManifestCopyPath) ?? 'not included'}`,
+    `- App log snapshot: ${toBundleRelativePath(bundlePath, manifest.logSnapshotPath) ?? 'not included'}`,
+    `- Audit log snapshot: ${toBundleRelativePath(bundlePath, manifest.auditLogSnapshotPath) ?? 'not included'}`,
+  ];
+
+  if (doctorReport) {
+    requiredLines.push(
+      `- Recommended compactions: ${doctorReport.maintenanceSummary.recommendedCompactions}`,
+      `- Repairable volumes: ${doctorReport.repairSummary.repairableVolumes}`,
+      `- Ready batch repairs: ${doctorReport.repairSummary.readyBatchRepairVolumes}`,
+      `- Blocked batch repairs: ${doctorReport.repairSummary.blockedBatchRepairVolumes}`,
+    );
+  }
+
+  for (const note of manifest.contentProfile.sharingNotes) {
+    requiredLines.push(`- ${note}`);
+  }
+
+  for (const note of manifest.contentProfile.disposalNotes) {
+    requiredLines.push(`- ${note}`);
+  }
+
+  if (actionPlan) {
+    for (const step of actionPlan.steps) {
+      const prefix = `[${step.priority.toUpperCase()}] ${step.title}: ${step.reason}`;
+      requiredLines.push(step.command ? `${prefix} Command: ${step.command}` : prefix);
+    }
+  }
+
+  if (requiredLines.some((line) => !normalized.includes(line))) {
+    return {
+      code: 'HANDOFF_REPORT_MISMATCH',
+      message:
+        'Support bundle handoff report is structurally valid but inconsistent with the bundle manifest or embedded reports.',
+    };
+  }
+
+  return {
+    code: null,
+    message: null,
+  };
+};
+
 const computeFileSha256 = async (filePath: string): Promise<string> =>
   new Promise((resolve, reject) => {
     const hash = createHash('sha256');
@@ -1259,6 +1344,8 @@ export const inspectSupportBundle = async (
   const issues: SupportBundleInspectionIssue[] = [];
   let manifest: SupportBundleResult | null = null;
   let checksumManifest: SupportBundleChecksumManifest | null = null;
+  let validatedDoctorReport: StorageDoctorReport | null = null;
+  let validatedActionPlan: SupportBundleActionPlan | null = null;
   let verifiedFiles = 0;
 
   if (!(await pathExists(manifestPath))) {
@@ -1360,6 +1447,7 @@ export const inspectSupportBundle = async (
       try {
         const doctorReportCandidate = await readJsonFileSafe(manifest.doctorReportPath);
         if (isStorageDoctorReport(doctorReportCandidate)) {
+          validatedDoctorReport = doctorReportCandidate;
           const expectedIntegrityDepth = manifest.doctorIntegrityDepth ?? 'metadata';
           const reportedIntegrityDepth = doctorReportCandidate.integrityDepth ?? 'metadata';
           const aggregatedIssueCount = doctorReportCandidate.volumes.reduce(
@@ -1432,6 +1520,7 @@ export const inspectSupportBundle = async (
       try {
         const actionPlanCandidate = await readJsonFileSafe(manifest.actionPlanPath);
         if (isSupportBundleActionPlan(actionPlanCandidate)) {
+          validatedActionPlan = actionPlanCandidate;
           const expectedIntegrityDepth = manifest.doctorIntegrityDepth ?? 'metadata';
           if (actionPlanCandidate.doctorIntegrityDepth !== expectedIntegrityDepth) {
             addInspectionIssue(issues, {
@@ -1597,6 +1686,45 @@ export const inspectSupportBundle = async (
             manifest.backupInspectionReportPath,
           ) ?? undefined,
           role: 'backup-inspection',
+        });
+      }
+    }
+
+    if (manifest.handoffReportPath && (await pathExists(manifest.handoffReportPath))) {
+      try {
+        const handoffReport = await fs.readFile(manifest.handoffReportPath, 'utf8');
+        const handoffValidation = validateSupportBundleHandoffReport({
+          bundlePath: absoluteBundlePath,
+          handoffReport,
+          manifest,
+          doctorReport: validatedDoctorReport,
+          actionPlan: validatedActionPlan,
+        });
+
+        if (handoffValidation.code && handoffValidation.message) {
+          addInspectionIssue(issues, {
+            code: handoffValidation.code,
+            severity: 'error',
+            message: handoffValidation.message,
+            path: manifest.handoffReportPath,
+            relativePath: toBundleRelativePath(
+              absoluteBundlePath,
+              manifest.handoffReportPath,
+            ) ?? undefined,
+            role: 'handoff-report',
+          });
+        }
+      } catch {
+        addInspectionIssue(issues, {
+          code: 'INVALID_HANDOFF_REPORT',
+          severity: 'error',
+          message: 'Support bundle handoff report could not be read as UTF-8 text.',
+          path: manifest.handoffReportPath,
+          relativePath: toBundleRelativePath(
+            absoluteBundlePath,
+            manifest.handoffReportPath,
+          ) ?? undefined,
+          role: 'handoff-report',
         });
       }
     }
