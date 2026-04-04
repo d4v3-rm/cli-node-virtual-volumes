@@ -120,6 +120,7 @@ const main = async (): Promise<void> => {
                 options.output,
                 {
                   correlationId,
+                  redactSensitiveDetails: runtime.config.redactSensitiveDetails,
                 },
               )
             : null;
@@ -159,6 +160,7 @@ const main = async (): Promise<void> => {
                 options.output,
                 {
                   correlationId,
+                  redactSensitiveDetails: runtime.config.redactSensitiveDetails,
                 },
               )
             : null;
@@ -195,6 +197,7 @@ const main = async (): Promise<void> => {
                 options.output,
                 {
                   correlationId,
+                  redactSensitiveDetails: runtime.config.redactSensitiveDetails,
                 },
               )
             : null;
@@ -240,6 +243,7 @@ const main = async (): Promise<void> => {
                 options.output,
                 {
                   correlationId,
+                  redactSensitiveDetails: runtime.config.redactSensitiveDetails,
                 },
               )
             : null;
@@ -280,6 +284,7 @@ const main = async (): Promise<void> => {
                 options.output,
                 {
                   correlationId,
+                  redactSensitiveDetails: runtime.config.redactSensitiveDetails,
                 },
               )
             : null;
@@ -390,6 +395,7 @@ const main = async (): Promise<void> => {
                 options.output,
                 {
                   correlationId,
+                  redactSensitiveDetails: runtime.config.redactSensitiveDetails,
                 },
               )
             : null;
@@ -472,6 +478,7 @@ const main = async (): Promise<void> => {
                 options.output,
                 {
                   correlationId,
+                  redactSensitiveDetails: runtime.config.redactSensitiveDetails,
                 },
               )
             : null;
@@ -535,6 +542,7 @@ const main = async (): Promise<void> => {
                   options.output,
                   {
                     correlationId,
+                    redactSensitiveDetails: runtime.config.redactSensitiveDetails,
                   },
                 )
               : null;
@@ -561,6 +569,7 @@ const main = async (): Promise<void> => {
                   options.output,
                   {
                     correlationId,
+                    redactSensitiveDetails: runtime.config.redactSensitiveDetails,
                   },
                 )
               : null;
@@ -627,6 +636,7 @@ const main = async (): Promise<void> => {
                 options.output,
                 {
                   correlationId,
+                  redactSensitiveDetails: runtime.config.redactSensitiveDetails,
                 },
               )
             : null;
@@ -689,6 +699,7 @@ const main = async (): Promise<void> => {
               options.output,
               {
                 correlationId,
+                redactSensitiveDetails,
               },
             )
           : null;

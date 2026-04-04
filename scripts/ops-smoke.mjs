@@ -133,6 +133,16 @@ const assertArtifactEnvelope = (artifact, expectedCommand, expectedVersion) => {
     `Artifact correlationId is missing for ${expectedCommand}.`,
   );
   assert(
+    artifact.handling &&
+      typeof artifact.handling === 'object' &&
+      typeof artifact.handling.redacted === 'boolean' &&
+      typeof artifact.handling.sensitivity === 'string' &&
+      typeof artifact.handling.sharingRecommendation === 'string' &&
+      Number.isInteger(artifact.handling.recommendedRetentionDays) &&
+      Array.isArray(artifact.handling.notes),
+    `Artifact handling metadata is invalid for ${expectedCommand}.`,
+  );
+  assert(
     Object.hasOwn(artifact, 'payload'),
     `Artifact payload missing for ${expectedCommand}.`,
   );

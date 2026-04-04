@@ -5,7 +5,11 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { APP_VERSION } from '../src/config/app-metadata.js';
-import { renderCliResult, writeCliJsonArtifact } from '../src/cli/output.js';
+import {
+  buildCliArtifactHandlingProfile,
+  renderCliResult,
+  writeCliJsonArtifact,
+} from '../src/cli/output.js';
 
 const sandboxes: string[] = [];
 
@@ -36,6 +40,13 @@ describe('cli output helpers', () => {
       command: string;
       correlationId: string;
       generatedAt: string;
+      handling: {
+        redacted: boolean;
+        sensitivity: 'sanitized' | 'restricted';
+        sharingRecommendation: 'external-shareable' | 'internal-only';
+        recommendedRetentionDays: number;
+        notes: string[];
+      };
       payload: {
         healthy: boolean;
         checkedVolumes: number;
@@ -47,7 +58,38 @@ describe('cli output helpers', () => {
     expect(artifactContent.cliVersion).toBe(APP_VERSION);
     expect(artifactContent.correlationId).toBe(correlationId);
     expect(Date.parse(artifactContent.generatedAt)).not.toBeNaN();
+    expect(artifactContent.handling).toEqual(buildCliArtifactHandlingProfile(false));
     expect(artifactContent.payload).toEqual(payload);
+  });
+
+  it('marks redacted artifacts as sanitized and externally shareable', async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-cli-output-'));
+    sandboxes.push(sandboxRoot);
+    const outputPath = path.join(sandboxRoot, 'reports', 'doctor-redacted.json');
+
+    const artifactPath = await writeCliJsonArtifact(
+      'doctor',
+      { healthy: true },
+      outputPath,
+      {
+        redactSensitiveDetails: true,
+      },
+    );
+    const artifactContent = JSON.parse(await fs.readFile(artifactPath, 'utf8')) as {
+      handling: {
+        redacted: boolean;
+        sensitivity: 'sanitized' | 'restricted';
+        sharingRecommendation: 'external-shareable' | 'internal-only';
+        recommendedRetentionDays: number;
+      };
+    };
+
+    expect(artifactContent.handling).toMatchObject({
+      redacted: true,
+      sensitivity: 'sanitized',
+      sharingRecommendation: 'external-shareable',
+      recommendedRetentionDays: 30,
+    });
   });
 
   it('appends the correlation id and artifact path to human-readable output', () => {

@@ -19,6 +19,19 @@ const assert = (condition, message) => {
   }
 };
 
+const assertArtifactHandling = (artifact, expectedCommand) => {
+  assert(
+    artifact.handling &&
+      typeof artifact.handling === 'object' &&
+      typeof artifact.handling.redacted === 'boolean' &&
+      typeof artifact.handling.sensitivity === 'string' &&
+      typeof artifact.handling.sharingRecommendation === 'string' &&
+      Number.isInteger(artifact.handling.recommendedRetentionDays) &&
+      Array.isArray(artifact.handling.notes),
+    `Installed CLI ${expectedCommand} artifact should include handling metadata.`,
+  );
+};
+
 const pathExists = async (targetPath) => {
   try {
     await fs.access(targetPath);
@@ -285,6 +298,7 @@ try {
     backupArtifact.command === 'backup',
     'Installed CLI backup artifact should include the command metadata.',
   );
+  assertArtifactHandling(backupArtifact, 'backup');
 
   const restoreDrillRun = runCommand(
     process.execPath,
@@ -315,6 +329,7 @@ try {
     restoreDrillArtifact.command === 'restore-drill',
     'Installed CLI restore-drill artifact should include the command metadata.',
   );
+  assertArtifactHandling(restoreDrillArtifact, 'restore-drill');
   assert(
     restoreDrillArtifact.payload.restore.volumeId === volumeId,
     'Installed CLI restore-drill artifact should reference the smoke-test volume.',
@@ -357,6 +372,7 @@ try {
     compactRecommendedArtifact.command === 'compact-recommended',
     'Installed CLI compact-recommended artifact should include the command metadata.',
   );
+  assertArtifactHandling(compactRecommendedArtifact, 'compact-recommended');
 
   const compactRun = runCommand(
     process.execPath,
@@ -387,6 +403,7 @@ try {
     compactArtifact.command === 'compact',
     'Installed CLI compact artifact should include the command metadata.',
   );
+  assertArtifactHandling(compactArtifact, 'compact');
   assert(
     compactArtifact.payload.volumeId === volumeId,
     'Installed CLI compact artifact should target the smoke-test volume.',
@@ -450,6 +467,7 @@ try {
     repairSafeArtifact.command === 'repair-safe',
     'Installed CLI repair-safe artifact should include the command metadata.',
   );
+  assertArtifactHandling(repairSafeArtifact, 'repair-safe');
   assert(
     repairSafeArtifact.payload.actionsApplied >= 1,
     'Installed CLI repair-safe artifact should report at least one applied action.',
@@ -484,6 +502,7 @@ try {
     doctorArtifact.command === 'doctor',
     'Installed CLI artifact should include the doctor command metadata.',
   );
+  assertArtifactHandling(doctorArtifact, 'doctor');
   assert(
     doctorArtifact.cliVersion === packageJson.version,
     'Installed CLI artifact should use the packaged CLI version.',
@@ -535,6 +554,7 @@ try {
     supportBundleArtifact.command === 'support-bundle',
     'Installed CLI support-bundle artifact should include the command metadata.',
   );
+  assertArtifactHandling(supportBundleArtifact, 'support-bundle');
   assert(
     typeof supportBundleArtifact.correlationId === 'string' &&
       supportBundleArtifact.correlationId.length > 0,
@@ -639,6 +659,10 @@ try {
   assert(
     supportBundleInspectionArtifact.command === 'inspect-support-bundle',
     'Installed CLI support-bundle inspection artifact should include the command metadata.',
+  );
+  assertArtifactHandling(
+    supportBundleInspectionArtifact,
+    'inspect-support-bundle',
   );
   assert(
     typeof supportBundleInspectionArtifact.correlationId === 'string' &&

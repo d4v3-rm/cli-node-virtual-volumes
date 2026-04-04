@@ -289,7 +289,7 @@ virtual-volumes support-bundle ./reports/finance-support vol_finance_01 --backup
 virtual-volumes inspect-support-bundle ./reports/finance-support --require-sharing internal-only --require-integrity-depth deep
 ```
 
-For audit and automation, operational commands also support `--output <path>` to persist a structured JSON artifact with `command`, `cliVersion`, `correlationId`, `generatedAt`, and `payload`, while keeping the normal CLI output on stdout.
+For audit and automation, operational commands also support `--output <path>` to persist a structured JSON artifact with `command`, `cliVersion`, `correlationId`, `generatedAt`, `handling`, and `payload`, while keeping the normal CLI output on stdout.
 
 Use `virtual-volumes support-bundle ... --no-logs` when you want the diagnostic bundle without app or audit log snapshots.
 
