@@ -8,6 +8,7 @@ const SAFE_BATCH_REPAIR_ISSUE_CODES = new Set<StorageDoctorIssue['code']>([
   'MANIFEST_ENTRY_COUNT_MISMATCH',
   'MANIFEST_USAGE_MISMATCH',
   'ORPHAN_BLOB',
+  'PENDING_MUTATION_JOURNAL',
 ]);
 
 const NON_BLOCKING_BATCH_REPAIR_ISSUE_CODES = new Set<StorageDoctorIssue['code']>([

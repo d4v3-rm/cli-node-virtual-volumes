@@ -859,6 +859,7 @@ export class VolumeService {
 
             return this.createDirectoryEntry(record.state, parentDirectory.id, name);
           },
+          'entry.directory.create',
         );
         this.logger.info(
           this.sanitizeObservabilityPayload({ volumeId, parentPath, directoryName: name }),
@@ -936,6 +937,7 @@ export class VolumeService {
 
             return nextSummary;
           },
+          'host.import',
         );
         this.logger.info(
           this.sanitizeObservabilityPayload({
@@ -1133,6 +1135,7 @@ export class VolumeService {
 
             return this.getPathForEntry(record.state, sourceEntry.id);
           },
+          'entry.move',
         );
         this.logger.info(
           this.sanitizeObservabilityPayload({ volumeId, sourcePath, updatedPath }),
@@ -1194,6 +1197,7 @@ export class VolumeService {
 
             return idsToDelete.length;
           },
+          'entry.delete',
         );
         this.logger.info(
           this.sanitizeObservabilityPayload({ volumeId, targetPath: normalizedPath, deletedEntries }),
@@ -1263,68 +1267,72 @@ export class VolumeService {
       async () => {
         const normalizedPath = normalizeVirtualPath(filePath);
         const fileName = assertValidEntryName(getBaseName(normalizedPath));
-        await this.repository.mutateVolume(volumeId, async (record, database) => {
-          const parentDirectory = this.requireDirectoryByPath(
-            record.state,
-            path.posix.dirname(normalizedPath),
-          );
-          const existing = this.findChildByName(record.state, parentDirectory.id, fileName);
-          const blobStore = new BlobStore(
-            this.repository.getVolumeDatabasePath(volumeId),
-            this.logger.child({ scope: 'blob-store', volumeId }),
-            this.config.redactSensitiveDetails,
-          );
+        await this.repository.mutateVolume(
+          volumeId,
+          async (record, database) => {
+            const parentDirectory = this.requireDirectoryByPath(
+              record.state,
+              path.posix.dirname(normalizedPath),
+            );
+            const existing = this.findChildByName(record.state, parentDirectory.id, fileName);
+            const blobStore = new BlobStore(
+              this.repository.getVolumeDatabasePath(volumeId),
+              this.logger.child({ scope: 'blob-store', volumeId }),
+              this.config.redactSensitiveDetails,
+            );
 
-          const descriptor = await blobStore.putBufferInDatabase(
-            database,
-            Buffer.from(content, 'utf8'),
-          );
-          const now = new Date().toISOString();
-          const staleContentRefs: string[] = [];
+            const descriptor = await blobStore.putBufferInDatabase(
+              database,
+              Buffer.from(content, 'utf8'),
+            );
+            const now = new Date().toISOString();
+            const staleContentRefs: string[] = [];
 
-          if (existing?.kind === 'file') {
-            const projectedUsage =
-              record.manifest.logicalUsedBytes - existing.size + descriptor.size;
-            this.ensureWithinQuota(record, projectedUsage);
+            if (existing?.kind === 'file') {
+              const projectedUsage =
+                record.manifest.logicalUsedBytes - existing.size + descriptor.size;
+              this.ensureWithinQuota(record, projectedUsage);
 
-            if (existing.contentRef !== descriptor.contentRef) {
-              staleContentRefs.push(existing.contentRef);
-            }
+              if (existing.contentRef !== descriptor.contentRef) {
+                staleContentRefs.push(existing.contentRef);
+              }
 
-            existing.contentRef = descriptor.contentRef;
-            existing.size = descriptor.size;
-            existing.updatedAt = now;
-            existing.importedFromHostPath = null;
-          } else {
-            if (existing) {
-              throw new VolumeError(
-                'ALREADY_EXISTS',
-                `A directory named "${fileName}" already exists in ${parentDirectory.name}.`,
+              existing.contentRef = descriptor.contentRef;
+              existing.size = descriptor.size;
+              existing.updatedAt = now;
+              existing.importedFromHostPath = null;
+            } else {
+              if (existing) {
+                throw new VolumeError(
+                  'ALREADY_EXISTS',
+                  `A directory named "${fileName}" already exists in ${parentDirectory.name}.`,
+                );
+              }
+
+              this.ensureWithinQuota(
+                record,
+                record.manifest.logicalUsedBytes + descriptor.size,
+              );
+
+              this.createFileEntry(
+                record.state,
+                parentDirectory.id,
+                fileName,
+                descriptor.contentRef,
+                descriptor.size,
+                null,
               );
             }
 
-            this.ensureWithinQuota(
-              record,
-              record.manifest.logicalUsedBytes + descriptor.size,
-            );
-
-            this.createFileEntry(
+            await this.deleteOrphanedBlobsInDatabase(
+              database,
+              blobStore,
               record.state,
-              parentDirectory.id,
-              fileName,
-              descriptor.contentRef,
-              descriptor.size,
-              null,
+              staleContentRefs,
             );
-          }
-
-          await this.deleteOrphanedBlobsInDatabase(
-            database,
-            blobStore,
-            record.state,
-            staleContentRefs,
-          );
-        });
+          },
+          'entry.file.write',
+        );
         this.logger.info(
           this.sanitizeObservabilityPayload({ volumeId, filePath: normalizedPath }),
           'Text file written.',

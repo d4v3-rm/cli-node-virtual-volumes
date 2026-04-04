@@ -52,6 +52,7 @@ import {
   type SqliteVolumeDatabase,
   SUPPORTED_VOLUME_SCHEMA_VERSION,
   VOLUME_DATABASE_EXTENSION,
+  type MutationJournalRow,
   type VolumeEntryRow,
   type VolumeManifestRow,
   getVolumeDatabasePath,
@@ -281,19 +282,113 @@ export class VolumeRepository {
     return record;
   }
 
+  private async readPersistedRevision(
+    database: SqliteVolumeDatabase,
+  ): Promise<number> {
+    const manifestRow = await database.get<{ revision: number }>(
+      `SELECT revision
+         FROM manifest
+         LIMIT 1`,
+    );
+
+    return manifestRow?.revision ?? 0;
+  }
+
+  private async stageMutationJournal(
+    database: SqliteVolumeDatabase,
+    operation: string,
+    expectedRevision: number,
+  ): Promise<number> {
+    const result = await database.run(
+      `INSERT INTO mutation_journal (
+         operation,
+         expected_revision,
+         started_at
+       ) VALUES (?, ?, ?)`,
+      operation,
+      expectedRevision,
+      new Date().toISOString(),
+    );
+
+    return result.lastID ?? 0;
+  }
+
+  private async clearMutationJournal(
+    database: SqliteVolumeDatabase,
+    journalId: number,
+  ): Promise<void> {
+    await database.run('DELETE FROM mutation_journal WHERE id = ?', journalId);
+  }
+
+  private async listMutationJournals(
+    database: SqliteVolumeDatabase,
+    ignoredJournalIds: ReadonlySet<number> = new Set(),
+  ): Promise<MutationJournalRow[]> {
+    const rows = await database.all<MutationJournalRow[]>(
+      `SELECT
+         id,
+         operation,
+         expected_revision,
+         started_at
+       FROM mutation_journal
+       ORDER BY started_at ASC,
+                id ASC`,
+    );
+
+    return rows.filter((row) => !ignoredJournalIds.has(row.id));
+  }
+
+  private async withJournaledMutation<T>(
+    databasePath: string,
+    operation: string,
+    execute: (database: SqliteVolumeDatabase, journalId: number) => Promise<T>,
+  ): Promise<T> {
+    return withVolumeDatabase(databasePath, async (database) => {
+      const expectedRevision = await this.readPersistedRevision(database);
+      const journalId = await this.stageMutationJournal(
+        database,
+        operation,
+        expectedRevision,
+      );
+      let committed = false;
+
+      try {
+        await database.exec('BEGIN IMMEDIATE TRANSACTION');
+
+        try {
+          const result = await execute(database, journalId);
+          await database.exec('COMMIT');
+          committed = true;
+          return result;
+        } catch (error) {
+          await database.exec('ROLLBACK').catch(() => undefined);
+          throw error;
+        }
+      } finally {
+        await this.clearMutationJournal(database, journalId).catch((cleanupError) => {
+          this.logger.warn(
+            this.sanitizeObservabilityPayload({
+              databasePath,
+              operation,
+              journalId,
+              committed,
+              error:
+                cleanupError instanceof Error
+                  ? cleanupError.message
+                  : String(cleanupError),
+            }),
+            'Failed to clear the pending mutation journal after a transactional volume operation.',
+          );
+        });
+      }
+    });
+  }
+
   public async saveVolume(record: VolumeRecord): Promise<void> {
     const databasePath = this.getVolumeDatabasePath(record.manifest.id);
 
-    await withVolumeDatabase(databasePath, async (database) => {
-      await database.exec('BEGIN IMMEDIATE TRANSACTION');
-
-      try {
-        await this.persistVolumeToDatabase(database, record);
-        await database.exec('COMMIT');
-      } catch (error) {
-        await database.exec('ROLLBACK').catch(() => undefined);
-        throw error;
-      }
+    await this.withJournaledMutation(databasePath, 'volume.persist', async (database) => {
+      await this.persistVolumeToDatabase(database, record);
     });
 
     this.volumeCache.set(record.manifest.id, record);
@@ -315,6 +410,7 @@ export class VolumeRepository {
       record: VolumeRecord,
       database: SqliteVolumeDatabase,
     ) => Promise<T> | T,
+    operation = 'volume.mutation',
   ): Promise<T> {
     const databasePath = this.getVolumeDatabasePath(volumeId);
     if (!(await pathExists(databasePath))) {
@@ -323,14 +419,10 @@ export class VolumeRepository {
       });
     }
 
-    return withVolumeDatabase(databasePath, async (database) => {
-      await database.exec('BEGIN IMMEDIATE TRANSACTION');
-
-      try {
+    return this.withJournaledMutation(databasePath, operation, async (database) => {
         const record = await this.loadVolumeFromDatabase(database, volumeId);
         const result = await mutate(record, database);
         await this.persistVolumeToDatabase(database, record);
-        await database.exec('COMMIT');
 
         this.volumeCache.set(record.manifest.id, record);
         this.logger.debug(
@@ -344,10 +436,6 @@ export class VolumeRepository {
         );
 
         return result;
-      } catch (error) {
-        await database.exec('ROLLBACK').catch(() => undefined);
-        throw error;
-      }
     });
   }
 
@@ -1396,22 +1484,14 @@ export class VolumeRepository {
       this.config.redactSensitiveDetails,
     );
 
-    await withVolumeDatabase(databasePath, async (database) => {
-      await database.exec('BEGIN IMMEDIATE TRANSACTION');
-
-      try {
-        await this.migrateLegacyBlobsInDatabase(
-          database,
-          legacyDirectoryPath,
-          blobStore,
-          state,
-        );
-        await this.persistVolumeToDatabase(database, record);
-        await database.exec('COMMIT');
-      } catch (error) {
-        await database.exec('ROLLBACK').catch(() => undefined);
-        throw error;
-      }
+    await this.withJournaledMutation(databasePath, 'legacy.migrate', async (database) => {
+      await this.migrateLegacyBlobsInDatabase(
+        database,
+        legacyDirectoryPath,
+        blobStore,
+        state,
+      );
+      await this.persistVolumeToDatabase(database, record);
     });
 
     this.volumeCache.set(record.manifest.id, record);
@@ -1494,6 +1574,10 @@ export class VolumeRepository {
         const actualBlobSizes = await this.listActualBlobSizes(database);
         const maintenance = await this.collectStorageMaintenanceStats(database, databasePath);
         const sqliteIssues = await this.collectSqliteDoctorIssues(database, volumeId);
+        const mutationJournalIssues = await this.collectMutationJournalDoctorIssues(
+          database,
+          record,
+        );
         const blobPayloadIssues = options.verifyBlobPayloads
           ? await this.collectBlobPayloadDoctorIssues(
               database,
@@ -1502,6 +1586,7 @@ export class VolumeRepository {
           : [];
         const issues = [
           ...sqliteIssues,
+          ...mutationJournalIssues,
           ...this.collectDoctorIssues(
             record,
             persistedBlobReferenceCounts,
@@ -1536,12 +1621,17 @@ export class VolumeRepository {
   ): Promise<StorageRepairVolumeReport> {
     const databasePath = this.getVolumeDatabasePath(volumeId);
 
-    return withVolumeDatabase(databasePath, async (database) => {
-      await database.exec('BEGIN IMMEDIATE TRANSACTION');
-
-      try {
+    return this.withJournaledMutation(
+      databasePath,
+      'storage.repair',
+      async (database, repairJournalId) => {
         const record = await this.loadVolumeFromDatabase(database, volumeId);
         const actions: StorageRepairAction[] = [];
+        const ignoredJournalIds = new Set([repairJournalId]);
+        const pendingMutationJournals = await this.listMutationJournals(
+          database,
+          ignoredJournalIds,
+        );
         let persistedBlobReferenceCounts = await this.listPersistedBlobReferenceCounts(
           database,
         );
@@ -1551,6 +1641,11 @@ export class VolumeRepository {
         let actualBlobChunkCounts = await this.listActualBlobChunkCounts(database);
         let actualBlobSizes = await this.listActualBlobSizes(database);
         const issuesBefore = [
+          ...(await this.collectMutationJournalDoctorIssues(
+            database,
+            record,
+            ignoredJournalIds,
+          )),
           ...this.collectDoctorIssues(
             record,
             persistedBlobReferenceCounts,
@@ -1569,6 +1664,16 @@ export class VolumeRepository {
               : []
           ),
         ];
+
+        if (pendingMutationJournals.length > 0) {
+          for (const mutationJournal of pendingMutationJournals) {
+            await this.clearMutationJournal(database, mutationJournal.id);
+          }
+          actions.push({
+            code: 'CLEAR_MUTATION_JOURNAL',
+            message: `Cleared ${pendingMutationJournals.length} pending mutation journal entr${pendingMutationJournals.length === 1 ? 'y' : 'ies'} after an explicit repair verification run.`,
+          });
+        }
 
         for (const issue of issuesBefore) {
           if (issue.code !== 'ORPHAN_BLOB' || !issue.contentRef) {
@@ -1699,6 +1804,11 @@ export class VolumeRepository {
         actualBlobChunkCounts = await this.listActualBlobChunkCounts(database);
         actualBlobSizes = await this.listActualBlobSizes(database);
         const remainingIssues = [
+          ...(await this.collectMutationJournalDoctorIssues(
+            database,
+            record,
+            ignoredJournalIds,
+          )),
           ...this.collectDoctorIssues(
             record,
             persistedBlobReferenceCounts,
@@ -1718,8 +1828,6 @@ export class VolumeRepository {
           ),
         ];
 
-        await database.exec('COMMIT');
-
         return {
           volumeId: record.manifest.id,
           volumeName: record.manifest.name,
@@ -1731,11 +1839,8 @@ export class VolumeRepository {
           actions,
           remainingIssues,
         };
-      } catch (error) {
-        await database.exec('ROLLBACK').catch(() => undefined);
-        throw error;
-      }
-    });
+      },
+    );
   }
 
   private async loadVolumeFromDatabase(
@@ -2087,6 +2192,31 @@ export class VolumeRepository {
       .filter((entry) => entry.isFile() && entry.name.endsWith(VOLUME_DATABASE_EXTENSION))
       .map((entry) => entry.name.slice(0, -VOLUME_DATABASE_EXTENSION.length))
       .sort((left, right) => left.localeCompare(right));
+  }
+
+  private async collectMutationJournalDoctorIssues(
+    database: SqliteVolumeDatabase,
+    record: VolumeRecord,
+    ignoredJournalIds: ReadonlySet<number> = new Set(),
+  ): Promise<StorageDoctorIssue[]> {
+    const mutationJournals = await this.listMutationJournals(database, ignoredJournalIds);
+    if (mutationJournals.length === 0) {
+      return [];
+    }
+
+    return mutationJournals.map((mutationJournal) => {
+      const commitLikelyApplied =
+        record.manifest.revision > mutationJournal.expected_revision;
+      const recoveryHint = commitLikelyApplied
+        ? 'The manifest revision has already advanced, so the data commit likely succeeded before journal cleanup was interrupted.'
+        : 'The manifest revision has not advanced yet, so the mutation may have been interrupted before commit.';
+
+      return {
+        code: 'PENDING_MUTATION_JOURNAL',
+        severity: 'warn',
+        message: `Volume ${record.manifest.id} still has a pending mutation journal for "${mutationJournal.operation}" started at ${mutationJournal.started_at} (expected revision ${mutationJournal.expected_revision}, current revision ${record.manifest.revision}). ${recoveryHint}`,
+      };
+    });
   }
 
   private collectDoctorIssues(

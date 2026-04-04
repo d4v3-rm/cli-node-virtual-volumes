@@ -293,6 +293,7 @@ export interface StorageDoctorIssue {
     | 'MISSING_CONTENT_REF'
     | 'MISSING_PARENT'
     | 'ORPHAN_BLOB'
+    | 'PENDING_MUTATION_JOURNAL'
     | 'PARENT_NOT_DIRECTORY'
     | 'SQLITE_FOREIGN_KEY_VIOLATION'
     | 'SQLITE_INTEGRITY_CHECK_FAILED';
@@ -382,6 +383,7 @@ export interface StorageRepairOptions {
 
 export interface StorageRepairAction {
   code:
+    | 'CLEAR_MUTATION_JOURNAL'
     | 'DELETE_ORPHAN_BLOB'
     | 'REBUILD_MANIFEST'
     | 'SYNC_BLOB_LAYOUT_METADATA'

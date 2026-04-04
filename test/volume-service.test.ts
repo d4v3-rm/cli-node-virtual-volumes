@@ -63,6 +63,50 @@ const countPersistedBlobs = async (
     return row?.count ?? 0;
   });
 
+const getPersistedVolumeRevision = async (
+  dataDir: string,
+  volumeId: string,
+): Promise<number> =>
+  withVolumeDatabase(getVolumeDatabasePath(dataDir, volumeId), async (database) => {
+    const row = await database.get<{ revision: number }>(
+      'SELECT revision FROM manifest LIMIT 1',
+    );
+
+    return row?.revision ?? 0;
+  });
+
+const hasPendingMutationJournal = async (
+  dataDir: string,
+  volumeId: string,
+): Promise<boolean> =>
+  withVolumeDatabase(getVolumeDatabasePath(dataDir, volumeId), async (database) => {
+    const row = await database.get<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM mutation_journal',
+    );
+
+    return (row?.count ?? 0) > 0;
+  });
+
+const seedPendingMutationJournal = async (
+  dataDir: string,
+  volumeId: string,
+  operation: string,
+  expectedRevision: number,
+): Promise<void> => {
+  await withVolumeDatabase(getVolumeDatabasePath(dataDir, volumeId), async (database) => {
+    await database.run(
+      `INSERT INTO mutation_journal (
+         operation,
+         expected_revision,
+         started_at
+       ) VALUES (?, ?, ?)`,
+      operation,
+      expectedRevision,
+      '2026-04-16T10:00:00.000Z',
+    );
+  });
+};
+
 const getPersistedBlobChunkCount = async (
   dataDir: string,
   volumeId: string,
@@ -2103,6 +2147,58 @@ describe('VolumeService', () => {
         (issue) => issue.code === 'ORPHAN_BLOB' && issue.contentRef === orphanBlob.contentRef,
       ),
     ).toBe(true);
+  });
+
+  it('reports pending mutation journals and clears them during repair', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({
+      name: 'Mutation Journal Doctor',
+    });
+    const currentRevision = await getPersistedVolumeRevision(
+      runtime.config.dataDir,
+      volume.id,
+    );
+
+    await seedPendingMutationJournal(
+      runtime.config.dataDir,
+      volume.id,
+      'entry.file.write',
+      currentRevision,
+    );
+
+    const doctorBefore = await runtime.volumeService.runDoctor(volume.id);
+    const journalIssue = doctorBefore.volumes[0]?.issues.find(
+      (issue) => issue.code === 'PENDING_MUTATION_JOURNAL',
+    );
+
+    expect(doctorBefore.healthy).toBe(false);
+    expect(journalIssue?.severity).toBe('warn');
+    expect(journalIssue?.message).toContain('entry.file.write');
+    expect(journalIssue?.message).toContain(`current revision ${currentRevision}`);
+    await expect(
+      hasPendingMutationJournal(runtime.config.dataDir, volume.id),
+    ).resolves.toBe(true);
+
+    const repairReport = await runtime.volumeService.runRepair(volume.id);
+    const repairedVolume = repairReport.volumes[0];
+
+    expect(
+      repairedVolume?.actions.some(
+        (action) => action.code === 'CLEAR_MUTATION_JOURNAL',
+      ),
+    ).toBe(true);
+    expect(repairedVolume?.issueCountAfter).toBe(0);
+    await expect(
+      hasPendingMutationJournal(runtime.config.dataDir, volume.id),
+    ).resolves.toBe(false);
+
+    const doctorAfter = await runtime.volumeService.runDoctor(volume.id);
+    expect(doctorAfter.healthy).toBe(true);
+    expect(
+      doctorAfter.volumes[0]?.issues.some(
+        (issue) => issue.code === 'PENDING_MUTATION_JOURNAL',
+      ),
+    ).toBe(false);
   });
 
   it('reports and repairs blob reference-count mismatches safely', async () => {

@@ -8,7 +8,7 @@ import { VolumeError } from '../domain/errors.js';
 import { ensureDirectory } from '../utils/fs.js';
 
 export const VOLUME_DATABASE_EXTENSION = '.sqlite';
-export const SUPPORTED_VOLUME_SCHEMA_VERSION = 5;
+export const SUPPORTED_VOLUME_SCHEMA_VERSION = 6;
 
 export type SqliteVolumeDatabase = Database<sqlite3.Database, sqlite3.Statement>;
 
@@ -43,6 +43,13 @@ export interface BlobRow {
   chunk_count: number;
   created_at: string;
   content: Buffer | null;
+}
+
+export interface MutationJournalRow {
+  id: number;
+  operation: string;
+  expected_revision: number;
+  started_at: string;
 }
 
 const volumeSchema = `
@@ -155,6 +162,13 @@ const volumeSchema = `
        AND NEW.content_ref IS NOT NULL
        AND content_ref = NEW.content_ref;
   END;
+
+  CREATE TABLE IF NOT EXISTS mutation_journal (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    operation TEXT NOT NULL,
+    expected_revision INTEGER NOT NULL,
+    started_at TEXT NOT NULL
+  );
 `;
 
 const metadataSchema = `
@@ -330,6 +344,19 @@ const migrateBlobReferenceCountTriggerSchema = async (
 ): Promise<void> => {
   await createBlobReferenceCountTriggers(database);
   await migrateBlobReferenceCountSchema(database);
+};
+
+const migrateMutationJournalSchema = async (
+  database: SqliteVolumeDatabase,
+): Promise<void> => {
+  await database.exec(`
+    CREATE TABLE IF NOT EXISTS mutation_journal (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      operation TEXT NOT NULL,
+      expected_revision INTEGER NOT NULL,
+      started_at TEXT NOT NULL
+    )
+  `);
 };
 
 const migrateManifestRevisionSchema = async (
@@ -592,6 +619,11 @@ const applySchemaMigrations = async (
     if (currentVersion < 5) {
       await migrateBlobReferenceCountTriggerSchema(database);
       await recordSchemaMigration(database, 5, 'blob-reference-count-triggers');
+    }
+
+    if (currentVersion < 6) {
+      await migrateMutationJournalSchema(database);
+      await recordSchemaMigration(database, 6, 'mutation-journal');
     }
 
     await database.run(
