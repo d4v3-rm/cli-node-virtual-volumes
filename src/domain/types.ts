@@ -287,6 +287,7 @@ export interface StorageDoctorIssue {
     | 'BROKEN_ROOT'
     | 'COMPACTION_RECOMMENDED'
     | 'DUPLICATE_CHILD_NAME'
+    | 'ENTRY_SIZE_MISMATCH'
     | 'MANIFEST_ENTRY_COUNT_MISMATCH'
     | 'MANIFEST_USAGE_MISMATCH'
     | 'MISSING_BLOB'
@@ -386,6 +387,7 @@ export interface StorageRepairAction {
     | 'CLEAR_MUTATION_JOURNAL'
     | 'DELETE_ORPHAN_BLOB'
     | 'REBUILD_MANIFEST'
+    | 'SYNC_ENTRY_FILE_SIZE'
     | 'SYNC_BLOB_LAYOUT_METADATA'
     | 'SYNC_BLOB_REFERENCE_COUNTS';
   message: string;

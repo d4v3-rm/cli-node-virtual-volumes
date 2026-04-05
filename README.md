@@ -345,7 +345,7 @@ Each standard backup produces:
 - `Integrity depth: metadata` for the fast default pass, or `Integrity depth: deep` when `--verify-blobs` is enabled
 
 Use `virtual-volumes doctor <volumeId> --verify-blobs` when you need a slower payload scrub that re-hashes referenced blobs and catches content drift even when metadata still looks consistent.
-Use `virtual-volumes doctor --fix` when you want the CLI to auto-repair safe metadata drifts like orphan blobs, manifest counters, blob reference counts, and blob layout metadata that can be recomputed from the current SQLite payload.
+Use `virtual-volumes doctor --fix` when you want the CLI to auto-repair safe metadata drifts like orphan blobs, manifest counters, file entry sizes, blob reference counts, and blob layout metadata that can be recomputed from the current SQLite payload.
 Use `virtual-volumes repair-safe` when you want to turn that same safe-repair logic into a fleet workflow that:
 
 - scans all managed volumes with the same doctor depth you requested
