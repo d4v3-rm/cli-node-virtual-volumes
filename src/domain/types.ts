@@ -297,6 +297,7 @@ export interface StorageDoctorIssue {
     | 'PENDING_MUTATION_JOURNAL'
     | 'PARENT_NOT_DIRECTORY'
     | 'SQLITE_FOREIGN_KEY_VIOLATION'
+    | 'TEMPORARY_BLOB_REFERENCE'
     | 'SQLITE_INTEGRITY_CHECK_FAILED';
   severity: 'error' | 'warn';
   message: string;
@@ -386,6 +387,7 @@ export interface StorageRepairAction {
   code:
     | 'CLEAR_MUTATION_JOURNAL'
     | 'DELETE_ORPHAN_BLOB'
+    | 'PROMOTE_TEMPORARY_BLOB_REFERENCE'
     | 'REBUILD_MANIFEST'
     | 'SYNC_ENTRY_FILE_SIZE'
     | 'SYNC_BLOB_LAYOUT_METADATA'
