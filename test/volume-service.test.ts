@@ -2672,6 +2672,73 @@ describe('VolumeService', () => {
     });
   });
 
+  it('maintains blob reference counts through normal incremental service mutations', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({
+      name: 'Incremental Refcount Mutations',
+    });
+    const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/a.txt', 'shared payload');
+    await runtime.volumeService.writeTextFile(volume.id, '/b.txt', 'shared payload');
+
+    let initialRefs: { aRef: string; bRef: string } | null = null;
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      const entryRows = await database.all<{ name: string; content_ref: string }[]>(
+        `SELECT name, content_ref
+           FROM entries
+          WHERE name IN ('a.txt', 'b.txt')
+          ORDER BY name`,
+      );
+      const blobCounts = await database.all<{ content_ref: string; reference_count: number }[]>(
+        `SELECT content_ref, reference_count
+           FROM blobs
+          ORDER BY content_ref`,
+      );
+      const aRef = entryRows.find((row) => row.name === 'a.txt')?.content_ref ?? '';
+      const bRef = entryRows.find((row) => row.name === 'b.txt')?.content_ref ?? '';
+      initialRefs = { aRef, bRef };
+
+      expect(aRef).toBe(bRef);
+      expect(
+        Object.fromEntries(blobCounts.map((row) => [row.content_ref, row.reference_count])),
+      ).toEqual({
+        [aRef]: 2,
+      });
+    });
+
+    await runtime.volumeService.writeTextFile(volume.id, '/a.txt', 'alpha only');
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      const entryRows = await database.all<{ name: string; content_ref: string }[]>(
+        `SELECT name, content_ref
+           FROM entries
+          WHERE name IN ('a.txt', 'b.txt')
+          ORDER BY name`,
+      );
+      const blobCounts = await database.all<{ content_ref: string; reference_count: number }[]>(
+        `SELECT content_ref, reference_count
+           FROM blobs
+          ORDER BY content_ref`,
+      );
+      const aRef = entryRows.find((row) => row.name === 'a.txt')?.content_ref ?? '';
+      const bRef = entryRows.find((row) => row.name === 'b.txt')?.content_ref ?? '';
+
+      expect(aRef).not.toBe(bRef);
+      expect(
+        Object.fromEntries(blobCounts.map((row) => [row.content_ref, row.reference_count])),
+      ).toEqual({
+        [aRef]: 1,
+        [bRef]: 1,
+      });
+      expect(bRef).toBe(initialRefs?.bRef ?? '');
+    });
+
+    const doctorReport = await runtime.volumeService.runDoctor(volume.id);
+    expect(doctorReport.healthy).toBe(true);
+  });
+
   it('repairs safe blob chunk-count drift from the SQLite payload layout', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Blob Chunk Drift' });

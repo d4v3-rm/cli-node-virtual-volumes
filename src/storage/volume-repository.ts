@@ -2794,8 +2794,6 @@ export class VolumeRepository {
       : 'DELETE FROM entries';
     await database.run(staleEntryQuery, ...persistedEntryIds);
 
-    await this.syncBlobReferenceCounts(database);
-
     record.manifest.revision = nextRevision;
   }
 
