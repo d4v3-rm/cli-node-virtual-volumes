@@ -121,6 +121,23 @@ const getPersistedBlobChunkCount = async (
     return row?.count ?? 0;
   });
 
+const getEntryRowId = async (
+  dataDir: string,
+  volumeId: string,
+  entryName: string,
+): Promise<number | null> =>
+  withVolumeDatabase(getVolumeDatabasePath(dataDir, volumeId), async (database) => {
+    const row = await database.get<{ rowid: number }>(
+      `SELECT rowid
+         FROM entries
+        WHERE name = ?
+        LIMIT 1`,
+      entryName,
+    );
+
+    return row?.rowid ?? null;
+  });
+
 const getPersistedDatabaseArtifactBytes = async (
   dataDir: string,
   volumeId: string,
@@ -190,6 +207,33 @@ describe('VolumeService', () => {
     expect(preview.content).toContain('updated from node api');
     expect(snapshot.entries).toHaveLength(1);
     expect(snapshot.entries[0]?.name).toBe('todo.txt');
+  });
+
+  it('persists untouched entries incrementally without recreating their SQLite rows', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Incremental Persist' });
+
+    await runtime.volumeService.writeTextFile(volume.id, '/alpha.txt', 'alpha');
+    await runtime.volumeService.writeTextFile(volume.id, '/beta.txt', 'beta');
+
+    const betaRowIdBefore = await getEntryRowId(
+      runtime.config.dataDir,
+      volume.id,
+      'beta.txt',
+    );
+
+    await runtime.volumeService.writeTextFile(volume.id, '/alpha.txt', 'alpha updated');
+
+    const betaRowIdAfter = await getEntryRowId(
+      runtime.config.dataDir,
+      volume.id,
+      'beta.txt',
+    );
+    const preview = await runtime.volumeService.previewFile(volume.id, '/beta.txt');
+
+    expect(betaRowIdBefore).not.toBeNull();
+    expect(betaRowIdAfter).toBe(betaRowIdBefore);
+    expect(preview.content).toContain('beta');
   });
 
   it('rolls writeTextFile back when file entry creation fails after blob storage', async () => {

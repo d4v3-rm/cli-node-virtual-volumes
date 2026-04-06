@@ -73,6 +73,7 @@ This project provides:
 - Structured file logging.
 - `doctor` with SQLite maintenance signals and safe `repair` flows.
 - Consistent `backup`, `inspect-backup`, and `restore` commands.
+- Incremental SQLite entry persistence instead of full table rewrites during normal mutations.
 - TypeScript build with `tsup`.
 - Test suite with `vitest`.
 - Cross-platform CI and release packaging.
