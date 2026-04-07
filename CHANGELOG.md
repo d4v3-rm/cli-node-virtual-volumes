@@ -136,8 +136,8 @@
 
 ## 0.1.0 - 2026-04-13
 
-- bootstrap del workspace Node.js + TypeScript + tooling iniziale
-- implementazione del virtual filesystem custom persistente e Node-only
-- terminal UI interattiva per gestire volumi, cartelle, import, move e preview
-- configurazione via `.env`, logging su filesystem e packaging npm globale
-- test automatici sul core e smoke test della TUI
+- bootstrap of the Node.js + TypeScript workspace and initial tooling
+- implementation of the persistent, Node-only custom virtual filesystem
+- interactive terminal UI for managing volumes, folders, import, move, and preview flows
+- `.env`-based configuration, filesystem logging, and global npm packaging
+- automated core tests and TUI smoke coverage

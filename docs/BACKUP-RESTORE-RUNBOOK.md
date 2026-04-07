@@ -1,24 +1,24 @@
 # Backup And Restore Runbook
 
-Questo runbook descrive il flusso operativo consigliato per backup, verifica e restore dei volumi virtuali.
+This runbook describes the recommended operational flow for backing up, validating, and restoring virtual volumes.
 
-## Obiettivo
+## Goal
 
-Ogni backup affidabile deve essere:
+Every reliable backup should be:
 
-- consistente a livello SQLite
-- verificabile prima del restore
-- compatibile con il runtime corrente
-- ripristinabile con rollback sicuro in caso di overwrite failure
+- SQLite-consistent
+- verifiable before restore
+- compatible with the current runtime
+- restorable with safe rollback if an overwrite fails
 
-## Artefatti prodotti
+## Produced Artifacts
 
-Un backup standard genera due file:
+A standard backup produces two files:
 
 - `<name>.sqlite`
 - `<name>.sqlite.manifest.json`
 
-Il manifest sidecar contiene:
+The sidecar manifest contains:
 
 - `formatVersion`
 - `volumeId`
@@ -30,195 +30,195 @@ Il manifest sidecar contiene:
 - `checksumSha256`
 - `createdAt`
 
-Il restore resta compatibile con backup legacy che hanno solo il file `.sqlite`, ma in quel caso la validazione del manifest viene saltata.
+Restore remains compatible with legacy backups that only contain the `.sqlite` file, but in that case manifest validation is skipped.
 
-## Creazione backup
+## Creating A Backup
 
-Comando:
+Command:
 
 ```bash
 virtual-volumes backup <volumeId> <destinationPath>
 ```
 
-Esempio:
+Example:
 
 ```bash
 virtual-volumes backup vol_finance_01 ./backups/finance.sqlite
 ```
 
-Per sovrascrivere un artefatto gia' esistente:
+To overwrite an existing artifact:
 
 ```bash
 virtual-volumes backup vol_finance_01 ./backups/finance.sqlite --force
 ```
 
-Il comando fallisce se il path di destinazione coincide con il database live del volume.
+The command fails if the destination path matches the live managed database for the volume.
 
-## Verifica pre-restore
+## Pre-Restore Validation
 
-Comando consigliato prima di ogni restore:
+Recommended command before any restore:
 
 ```bash
 virtual-volumes inspect-backup <backupPath>
 ```
 
-Esempio:
+Example:
 
 ```bash
 virtual-volumes inspect-backup ./backups/finance.sqlite
 ```
 
-La preflight valida:
+The preflight validates:
 
-- leggibilita' del backup SQLite
-- checksum SHA-256 del file `.sqlite`
-- coerenza tra manifest sidecar e artefatto reale
-- compatibilita' del `createdWithVersion` con il runtime corrente
-- compatibilita' della `schemaVersion` con il runtime corrente
+- SQLite backup readability
+- SHA-256 checksum of the `.sqlite` file
+- consistency between the sidecar manifest and the actual artifact
+- `createdWithVersion` compatibility with the current runtime
+- `schemaVersion` compatibility with the current runtime
 
-Se uno di questi controlli fallisce, il restore non va eseguito.
+If any of these checks fail, restore should not be executed.
 
-Per una prova sicura e ripetibile del recovery path senza toccare il data dir live, usa anche:
+For a safe and repeatable recovery-path test without touching the live data directory, also use:
 
 ```bash
 virtual-volumes restore-drill <backupPath>
 ```
 
-Il drill:
+The drill:
 
-1. esegue `inspect-backup`
-2. ripristina il backup in un data dir temporaneo isolato
-3. esegue `doctor` sul volume ripristinato
-4. rimuove il sandbox al termine, a meno che non venga richiesto `--keep-sandbox`
+1. runs `inspect-backup`
+2. restores the backup into an isolated temporary data directory
+3. runs `doctor` on the restored volume
+4. removes the sandbox afterward unless `--keep-sandbox` is requested
 
-## Restore standard
+## Standard Restore
 
-Usa il restore standard quando il volume target non esiste piu' nel data directory:
+Use the standard restore when the target volume no longer exists in the data directory:
 
 ```bash
 virtual-volumes restore <backupPath>
 ```
 
-Esempio:
+Example:
 
 ```bash
 virtual-volumes restore ./backups/finance.sqlite
 ```
 
-## Restore con overwrite
+## Overwrite Restore
 
-Usa `--force` solo quando vuoi sostituire un volume gia' esistente con lo stato del backup:
+Use `--force` only when you want to replace an existing volume with the state from the backup:
 
 ```bash
 virtual-volumes restore <backupPath> --force
 ```
 
-Il runtime esegue:
+The runtime performs:
 
-- snapshot consistente del volume target esistente
-- swap del database ripristinato
-- rollback automatico se lo swap o la validazione finale falliscono
+- a consistent snapshot of the existing target volume
+- a swap to the restored database
+- automatic rollback if the swap or final validation fails
 
-## Failure modes gestiti esplicitamente
+## Explicitly Handled Failure Modes
 
 - `manifest mismatch`
-  Il sidecar non corrisponde piu' al file `.sqlite` e il restore viene bloccato.
+  The sidecar no longer matches the `.sqlite` file, and restore is blocked.
 - `newer CLI major version`
-  Il backup e' stato creato da una linea runtime piu' nuova della corrente e viene rifiutato.
+  The backup was created by a newer runtime major line and is rejected.
 - `newer schema version`
-  Il backup richiede una schema version non supportata dal runtime corrente e viene rifiutato.
+  The backup requires a schema version not supported by the current runtime and is rejected.
 - `volume already exists`
-  Il restore standard non sovrascrive mai un volume esistente senza `--force`.
+  Standard restore never overwrites an existing volume without `--force`.
 
-## Procedura operativa consigliata
+## Recommended Operational Procedure
 
-Per un backup di routine:
+For a routine backup:
 
-1. Esegui `virtual-volumes backup`.
-2. Esegui subito `virtual-volumes inspect-backup`.
-3. Esegui `virtual-volumes restore-drill` quando vuoi verificare il recovery path senza toccare i dati live.
-4. Se serve audit operativo, aggiungi `--output <path>` per salvare l'artifact JSON del comando.
-5. Conserva insieme `.sqlite` e `.manifest.json`.
+1. Run `virtual-volumes backup`.
+2. Immediately run `virtual-volumes inspect-backup`.
+3. Run `virtual-volumes restore-drill` whenever you want to validate the recovery path without touching live data.
+4. If you need an operational audit trail, add `--output <path>` to save the command's JSON artifact.
+5. Keep `.sqlite` and `.manifest.json` together.
 
-Per manutenzione ordinaria del database SQLite di un volume gia' in esercizio:
+For routine maintenance of a volume's SQLite database:
 
-1. Esegui `virtual-volumes doctor <volumeId>` per verificare che il volume sia integro.
-   Il report include anche metriche SQLite, i top candidate di compattazione ordinati per reclaimable bytes, la postura fleet-wide del `repair-safe`, mismatch sui `blob reference count`, e un warning `COMPACTION_RECOMMENDED` quando il volume ha abbastanza free pages da giustificare la manutenzione.
-2. Esegui `virtual-volumes compact <volumeId>` per forzare checkpoint WAL, `VACUUM` e `PRAGMA optimize`.
-3. Se vuoi tracciare l'intervento, aggiungi `--output <path>` e conserva l'artifact del compattamento.
-4. Riesegui `virtual-volumes doctor <volumeId>` se vuoi validare il volume anche dopo la compattazione.
-   Se emergono mismatch sui `blob reference count`, `virtual-volumes doctor --fix` li riallinea senza toccare il contenuto dei file.
+1. Run `virtual-volumes doctor <volumeId>` to verify that the volume is healthy.
+   The report also includes SQLite metrics, top compaction candidates ordered by reclaimable bytes, fleet-wide `repair-safe` posture, blob reference-count mismatches, and a `COMPACTION_RECOMMENDED` warning when the volume has enough free pages to justify maintenance.
+2. Run `virtual-volumes compact <volumeId>` to force WAL checkpointing, `VACUUM`, and `PRAGMA optimize`.
+3. If you want to track the maintenance action, add `--output <path>` and keep the compaction artifact.
+4. Run `virtual-volumes doctor <volumeId>` again if you want to validate the volume after compaction.
+   If blob reference-count mismatches are detected, `virtual-volumes doctor --fix` realigns them without touching file contents.
 
-Per manutenzione batch di tutti i volumi gestiti:
+For batch maintenance of all managed volumes:
 
-1. Esegui `virtual-volumes compact-recommended --dry-run` per vedere quali volumi verrebbero compattati.
-   Il dry-run espone anche il dettaglio dei volumi `planned`, `blocked`, `filtered` e `deferred`, con il motivo operativo di ciascuno.
-   Il report quantifica anche i free bytes reclaimable per bucket, cosi' puoi stimare subito l'impatto atteso del batch.
-2. Se vuoi limitare il blast radius, aggiungi `--limit <n>` per processare solo i primi N volumi ordinati per free bytes reclaimable.
-3. Se vuoi mettere un tetto al batch per dimensione, aggiungi `--max-reclaimable-bytes <bytes>` per non superare il budget cumulativo di reclaimable bytes pianificati.
-4. Se vuoi restringere ulteriormente il batch, aggiungi `--min-free-bytes <bytes>` e/o `--min-free-ratio <ratio>` per includere solo i volumi che superano soglie minime esplicite.
-5. Per default il batch blocca i volumi che hanno anche issue diverse da `COMPACTION_RECOMMENDED`; usa `--include-unsafe` solo quando vuoi forzare esplicitamente la compattazione su volumi ancora diagnostically unhealthy.
-6. Esegui `virtual-volumes compact-recommended` per compattare solo i volumi oggi marcati con `COMPACTION_RECOMMENDED`.
-   Se vuoi usare il batch in automazione, aggiungi `--strict-plan` per fallire quando restano volumi `blocked`, `filtered`, `deferred` o `failed`.
-7. Se vuoi audit strutturato, aggiungi `--output <path>` anche al batch.
-8. Riesegui `virtual-volumes doctor` se vuoi confermare che la frammentazione raccomandata sia stata assorbita.
+1. Run `virtual-volumes compact-recommended --dry-run` to see which volumes would be compacted.
+   The dry run also shows detailed `planned`, `blocked`, `filtered`, and `deferred` volumes, with an explicit operational reason for each one.
+   The report also quantifies reclaimable free bytes per bucket so you can estimate the expected batch impact immediately.
+2. If you want to reduce blast radius, add `--limit <n>` to process only the top N volumes ordered by reclaimable free bytes.
+3. If you want to cap the batch by size, add `--max-reclaimable-bytes <bytes>` to stay within the cumulative reclaimable-byte budget.
+4. If you want to narrow the batch even further, add `--min-free-bytes <bytes>` and/or `--min-free-ratio <ratio>` to include only volumes above explicit minimum thresholds.
+5. By default, the batch blocks volumes that also have issues other than `COMPACTION_RECOMMENDED`; use `--include-unsafe` only when you explicitly want to force compaction on volumes that are still diagnostically unhealthy.
+6. Run `virtual-volumes compact-recommended` to compact only the volumes currently marked with `COMPACTION_RECOMMENDED`.
+   If you want to use the batch in automation, add `--strict-plan` so it fails when `blocked`, `filtered`, `deferred`, or `failed` volumes remain.
+7. If you want structured auditing, add `--output <path>` to the batch command as well.
+8. Run `virtual-volumes doctor` again if you want to confirm that the recommended fragmentation has been absorbed.
 
-Per remediation batch dei drift safe a livello fleet:
+For fleet-wide batch remediation of safe drifts:
 
-1. Esegui `virtual-volumes repair-safe --dry-run` per vedere quali volumi hanno solo drift auto-riparabili.
-2. Se vuoi una scansione piu' severa del payload, aggiungi `--verify-blobs`.
-3. Se vuoi limitare il batch operativo, aggiungi `--limit <n>`.
-4. I volumi `blocked` hanno anche finding non safe e non vengono auto-riparati nel batch.
-5. Esegui `virtual-volumes repair-safe` per applicare solo le riparazioni safe pianificate.
-6. Se usi il batch in automazione, aggiungi `--strict-plan` per fallire quando restano volumi `blocked`, `deferred` o `failed`.
-7. Riesegui `virtual-volumes doctor --verify-blobs` se vuoi una validazione deep dopo la remediation.
+1. Run `virtual-volumes repair-safe --dry-run` to see which volumes have only auto-repairable drifts.
+2. If you want stricter payload validation, add `--verify-blobs`.
+3. If you want to limit the operational batch, add `--limit <n>`.
+4. `blocked` volumes also have non-safe findings and are not auto-repaired by the batch.
+5. Run `virtual-volumes repair-safe` to apply only the planned safe repairs.
+6. If you use the batch in automation, add `--strict-plan` so it fails when `blocked`, `deferred`, or `failed` volumes remain.
+7. Run `virtual-volumes doctor --verify-blobs` again if you want deep validation after remediation.
 
-Per un restore di emergenza:
+For an emergency restore:
 
-1. Esegui `virtual-volumes inspect-backup`.
-2. Esegui `virtual-volumes doctor` sul sistema corrente se il volume esiste ancora.
-3. Esegui `virtual-volumes restore` oppure `virtual-volumes restore --force`.
-4. Se devi tracciare l'operazione, usa `--output <path>` sui comandi eseguiti.
-5. Esegui `virtual-volumes doctor <volumeId>` dopo il ripristino.
-6. Apri il volume e valida almeno un file noto o una directory chiave.
+1. Run `virtual-volumes inspect-backup`.
+2. Run `virtual-volumes doctor` on the current system if the volume still exists.
+3. Run `virtual-volumes restore` or `virtual-volumes restore --force`.
+4. If you need to track the operation, use `--output <path>` on the executed commands.
+5. Run `virtual-volumes doctor <volumeId>` after restore.
+6. Open the volume and validate at least one known file or key directory.
 
-Per escalation o handoff verso supporto tecnico:
+For escalation or handoff to technical support:
 
-1. Esegui `virtual-volumes support-bundle <destinationPath> [volumeId]`.
-2. Se vuoi che il report embedded usi uno scrub deep del payload, aggiungi `--verify-blobs`.
-3. Se stai lavorando su un restore o un backup sospetto, aggiungi `--backup-path <backupPath>`.
-4. Se il bundle deve essere piu' facile da condividere, usa `--no-logs` per escludere gli snapshot app e audit.
-5. Esegui `virtual-volumes inspect-support-bundle <destinationPath>` per verificare integrita' e checksum del bundle.
-6. Se il bundle deve uscire dall'organizzazione o vuoi un handoff ad alta confidenza, usa `virtual-volumes inspect-support-bundle <destinationPath> --require-sharing external-shareable --require-integrity-depth deep`.
-7. Se l'handoff resta interno, puoi comunque imporre `--require-sharing internal-only --require-integrity-depth metadata` per bloccare bundle senza guidance valida o con verification depth insufficiente.
-8. Condividi la cartella generata, che include `manifest.json`, `checksums.json`, `doctor-report.json`, `handoff-report.md`, eventuale `backup-inspection.json`, eventuale copia del manifest del backup e, se non esclusi, tail snapshot del log corrente.
-9. Se usi `VOLUME_REDACT_SENSITIVE_DETAILS=true`, anche i report JSON interni del bundle vengono redatti prima della condivisione.
-10. Controlla il `contentProfile` del bundle o l'output di `inspect-support-bundle` per capire se l'artifact e' `external-shareable` oppure `internal-only`.
-11. Segui anche `recommendedRetentionDays` e le `disposalNotes` del bundle per evitare che artifact diagnostici restino in giro oltre il necessario.
-12. Usa `handoff-report.md` e `action-plan.json` come punto di partenza operativo: ora includono integrity depth, postura fleet di compaction/repair-safe e next actions suggerite.
-13. Se `inspect-support-bundle` segnala che la retention e' stata superata, rigenera il bundle prima dell'handoff invece di condividere un artifact stantio.
+1. Run `virtual-volumes support-bundle <destinationPath> [volumeId]`.
+2. If you want the embedded report to use deep payload scrubbing, add `--verify-blobs`.
+3. If you are working on a suspicious backup or restore, add `--backup-path <backupPath>`.
+4. If the bundle needs to be easier to share, use `--no-logs` to exclude app and audit snapshots.
+5. Run `virtual-volumes inspect-support-bundle <destinationPath>` to verify bundle integrity and checksums.
+6. If the bundle must leave the organization or you want a high-confidence handoff, use `virtual-volumes inspect-support-bundle <destinationPath> --require-sharing external-shareable --require-integrity-depth deep`.
+7. If the handoff remains internal, you can still enforce `--require-sharing internal-only --require-integrity-depth metadata` to block bundles without valid guidance or with insufficient verification depth.
+8. Share the generated folder, which includes `manifest.json`, `checksums.json`, `doctor-report.json`, `handoff-report.md`, optional `backup-inspection.json`, an optional copy of the backup manifest, and, unless excluded, tail snapshots of the current logs.
+9. If you use `VOLUME_REDACT_SENSITIVE_DETAILS=true`, the internal JSON reports in the bundle are also redacted before sharing.
+10. Check the bundle `contentProfile` or the `inspect-support-bundle` output to determine whether the artifact is `external-shareable` or `internal-only`.
+11. Follow `recommendedRetentionDays` and the bundle `disposalNotes` to avoid leaving diagnostic artifacts around longer than necessary.
+12. Use `handoff-report.md` and `action-plan.json` as the operational starting point: they now include integrity depth, compaction/repair-safe fleet posture, and suggested next actions.
+13. If `inspect-support-bundle` reports that the retention window has been exceeded, regenerate the bundle before the handoff instead of sharing a stale artifact.
 
-## Restore drill periodico
+## Periodic Restore Drill
 
-Per alzare davvero la readiness operativa, pianifica un drill regolare:
+To raise operational readiness, schedule a regular drill:
 
-1. crea un backup di un volume reale
-2. verifica il backup con `inspect-backup`
-3. esegui `restore-drill`
-4. se il drill deve essere investigabile, ripeti con `restore-drill --keep-sandbox`
-5. verifica contenuti, revision e file chiave
+1. create a backup of a real volume
+2. validate the backup with `inspect-backup`
+3. run `restore-drill`
+4. if the drill must remain inspectable, repeat it with `restore-drill --keep-sandbox`
+5. validate contents, revision, and key files
 
-## Cosa conservare in audit
+## What To Keep For Audit
 
-Per ogni backup e restore conserva almeno:
+For every backup and restore, keep at least:
 
-- timestamp operazione
-- comando eseguito
-- versione CLI che ha generato il report
+- operation timestamp
+- executed command
+- CLI version that generated the report
 - `volumeId`
 - `revision`
 - `schemaVersion`
 - `createdWithVersion`
 - `checksumSha256`
-- esito di `inspect-backup`
-- esito di `doctor` post-restore
+- `inspect-backup` result
+- post-restore `doctor` result
