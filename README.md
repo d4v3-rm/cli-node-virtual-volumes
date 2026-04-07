@@ -1,7 +1,7 @@
-# CLI Node Virtual Volumes
+# CLI Node Virtual Volumes :card_file_box:
 
 <p align="center">
-  <strong>Custom virtual volumes for Node.js, with a keyboard-first terminal file manager.</strong>
+  <strong>Open-source virtual volumes for Node.js, with a keyboard-first terminal file manager.</strong>
 </p>
 
 <p align="center">
@@ -48,7 +48,7 @@ This project provides:
 
 ## Features
 
-### Core Storage
+### Core Storage :floppy_disk:
 
 - Create and delete virtual volumes.
 - Configure a logical quota per volume.
@@ -58,7 +58,7 @@ This project provides:
 - Store large file payloads in chunked SQLite blobs.
 - Protect writes with revisions and transactional mutations.
 
-### Terminal Experience
+### Terminal Experience :keyboard:
 
 - Volume dashboard.
 - Explorer for volume contents.
@@ -67,7 +67,7 @@ This project provides:
 - Inspector and status panel with progress feedback.
 - Keyboard-first workflows end to end.
 
-### Operational Tooling
+### Operational Tooling :tools:
 
 - `.env`-driven configuration.
 - Structured file logging.
@@ -186,7 +186,7 @@ Operational notes:
 
 ## TUI Controls
 
-### Dashboard
+### Dashboard :house:
 
 | Key | Action |
 | --- | --- |
@@ -200,7 +200,7 @@ Operational notes:
 | `?` | Help |
 | `Q` | Quit |
 
-### Explorer
+### Explorer :file_folder:
 
 | Key | Action |
 | --- | --- |
@@ -218,7 +218,7 @@ Operational notes:
 | `R` | Refresh |
 | `?` | Help |
 
-### Host Browser
+### Host Browser :globe_with_meridians:
 
 | Key | Action |
 | --- | --- |
@@ -468,8 +468,6 @@ Typical release assets:
 - `CHANGELOG.md`
 - GitHub Actions build outputs
 
-Additional planning and maturity work is tracked in [docs/ENTERPRISE-ROADMAP.md](./docs/ENTERPRISE-ROADMAP.md).
-
 ## Troubleshooting
 
 ### The TUI flickers or gets noisy
@@ -501,12 +499,13 @@ Current direction:
 
 - continue hardening storage recovery and consistency
 - keep reducing TUI monolith complexity
-- improve enterprise operability and release safety
+- improve operational tooling and release safety
 - extend automated test coverage around real failure modes
+- keep the project approachable for open-source contributors
 
-## Author
+## Maintainer
 
-Created and maintained by **Salvatore Scarano**.
+Maintained on GitHub by [**d4v3-rm**](https://github.com/d4v3-rm).
 
 ## License
 

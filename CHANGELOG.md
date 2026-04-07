@@ -19,7 +19,7 @@
 - refactor: extract host browser overlay helpers (`f30268f`)
 - test: cover doctor and status flows (`6d4e3f8`)
 - test: extract terminal render helpers (`757a7c1`)
-- ci: add enterprise delivery baseline (`b66db3d`)
+- ci: add delivery baseline (`b66db3d`)
 - feat: add safe storage repair mode (`0b52b15`)
 - feat: enforce relational constraints in sqlite (`ff756ba`)
 - refactor: use shared transactional volume mutations (`a5f83d3`)
@@ -136,7 +136,7 @@
 
 ## 0.1.0 - 2026-04-13
 
-- bootstrap del workspace Node.js + TypeScript + tooling enterprise
+- bootstrap del workspace Node.js + TypeScript + tooling iniziale
 - implementazione del virtual filesystem custom persistente e Node-only
 - terminal UI interattiva per gestire volumi, cartelle, import, move e preview
 - configurazione via `.env`, logging su filesystem e packaging npm globale

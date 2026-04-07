@@ -188,7 +188,7 @@ try {
   await runtime.volumeService.writeTextFile(
     volume.id,
     '/baseline.txt',
-    'enterprise smoke baseline',
+    'ops smoke baseline',
   );
 
   const backupPath = path.join(backupsDir, 'recovery-smoke.sqlite');
@@ -298,7 +298,7 @@ try {
     '/baseline.txt',
   );
   assert(
-    preview.content.includes('enterprise smoke baseline'),
+    preview.content.includes('ops smoke baseline'),
     'Restored volume content did not match the backup snapshot.',
   );
 
