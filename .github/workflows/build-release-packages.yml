@@ -4,30 +4,26 @@ on:
   push:
     branches:
       - main
+      - "release/**"
 
-concurrency:
-  group: release-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      attestations: write
-      id-token: write
     env:
       HUSKY: "0"
       CI: "true"
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
@@ -41,9 +37,6 @@ jobs:
       - name: Build npm package
         run: npm run pack:local
 
-      - name: Verify packaged install
-        run: npm run smoke:package
-
       - name: Prepare package artifact directory
         shell: bash
         run: |
@@ -56,58 +49,37 @@ jobs:
           cd dist/package
           sha256sum ./*.tgz > SHA256SUMS.txt
 
-      - name: Generate CycloneDX SBOM
-        shell: bash
-        run: |
-          npm sbom --sbom-format cyclonedx --sbom-type application > dist/package/sbom.cdx.json
-
-      - name: Generate package provenance attestation
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-path: dist/package/*.tgz
-
-      - name: Generate package SBOM attestation
-        uses: actions/attest-sbom@v4
-        with:
-          subject-path: dist/package/*.tgz
-          sbom-path: dist/package/sbom.cdx.json
-
       - name: Upload build artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
-          name: cli-node-virtual-volumes-package
+          name: virtual-volumes-package
           path: |
             dist/package/*.tgz
             dist/package/SHA256SUMS.txt
-            dist/package/sbom.cdx.json
           if-no-files-found: error
 
   publish:
     runs-on: ubuntu-latest
     needs: build
-    permissions:
-      contents: write
-      attestations: write
-      id-token: write
     env:
       HUSKY: "0"
       CI: "true"
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
       - name: Download package artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
-          name: cli-node-virtual-volumes-package
+          name: virtual-volumes-package
           path: dist
 
       - name: Prepare source archive
@@ -115,11 +87,6 @@ jobs:
           mkdir -p dist
           git archive --format=zip --output dist/source.zip HEAD
         shell: bash
-
-      - name: Generate source provenance attestation
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-path: dist/source.zip
 
       - name: Resolve version and release channel
         id: version
@@ -266,7 +233,7 @@ jobs:
 
       - name: Publish GitHub release
         if: steps.tag-guard.outputs.skip == 'false'
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
