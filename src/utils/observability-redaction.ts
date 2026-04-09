@@ -37,7 +37,8 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const getRedactedPathLabel = (targetPath: string): string => {
   const withoutTrailingSeparators = targetPath.replace(/[\\/]+$/u, '');
-  const baseName = path.basename(withoutTrailingSeparators);
+  const normalizedPath = withoutTrailingSeparators.replace(/\\/gu, '/');
+  const baseName = path.posix.basename(normalizedPath);
 
   if (baseName.length > 0 && baseName !== '.' && baseName !== path.sep) {
     return baseName;

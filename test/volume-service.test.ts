@@ -2039,6 +2039,8 @@ describe('VolumeService', () => {
     const backupRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-version-guard-'));
     sandboxes.push(backupRoot);
     const backupPath = path.join(backupRoot, 'version-guard.sqlite');
+    const currentMajorVersion = Number.parseInt(APP_VERSION.split('.')[0] ?? '0', 10);
+    const newerMajorVersion = `${Number.isNaN(currentMajorVersion) ? 999 : currentMajorVersion + 1}.0.0`;
 
     await runtime.volumeService.writeTextFile(volume.id, '/report.txt', 'version guard');
 
@@ -2046,7 +2048,7 @@ describe('VolumeService', () => {
     const backupManifest = JSON.parse(
       await fs.readFile(backupResult.manifestPath, 'utf8'),
     ) as VolumeBackupManifest;
-    backupManifest.createdWithVersion = '2.0.0';
+    backupManifest.createdWithVersion = newerMajorVersion;
     await fs.writeFile(
       backupResult.manifestPath,
       JSON.stringify(backupManifest, null, 2),
@@ -2058,7 +2060,7 @@ describe('VolumeService', () => {
       details: {
         backupPath: path.resolve(backupPath),
         manifestPath: backupResult.manifestPath,
-        backupCreatedWithVersion: '2.0.0',
+        backupCreatedWithVersion: newerMajorVersion,
         currentRuntimeVersion: APP_VERSION,
       },
     });
@@ -2070,7 +2072,7 @@ describe('VolumeService', () => {
       details: {
         backupPath: path.resolve(backupPath),
         manifestPath: backupResult.manifestPath,
-        backupCreatedWithVersion: '2.0.0',
+        backupCreatedWithVersion: newerMajorVersion,
         currentRuntimeVersion: APP_VERSION,
       },
     });
