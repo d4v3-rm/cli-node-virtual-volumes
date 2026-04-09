@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.0.1 - 2026-04-16
+
+- fix: restore ci coverage for redaction and version guards (`f56edf7`)
+- ci: restore legacy build and release workflow (`f6c2734`)
+
 ## 2.0.0 - 2026-04-16
 
 - docs: translate remaining repository copy to english (`17167a2`)
