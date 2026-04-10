@@ -14,6 +14,7 @@ const packageJsonPath = path.join(rootDir, 'package.json');
 const packageLockPath = path.join(rootDir, 'package-lock.json');
 const readmePath = path.join(rootDir, 'README.md');
 const changelogPath = path.join(rootDir, 'CHANGELOG.md');
+const RELEASE_COMMIT_PATTERN = /^build\(release\): v(\d+\.\d+\.\d+)$/u;
 
 const parser = new CommitParser();
 
@@ -40,13 +41,61 @@ const hasStagedChanges = () => {
   }
 };
 
-const getLatestVersionTag = () => {
+const getLatestReleaseCommit = () => {
   try {
-    const output = runGitCapture(['tag', '--list', 'v[0-9]*.[0-9]*.[0-9]*', '--sort=-v:refname']);
+    const output = runGitCapture([
+      'log',
+      '--grep',
+      '^build(release): v[0-9]*\\.[0-9]*\\.[0-9]*$',
+      '--format=%H|%s',
+      '-n',
+      '1',
+      'HEAD'
+    ]);
+
+    if (!output) {
+      return null;
+    }
+
+    const [sha, subject] = output.split('|');
+    const version = RELEASE_COMMIT_PATTERN.exec(subject ?? '')?.[1] ?? null;
+
+    if (!sha || !version) {
+      return null;
+    }
+
+    return {
+      ref: sha,
+      version
+    };
+  } catch {
+    return null;
+  }
+};
+
+const getLatestMergedVersionTag = () => {
+  try {
+    const output = runGitCapture([
+      'tag',
+      '--merged',
+      'HEAD',
+      '--list',
+      'v[0-9]*.[0-9]*.[0-9]*',
+      '--sort=-v:refname'
+    ]);
     return output.split(/\r?\n/).map((value) => value.trim()).find(Boolean) ?? null;
   } catch {
     return null;
   }
+};
+
+const getLatestVersionBaseRef = () => {
+  const latestReleaseCommit = getLatestReleaseCommit();
+  if (latestReleaseCommit) {
+    return latestReleaseCommit.ref;
+  }
+
+  return getLatestMergedVersionTag();
 };
 
 const getCommitMessagesSince = (baseRef) => {
@@ -109,8 +158,8 @@ if (!semver.valid(currentVersion)) {
   throw new Error(`Current package version is not valid semver: ${currentVersion}`);
 }
 
-const latestTag = getLatestVersionTag();
-const commitEntries = getCommitMessagesSince(latestTag);
+const latestVersionBaseRef = getLatestVersionBaseRef();
+const commitEntries = getCommitMessagesSince(latestVersionBaseRef);
 const releaseType = getReleaseType(commitEntries);
 
 if (!releaseType) {
