@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.2 - 2026-04-16
+
+- fix: detect latest reachable release base (`5dc06fd`)
+
 ## 2.0.1 - 2026-04-16
 
 - fix: restore ci coverage for redaction and version guards (`f56edf7`)
