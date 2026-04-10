@@ -99,6 +99,7 @@ const escapeSqliteStringLiteral = (value: string): string => value.replaceAll("'
 const BACKUP_MANIFEST_SUFFIX = '.manifest.json';
 const BACKUP_MANIFEST_FORMAT_VERSION = 1 as const;
 const MAINTENANCE_SUMMARY_TOP_CANDIDATE_LIMIT = 5;
+const STALE_ENTRY_DELETE_BATCH_SIZE = 500;
 
 export class VolumeRepository {
   private readonly volumeCache = new Map<string, VolumeRecord>();
@@ -2787,14 +2788,41 @@ export class VolumeRepository {
       );
     }
 
-    const persistedEntryIds = Object.keys(record.state.entries);
-    const staleEntryQuery = persistedEntryIds.length > 0
-      ? `DELETE FROM entries
-           WHERE id NOT IN (${persistedEntryIds.map(() => '?').join(', ')})`
-      : 'DELETE FROM entries';
-    await database.run(staleEntryQuery, ...persistedEntryIds);
+    await this.deleteStaleEntriesFromDatabase(
+      database,
+      Object.keys(record.state.entries),
+    );
 
     record.manifest.revision = nextRevision;
+  }
+
+  private async deleteStaleEntriesFromDatabase(
+    database: SqliteVolumeDatabase,
+    persistedEntryIds: string[],
+  ): Promise<void> {
+    if (persistedEntryIds.length === 0) {
+      await database.run('DELETE FROM entries');
+      return;
+    }
+
+    const persistedEntryIdSet = new Set(persistedEntryIds);
+    const staleEntryIds = (
+      await database.all<{ id: string }[]>('SELECT id FROM entries')
+    )
+      .map((row) => row.id)
+      .filter((entryId) => !persistedEntryIdSet.has(entryId));
+
+    for (
+      let offset = 0;
+      offset < staleEntryIds.length;
+      offset += STALE_ENTRY_DELETE_BATCH_SIZE
+    ) {
+      const batch = staleEntryIds.slice(offset, offset + STALE_ENTRY_DELETE_BATCH_SIZE);
+      await database.run(
+        `DELETE FROM entries WHERE id IN (${batch.map(() => '?').join(', ')})`,
+        ...batch,
+      );
+    }
   }
 
   private async syncBlobReferenceCounts(

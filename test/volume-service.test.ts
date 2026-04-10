@@ -236,6 +236,52 @@ describe('VolumeService', () => {
     expect(preview.content).toContain('beta');
   });
 
+  it('persists very large entry sets without exhausting SQLite bind limits or the JS stack', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Large Persist' });
+    const repository = (
+      runtime.volumeService as unknown as {
+        repository: VolumeRepository;
+      }
+    ).repository;
+    const record = await repository.loadVolume(volume.id);
+    const rootEntry = record.state.entries[record.state.rootId];
+    const now = '2026-04-16T10:30:00.000Z';
+    const additionalDirectoryCount = 50_000;
+
+    if (rootEntry?.kind !== 'directory') {
+      throw new Error('Expected the volume root entry to be a directory.');
+    }
+
+    for (let index = 0; index < additionalDirectoryCount; index += 1) {
+      const entryId = `dir_bulk_${index}`;
+      record.state.entries[entryId] = {
+        id: entryId,
+        kind: 'directory',
+        name: `bulk-${index}`,
+        parentId: rootEntry.id,
+        childIds: [],
+        createdAt: now,
+        updatedAt: now,
+      };
+      rootEntry.childIds.push(entryId);
+    }
+
+    rootEntry.updatedAt = now;
+    record.manifest.entryCount = additionalDirectoryCount + 1;
+    record.manifest.updatedAt = now;
+
+    await expect(repository.saveVolume(record)).resolves.toBeUndefined();
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, volume.id), async (database) => {
+      const row = await database.get<{ count: number }>(
+        'SELECT COUNT(*) AS count FROM entries',
+      );
+
+      expect(row?.count).toBe(additionalDirectoryCount + 1);
+    });
+  });
+
   it('deletes stale SQLite rows incrementally without recreating untouched entries', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Incremental Delete' });
