@@ -160,19 +160,99 @@ export const formatHostNavigationRow = (
   availableWidth: number,
 ): string => fitSingleLine(`${getHostEntryIcon(entry)} ${entry.name}`, availableWidth);
 
-const getTransferPhaseLabel = (phase: 'file' | 'directory' | 'integrity'): string =>
-  phase === 'directory' ? 'dir' : phase === 'integrity' ? 'verify' : 'file';
+const getTransferTargetName = (targetPath: string): string =>
+  path.basename(targetPath) || targetPath;
+
+const formatTransferCurrentItem = (options: {
+  phase: 'file' | 'directory' | 'integrity';
+  currentBytes: number;
+  currentTotalBytes: number | null;
+}): string => {
+  if (options.phase === 'directory') {
+    return 'Item folder';
+  }
+
+  const label = options.phase === 'integrity' ? 'Check' : 'Item';
+  if (options.currentTotalBytes === null) {
+    return `${label} ${formatBytes(options.currentBytes)}`;
+  }
+
+  if (options.currentTotalBytes === 0) {
+    return `${label} 0 B`;
+  }
+
+  return `${label} ${formatBytes(options.currentBytes)} / ${formatBytes(options.currentTotalBytes)}`;
+};
+
+const formatTransferProgressDetail = (options: {
+  phase: 'file' | 'directory' | 'integrity';
+  completedFiles: number;
+  completedDirectories: number;
+  integrityChecksPassed: number;
+  currentBytes: number;
+  currentTotalBytes: number | null;
+  metrics: ImportProgress['metrics'];
+}): string => {
+  const parts = [
+    `Files ${options.completedFiles}/${options.metrics.totalFiles}`,
+    `Dirs ${options.completedDirectories}/${options.metrics.totalDirectories}`,
+  ];
+
+  if (options.metrics.totalFiles > 0) {
+    parts.push(`Verify ${options.integrityChecksPassed}/${options.metrics.totalFiles}`);
+  }
+
+  parts.push(
+    formatTransferCurrentItem({
+      phase: options.phase,
+      currentBytes: options.currentBytes,
+      currentTotalBytes: options.currentTotalBytes,
+    }),
+  );
+
+  return parts.join('  ');
+};
+
+export const formatImportProgressLabel = (progress: ImportProgress): string => {
+  const currentTarget = getTransferTargetName(progress.currentHostPath);
+
+  if (progress.phase === 'integrity') {
+    return `Verify ${currentTarget}`;
+  }
+
+  return `Import ${progress.phase === 'directory' ? 'folder' : 'file'} ${currentTarget}`;
+};
+
+export const formatExportProgressLabel = (progress: ExportProgress): string => {
+  const currentTarget = getTransferTargetName(progress.currentVirtualPath);
+
+  if (progress.phase === 'integrity') {
+    return `Verify ${currentTarget}`;
+  }
+
+  return `Export ${progress.phase === 'directory' ? 'folder' : 'file'} ${currentTarget}`;
+};
 
 export const formatImportProgress = (progress: ImportProgress): string => {
-  const currentTarget = path.basename(progress.currentHostPath) || progress.currentHostPath;
-  const phaseLabel = getTransferPhaseLabel(progress.phase);
-
-  return `Current ${phaseLabel}: ${currentTarget}  Imported ${progress.summary.filesImported} files / ${progress.summary.directoriesImported} dirs / ${formatBytes(progress.summary.bytesImported)} / Integrity ${progress.summary.integrityChecksPassed}`;
+  return formatTransferProgressDetail({
+    phase: progress.phase,
+    completedFiles: progress.summary.filesImported,
+    completedDirectories: progress.summary.directoriesImported,
+    integrityChecksPassed: progress.summary.integrityChecksPassed,
+    currentBytes: progress.currentBytes,
+    currentTotalBytes: progress.currentTotalBytes,
+    metrics: progress.metrics,
+  });
 };
 
 export const formatExportProgress = (progress: ExportProgress): string => {
-  const currentTarget = path.basename(progress.currentVirtualPath) || progress.currentVirtualPath;
-  const phaseLabel = getTransferPhaseLabel(progress.phase);
-
-  return `Current ${phaseLabel}: ${currentTarget}  Exported ${progress.summary.filesExported} files / ${progress.summary.directoriesExported} dirs / ${formatBytes(progress.summary.bytesExported)} / Integrity ${progress.summary.integrityChecksPassed}`;
+  return formatTransferProgressDetail({
+    phase: progress.phase,
+    completedFiles: progress.summary.filesExported,
+    completedDirectories: progress.summary.directoriesExported,
+    integrityChecksPassed: progress.summary.integrityChecksPassed,
+    currentBytes: progress.currentBytes,
+    currentTotalBytes: progress.currentTotalBytes,
+    metrics: progress.metrics,
+  });
 };

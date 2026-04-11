@@ -11,11 +11,13 @@ import {
   buildAsciiMeter,
   fitAlignedLine,
   fitSingleLine,
+  formatExportProgressLabel,
   formatPercentage,
   formatEntryRow,
   formatExportProgress,
   formatHostBrowserRow,
   formatHostNavigationRow,
+  formatImportProgressLabel,
   formatImportProgress,
   formatVolumeRow,
   getHostEntryIcon,
@@ -136,6 +138,12 @@ describe('ui presenters', () => {
       },
       currentBytes: 1024,
       currentTotalBytes: 4096,
+      metrics: {
+        totalFiles: 5,
+        totalDirectories: 2,
+        totalBytes: 12288,
+        transferredBytes: 5120,
+      },
     };
     const exportProgress: ExportProgress = {
       currentVirtualPath: '/documents/archive.zip',
@@ -150,13 +158,21 @@ describe('ui presenters', () => {
       },
       currentBytes: 8192,
       currentTotalBytes: 8192,
+      metrics: {
+        totalFiles: 6,
+        totalDirectories: 3,
+        totalBytes: 16384,
+        transferredBytes: 12288,
+      },
     };
 
+    expect(formatImportProgressLabel(importProgress)).toBe('Import file report.txt');
+    expect(formatExportProgressLabel(exportProgress)).toBe('Verify archive.zip');
     expect(formatImportProgress(importProgress)).toBe(
-      'Current file: report.txt  Imported 2 files / 1 dirs / 4.0 KB / Integrity 3',
+      'Files 2/5  Dirs 1/2  Verify 3/5  Item 1.0 KB / 4.0 KB',
     );
     expect(formatExportProgress(exportProgress)).toBe(
-      'Current verify: archive.zip  Exported 4 files / 2 dirs / 8.0 KB / Integrity 6',
+      'Files 4/6  Dirs 2/3  Verify 6/6  Check 8.0 KB / 8.0 KB',
     );
   });
 });

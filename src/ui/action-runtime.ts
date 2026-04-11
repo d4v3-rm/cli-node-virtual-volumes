@@ -12,6 +12,10 @@ import type {
   ConfirmOverlayOptions,
   PromptOverlayOptions,
 } from './dialog-overlay.js';
+import {
+  formatExportProgressLabel,
+  formatImportProgressLabel,
+} from './presenters.js';
 import type { ToastTone } from './runtime-state.js';
 import {
   getCreateFolderAction,
@@ -266,10 +270,12 @@ export const runImportWizard = async (runtime: ActionRuntime): Promise<void> => 
         hostPaths,
         destinationPath: action.destinationPath,
         onProgress: (progress) => {
+          const totalBytes = progress.metrics.totalBytes;
           runtime.updateBusyState({
+            label: formatImportProgressLabel(progress),
             detail: runtime.formatImportProgress(progress),
-            currentValue: progress.currentBytes,
-            totalValue: progress.currentTotalBytes,
+            currentValue: totalBytes > 0 ? progress.metrics.transferredBytes : null,
+            totalValue: totalBytes > 0 ? totalBytes : null,
           });
         },
       }),
@@ -302,10 +308,12 @@ export const runExportWizard = async (runtime: ActionRuntime): Promise<void> => 
         sourcePath: action.sourcePath,
         destinationHostDirectory,
         onProgress: (progress) => {
+          const totalBytes = progress.metrics.totalBytes;
           runtime.updateBusyState({
+            label: formatExportProgressLabel(progress),
             detail: runtime.formatExportProgress(progress),
-            currentValue: progress.currentBytes,
-            totalValue: progress.currentTotalBytes,
+            currentValue: totalBytes > 0 ? progress.metrics.transferredBytes : null,
+            totalValue: totalBytes > 0 ? totalBytes : null,
           });
         },
       }),

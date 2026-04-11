@@ -808,6 +808,10 @@ describe('VolumeService', () => {
       currentHostPath: string;
       filesImported: number;
       directoriesImported: number;
+      totalFiles: number;
+      totalDirectories: number;
+      totalBytes: number;
+      transferredBytes: number;
     }[] = [];
 
     await runtime.volumeService.importHostPaths(volume.id, {
@@ -819,6 +823,10 @@ describe('VolumeService', () => {
           currentHostPath: progress.currentHostPath,
           filesImported: progress.summary.filesImported,
           directoriesImported: progress.summary.directoriesImported,
+          totalFiles: progress.metrics.totalFiles,
+          totalDirectories: progress.metrics.totalDirectories,
+          totalBytes: progress.metrics.totalBytes,
+          transferredBytes: progress.metrics.transferredBytes,
         });
       },
     });
@@ -826,12 +834,23 @@ describe('VolumeService', () => {
     expect(progressEvents[0]).toMatchObject({
       phase: 'directory',
       directoriesImported: 1,
+      totalFiles: 2,
+      totalDirectories: 1,
+      totalBytes: 6,
+      transferredBytes: 0,
     });
-    expect(progressEvents.some((event) => event.phase === 'file')).toBe(true);
+    expect(
+      progressEvents.some((event) => event.phase === 'file' && event.transferredBytes > 0),
+    ).toBe(true);
     expect(progressEvents.some((event) => event.phase === 'integrity')).toBe(true);
     expect(progressEvents.at(-1)).toMatchObject({
+      phase: 'integrity',
       filesImported: 2,
       directoriesImported: 1,
+      totalFiles: 2,
+      totalDirectories: 1,
+      totalBytes: 6,
+      transferredBytes: 6,
     });
   });
 
@@ -1011,6 +1030,10 @@ describe('VolumeService', () => {
       bytesExported: number;
       currentBytes: number;
       currentTotalBytes: number | null;
+      totalFiles: number;
+      totalDirectories: number;
+      totalBytes: number;
+      transferredBytes: number;
     }[] = [];
 
     const summary = await runtime.volumeService.exportEntryToHost(volume.id, {
@@ -1024,6 +1047,10 @@ describe('VolumeService', () => {
           bytesExported: progress.summary.bytesExported,
           currentBytes: progress.currentBytes,
           currentTotalBytes: progress.currentTotalBytes,
+          totalFiles: progress.metrics.totalFiles,
+          totalDirectories: progress.metrics.totalDirectories,
+          totalBytes: progress.metrics.totalBytes,
+          transferredBytes: progress.metrics.transferredBytes,
         });
       },
     });
@@ -1038,6 +1065,10 @@ describe('VolumeService', () => {
       bytesExported: Buffer.byteLength(content, 'utf8'),
       currentBytes: Buffer.byteLength(content, 'utf8'),
       currentTotalBytes: Buffer.byteLength(content, 'utf8'),
+      totalFiles: 1,
+      totalDirectories: 0,
+      totalBytes: Buffer.byteLength(content, 'utf8'),
+      transferredBytes: Buffer.byteLength(content, 'utf8'),
     });
     expect(summary).toMatchObject({
       filesExported: 1,

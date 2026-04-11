@@ -79,12 +79,20 @@ export interface ImportSummary {
   integrityChecksPassed: number;
 }
 
+export interface TransferProgressMetrics {
+  totalFiles: number;
+  totalDirectories: number;
+  totalBytes: number;
+  transferredBytes: number;
+}
+
 export interface ImportProgress {
   currentHostPath: string;
   phase: 'file' | 'directory' | 'integrity';
   summary: ImportSummary;
   currentBytes: number;
   currentTotalBytes: number | null;
+  metrics: TransferProgressMetrics;
 }
 
 export interface ExportSummary {
@@ -102,6 +110,7 @@ export interface ExportProgress {
   summary: ExportSummary;
   currentBytes: number;
   currentTotalBytes: number | null;
+  metrics: TransferProgressMetrics;
 }
 
 export interface FilePreview {

@@ -43,6 +43,7 @@ import type {
   VolumeRecord,
   VolumeRestoreResult,
   VolumeState,
+  TransferProgressMetrics,
   UpdateVolumeMetadataInput,
 } from '../domain/types.js';
 import { BlobStore } from '../storage/blob-store.js';
@@ -70,11 +71,13 @@ interface ServiceConfig {
 
 interface ImportTraversalContext {
   processedNodes: number;
+  metrics: TransferProgressMetrics;
   onProgress?: ImportHostPathsInput['onProgress'];
 }
 
 interface ExportTraversalContext {
   processedNodes: number;
+  metrics: TransferProgressMetrics;
   onProgress?: ExportVolumeEntryInput['onProgress'];
 }
 
@@ -947,6 +950,10 @@ export class VolumeService {
           throw new VolumeError('INVALID_OPERATION', 'No host paths were provided.');
         }
 
+        const progressMetrics = input.onProgress
+          ? await this.planImportTransferMetrics(input.hostPaths)
+          : this.createEmptyTransferProgressMetrics();
+
         const summary = await this.repository.mutateVolume(
           volumeId,
           async (record, database) => {
@@ -968,6 +975,7 @@ export class VolumeService {
             };
             const traversalContext: ImportTraversalContext = {
               processedNodes: 0,
+              metrics: { ...progressMetrics },
               onProgress: input.onProgress,
             };
 
@@ -1041,6 +1049,21 @@ export class VolumeService {
 
         await fs.mkdir(destinationHostDirectory, { recursive: true });
 
+        let exportTargets: VolumeEntry[];
+        if (normalizedSourcePath === '/') {
+          const rootDirectory = this.requireDirectoryById(record.state, record.state.rootId);
+          exportTargets = rootDirectory.childIds
+            .map((childId) => record.state.entries[childId])
+            .filter((entry): entry is VolumeEntry => entry !== undefined)
+            .sort((left, right) => this.sortEntries(left, right));
+        } else {
+          exportTargets = [this.requireEntryByPath(record.state, normalizedSourcePath)];
+        }
+
+        const progressMetrics = input.onProgress
+          ? await this.planExportTransferMetrics(record.state, exportTargets)
+          : this.createEmptyTransferProgressMetrics();
+
         const blobStore = new BlobStore(
           this.repository.getVolumeDatabasePath(volumeId),
           this.logger.child({ scope: 'blob-store', volumeId }),
@@ -1055,32 +1078,15 @@ export class VolumeService {
         };
         const traversalContext: ExportTraversalContext = {
           processedNodes: 0,
+          metrics: progressMetrics,
           onProgress: input.onProgress,
         };
 
-        if (normalizedSourcePath === '/') {
-          const rootDirectory = this.requireDirectoryById(record.state, record.state.rootId);
-          const childEntries = rootDirectory.childIds
-            .map((childId) => record.state.entries[childId])
-            .filter((entry): entry is VolumeEntry => entry !== undefined)
-            .sort((left, right) => this.sortEntries(left, right));
-
-          for (const childEntry of childEntries) {
-            await this.exportEntry(
-              record.state,
-              blobStore,
-              childEntry,
-              destinationHostDirectory,
-              summary,
-              traversalContext,
-            );
-          }
-        } else {
-          const sourceEntry = this.requireEntryByPath(record.state, normalizedSourcePath);
+        for (const exportTarget of exportTargets) {
           await this.exportEntry(
             record.state,
             blobStore,
-            sourceEntry,
+            exportTarget,
             destinationHostDirectory,
             summary,
             traversalContext,
@@ -1506,6 +1512,7 @@ export class VolumeService {
         descriptor.size,
         descriptor.size,
       );
+      traversalContext.metrics.transferredBytes += descriptor.size;
       return;
     }
 
@@ -1602,6 +1609,7 @@ export class VolumeService {
       entry.size,
       entry.size,
     );
+    traversalContext.metrics.transferredBytes += entry.size;
   }
 
   private createDirectoryEntry(
@@ -1940,6 +1948,185 @@ export class VolumeService {
     );
   }
 
+  private createEmptyTransferProgressMetrics(): TransferProgressMetrics {
+    return {
+      totalFiles: 0,
+      totalDirectories: 0,
+      totalBytes: 0,
+      transferredBytes: 0,
+    };
+  }
+
+  private async planImportTransferMetrics(hostPaths: string[]): Promise<TransferProgressMetrics> {
+    const metrics = this.createEmptyTransferProgressMetrics();
+    const pendingPaths = hostPaths
+      .slice()
+      .reverse()
+      .map((hostPath) => path.resolve(hostPath));
+    let scannedEntries = 0;
+
+    while (pendingPaths.length > 0) {
+      const currentHostPath = pendingPaths.pop();
+      if (!currentHostPath) {
+        continue;
+      }
+
+      this.assertHostPathAllowed(currentHostPath, 'import');
+      const hostEntryStats = await fs.lstat(currentHostPath);
+
+      if (hostEntryStats.isSymbolicLink()) {
+        throw new VolumeError(
+          'UNSUPPORTED_HOST_ENTRY',
+          `Symbolic links are not supported: ${currentHostPath}`,
+        );
+      }
+
+      if (hostEntryStats.isDirectory()) {
+        metrics.totalDirectories += 1;
+        const childNames = await fs.readdir(currentHostPath);
+        childNames.sort((left, right) => left.localeCompare(right));
+
+        for (let index = childNames.length - 1; index >= 0; index -= 1) {
+          const childName = childNames[index];
+          if (!childName) {
+            continue;
+          }
+
+          pendingPaths.push(path.join(currentHostPath, childName));
+        }
+      } else if (hostEntryStats.isFile()) {
+        metrics.totalFiles += 1;
+        metrics.totalBytes += hostEntryStats.size;
+      } else {
+        throw new VolumeError(
+          'UNSUPPORTED_HOST_ENTRY',
+          `Unsupported host entry type: ${currentHostPath}`,
+        );
+      }
+
+      scannedEntries += 1;
+      if (scannedEntries % 250 === 0) {
+        await this.yieldToEventLoop();
+      }
+    }
+
+    return metrics;
+  }
+
+  private async planExportTransferMetrics(
+    state: VolumeState,
+    entries: VolumeEntry[],
+  ): Promise<TransferProgressMetrics> {
+    const metrics = this.createEmptyTransferProgressMetrics();
+    const pendingEntries = [...entries].reverse();
+    let scannedEntries = 0;
+
+    while (pendingEntries.length > 0) {
+      const currentEntry = pendingEntries.pop();
+      if (!currentEntry) {
+        continue;
+      }
+
+      if (currentEntry.kind === 'directory') {
+        metrics.totalDirectories += 1;
+        const childEntries = currentEntry.childIds
+          .map((childId) => state.entries[childId])
+          .filter((childEntry): childEntry is VolumeEntry => childEntry !== undefined)
+          .sort((left, right) => this.sortEntries(left, right));
+
+        for (let index = childEntries.length - 1; index >= 0; index -= 1) {
+          const childEntry = childEntries[index];
+          if (!childEntry) {
+            continue;
+          }
+
+          pendingEntries.push(childEntry);
+        }
+      } else {
+        metrics.totalFiles += 1;
+        metrics.totalBytes += currentEntry.size;
+      }
+
+      scannedEntries += 1;
+      if (scannedEntries % 250 === 0) {
+        await this.yieldToEventLoop();
+      }
+    }
+
+    return metrics;
+  }
+
+  private buildProgressMetricsSnapshot(
+    metrics: TransferProgressMetrics,
+    phase: ImportProgress['phase'],
+    currentBytes: number,
+    currentTotalBytes: number | null,
+  ): TransferProgressMetrics {
+    const currentContribution =
+      phase === 'directory'
+        ? 0
+        : phase === 'integrity'
+          ? (currentTotalBytes ?? currentBytes)
+          : currentBytes;
+    const transferredBytes = metrics.transferredBytes + currentContribution;
+
+    return {
+      ...metrics,
+      transferredBytes:
+        metrics.totalBytes > 0
+          ? Math.min(metrics.totalBytes, transferredBytes)
+          : transferredBytes,
+    };
+  }
+
+  private buildImportProgress(
+    context: ImportTraversalContext,
+    currentHostPath: string,
+    phase: ImportProgress['phase'],
+    summary: ImportSummary,
+    currentBytes: number,
+    currentTotalBytes: number | null,
+  ): ImportProgress {
+    return {
+      currentHostPath,
+      phase,
+      summary: { ...summary },
+      currentBytes,
+      currentTotalBytes,
+      metrics: this.buildProgressMetricsSnapshot(
+        context.metrics,
+        phase,
+        currentBytes,
+        currentTotalBytes,
+      ),
+    };
+  }
+
+  private buildExportProgress(
+    context: ExportTraversalContext,
+    currentVirtualPath: string,
+    destinationHostPath: string,
+    phase: ExportProgress['phase'],
+    summary: ExportSummary,
+    currentBytes: number,
+    currentTotalBytes: number | null,
+  ): ExportProgress {
+    return {
+      currentVirtualPath,
+      destinationHostPath,
+      phase,
+      summary: { ...summary },
+      currentBytes,
+      currentTotalBytes,
+      metrics: this.buildProgressMetricsSnapshot(
+        context.metrics,
+        phase,
+        currentBytes,
+        currentTotalBytes,
+      ),
+    };
+  }
+
   private async reportImportProgress(
     context: ImportTraversalContext,
     currentHostPath: string,
@@ -1951,13 +2138,16 @@ export class VolumeService {
     context.processedNodes += 1;
 
     if (context.onProgress) {
-      await context.onProgress({
-        currentHostPath,
-        phase,
-        summary: { ...summary },
-        currentBytes,
-        currentTotalBytes,
-      });
+      await context.onProgress(
+        this.buildImportProgress(
+          context,
+          currentHostPath,
+          phase,
+          summary,
+          currentBytes,
+          currentTotalBytes,
+        ),
+      );
     }
 
     if (context.processedNodes % 25 === 0) {
@@ -1977,13 +2167,16 @@ export class VolumeService {
       return;
     }
 
-    void context.onProgress({
-      currentHostPath,
-      phase,
-      summary: { ...summary },
-      currentBytes,
-      currentTotalBytes,
-    });
+    void context.onProgress(
+      this.buildImportProgress(
+        context,
+        currentHostPath,
+        phase,
+        summary,
+        currentBytes,
+        currentTotalBytes,
+      ),
+    );
   }
 
   private async reportExportProgress(
@@ -1998,14 +2191,17 @@ export class VolumeService {
     context.processedNodes += 1;
 
     if (context.onProgress) {
-      await context.onProgress({
-        currentVirtualPath,
-        destinationHostPath,
-        phase,
-        summary: { ...summary },
-        currentBytes,
-        currentTotalBytes,
-      });
+      await context.onProgress(
+        this.buildExportProgress(
+          context,
+          currentVirtualPath,
+          destinationHostPath,
+          phase,
+          summary,
+          currentBytes,
+          currentTotalBytes,
+        ),
+      );
     }
 
     if (context.processedNodes % 25 === 0) {
@@ -2026,14 +2222,17 @@ export class VolumeService {
       return;
     }
 
-    void context.onProgress({
-      currentVirtualPath,
-      destinationHostPath,
-      phase,
-      summary: { ...summary },
-      currentBytes,
-      currentTotalBytes,
-    });
+    void context.onProgress(
+      this.buildExportProgress(
+        context,
+        currentVirtualPath,
+        destinationHostPath,
+        phase,
+        summary,
+        currentBytes,
+        currentTotalBytes,
+      ),
+    );
   }
 
   private async hostPathExists(targetPath: string): Promise<boolean> {

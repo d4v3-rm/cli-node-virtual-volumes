@@ -130,6 +130,7 @@ const createActionRuntimeHarness = (
   busyUpdates: {
     currentValue?: number | null;
     detail?: string;
+    label?: string;
     totalValue?: number | null;
   }[];
   confirmPrompts: string[];
@@ -204,6 +205,7 @@ const createActionRuntimeHarness = (
   const busyUpdates: {
     currentValue?: number | null;
     detail?: string;
+    label?: string;
     totalValue?: number | null;
   }[] = [];
   const createVolumeInputs: {
@@ -282,6 +284,12 @@ const createActionRuntimeHarness = (
           summary: importSummary,
           currentBytes: 1024,
           currentTotalBytes: 2048,
+          metrics: {
+            totalFiles: 3,
+            totalDirectories: 2,
+            totalBytes: 4096,
+            transferredBytes: 1536,
+          },
         });
         return importSummary;
       },
@@ -298,6 +306,12 @@ const createActionRuntimeHarness = (
           summary: exportSummary,
           currentBytes: 512,
           currentTotalBytes: 2048,
+          metrics: {
+            totalFiles: 1,
+            totalDirectories: 0,
+            totalBytes: 4096,
+            transferredBytes: 2560,
+          },
         });
         return exportSummary;
       },
@@ -612,9 +626,10 @@ describe('ui action runtime', () => {
     ]);
     expect(importHarness.busyUpdates).toEqual([
       {
+        label: 'Import file report.txt',
         detail: 'Importing C:\\imports\\report.txt',
-        currentValue: 1024,
-        totalValue: 2048,
+        currentValue: 1536,
+        totalValue: 4096,
       },
     ]);
     expect(importHarness.notifications).toContainEqual({
@@ -663,9 +678,10 @@ describe('ui action runtime', () => {
     ]);
     expect(exportHarness.busyUpdates).toEqual([
       {
+        label: 'Export file report.txt',
         detail: 'Exporting /reports/report.txt -> C:\\exports\\report.txt',
-        currentValue: 512,
-        totalValue: 2048,
+        currentValue: 2560,
+        totalValue: 4096,
       },
     ]);
     expect(exportHarness.notifications).toContainEqual({
