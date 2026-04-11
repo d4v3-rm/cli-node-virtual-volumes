@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.1.0 - 2026-04-16
+
+- feat: enrich import and export status progress (`4dbcb85`)
+- feat: edit volume metadata from the dashboard (`7527ac0`)
+- fix: batch stale entry cleanup for large imports (`0d9ff2b`)
+
 ## 2.0.2 - 2026-04-16
 
 - fix: detect latest reachable release base (`5dc06fd`)
