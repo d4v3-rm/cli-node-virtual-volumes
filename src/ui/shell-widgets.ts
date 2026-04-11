@@ -94,7 +94,7 @@ export const buildShellWidgetSpecs = (theme: ThemePalette): ShellWidgetSpecs => 
     top: 3,
     left: '62%',
     width: '38%',
-    bottom: 13,
+    bottom: 14,
     label: ' Inspector ',
     style: {
       bg: theme.panelInspector,
@@ -126,7 +126,7 @@ export const buildShellWidgetSpecs = (theme: ThemePalette): ShellWidgetSpecs => 
     },
   },
   shortcutsBox: createPanelOptions(theme, {
-    height: 9,
+    height: 10,
     bottom: 4,
     left: '62%',
     width: '38%',

@@ -12,6 +12,7 @@ export type ShellHotkeyAction =
   | 'openSelected'
   | 'refresh'
   | 'createVolume'
+  | 'editVolume'
   | 'deleteVolume'
   | 'createFolder'
   | 'import'
@@ -53,6 +54,7 @@ const SHELL_HOTKEY_BINDINGS: ShellHotkeyBinding[] = [
   { action: 'openSelected', keys: ['right', 'enter', 'o'], scope: 'globalIdle' },
   { action: 'refresh', keys: ['r'], scope: 'globalIdle' },
   { action: 'createVolume', keys: ['n'], scope: 'dashboard' },
+  { action: 'editVolume', keys: ['m'], scope: 'dashboard' },
   { action: 'deleteVolume', keys: ['x'], scope: 'dashboard' },
   { action: 'createFolder', keys: ['c'], scope: 'explorer' },
   { action: 'import', keys: ['i'], scope: 'explorer' },
@@ -69,9 +71,9 @@ const SHELL_SHORTCUT_LINES: Record<ShellScreenMode, string[]> = {
     '[PGUP/PGDN] Page volumes',
     '[HOME/END] Jump list bounds',
     '[N] New volume',
+    '[M] Edit volume',
     '[X] Delete volume',
-    '[R] Refresh   [?] Help',
-    '[Q] Quit',
+    '[R] Refresh   [?] Help   [Q] Quit',
   ],
   explorer: [
     '[UP/DOWN] Select entry',

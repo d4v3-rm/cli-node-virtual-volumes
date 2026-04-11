@@ -8,6 +8,7 @@ import type {
 import {
   getCreateFolderAction,
   getCreatedVolumeSelectionIndex,
+  getEditVolumeAction,
   getDeleteEntryAction,
   getDeleteVolumeAction,
   getExportAction,
@@ -213,6 +214,16 @@ describe('ui action controller helpers', () => {
   });
 
   it('guards delete-volume and preview flows with user-facing outcomes', () => {
+    expect(getEditVolumeAction([], 0)).toEqual({
+      kind: 'notify',
+      message: 'No volume selected.',
+    });
+
+    expect(getEditVolumeAction(volumes, 0)).toEqual({
+      kind: 'ready',
+      volume: volumes[0],
+    });
+
     expect(getDeleteVolumeAction([], 0)).toEqual({
       kind: 'notify',
       message: 'No volume selected.',

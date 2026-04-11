@@ -118,6 +118,11 @@ export interface CreateVolumeInput {
   quotaBytes?: number;
 }
 
+export interface UpdateVolumeMetadataInput {
+  name: string;
+  description?: string;
+}
+
 export interface ImportHostPathsInput {
   destinationPath: string;
   hostPaths: string[];

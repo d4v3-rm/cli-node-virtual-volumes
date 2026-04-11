@@ -43,6 +43,7 @@ import type {
   VolumeRecord,
   VolumeRestoreResult,
   VolumeState,
+  UpdateVolumeMetadataInput,
 } from '../domain/types.js';
 import { BlobStore } from '../storage/blob-store.js';
 import type { SqliteVolumeDatabase } from '../storage/sqlite-volume.js';
@@ -79,6 +80,7 @@ interface ExportTraversalContext {
 
 type AuditEventType =
   | 'volume.create'
+  | 'volume.update'
   | 'volume.delete'
   | 'volume.backup'
   | 'volume.restore'
@@ -151,6 +153,54 @@ export class VolumeService {
         });
 
         return record.manifest;
+      },
+      (manifest) => ({
+        volumeId: manifest.id,
+        volumeName: manifest.name,
+        revision: manifest.revision,
+      }),
+    );
+  }
+
+  public async updateVolumeMetadata(
+    volumeId: string,
+    input: UpdateVolumeMetadataInput,
+  ): Promise<VolumeManifest> {
+    return this.runAuditedOperation(
+      {
+        eventType: 'volume.update',
+        resourceType: 'volume',
+        volumeId,
+        details: {
+          requestedName: input.name.trim(),
+        },
+      },
+      async () => {
+        const name = input.name.trim();
+        if (name.length === 0) {
+          throw new VolumeError('INVALID_NAME', 'Volume name cannot be empty.');
+        }
+
+        const manifest = await this.repository.mutateVolume(
+          volumeId,
+          (record) => {
+            record.manifest.name = name;
+            record.manifest.description = input.description?.trim() ?? '';
+            return record.manifest;
+          },
+          'volume.update',
+        );
+
+        this.logger.info(
+          this.sanitizeObservabilityPayload({
+            volumeId: manifest.id,
+            volumeName: manifest.name,
+            revision: manifest.revision,
+          }),
+          'Volume metadata updated.',
+        );
+
+        return manifest;
       },
       (manifest) => ({
         volumeId: manifest.id,

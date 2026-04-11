@@ -17,6 +17,7 @@ import {
 import {
   runCreateFolderWizard,
   runCreateVolumeWizard,
+  runEditSelectedVolumeWizard,
   runDeleteSelectedEntry,
   runDeleteSelectedVolume,
   runExportWizard,
@@ -416,6 +417,9 @@ export class TerminalApp {
         return;
       case 'createVolume':
         void this.createVolumeWizard();
+        return;
+      case 'editVolume':
+        void this.editSelectedVolume();
         return;
       case 'deleteVolume':
         void this.deleteSelectedVolume();
@@ -826,6 +830,10 @@ export class TerminalApp {
 
   private async createFolderWizard(): Promise<void> {
     await runCreateFolderWizard(this.getActionRuntime());
+  }
+
+  private async editSelectedVolume(): Promise<void> {
+    await runEditSelectedVolumeWizard(this.getActionRuntime());
   }
 
   private async importWizard(): Promise<void> {

@@ -6,6 +6,8 @@ import {
   buildCreateFolderSuccessMessage,
   buildCreateVolumePrompts,
   buildCreateVolumeSuccessMessage,
+  buildEditVolumePrompts,
+  buildEditVolumeSuccessMessage,
   buildDeleteEntryConfirmation,
   buildDeleteEntrySuccessMessage,
   buildDeleteVolumeConfirmation,
@@ -61,6 +63,28 @@ describe('ui action presenters', () => {
 
   it('builds create, move, and delete action copy', () => {
     expect(buildCreateVolumeSuccessMessage('Finance')).toBe('Volume "Finance" created.');
+    expect(
+      buildEditVolumePrompts({
+        name: 'Finance',
+        description: 'Quarter close workspace',
+      }),
+    ).toEqual({
+      name: {
+        title: 'Edit Volume',
+        description: 'Volume name',
+        initialValue: 'Finance',
+        footer: 'Enter saves. Esc cancels.',
+      },
+      description: {
+        title: 'Edit Volume',
+        description: 'Optional description',
+        initialValue: 'Quarter close workspace',
+        footer: 'Enter saves. Esc cancels.',
+      },
+    });
+    expect(buildEditVolumeSuccessMessage('Finance 2026')).toBe(
+      'Volume "Finance 2026" updated.',
+    );
     expect(buildCreateFolderPrompt('/reports').description).toBe('New folder inside /reports');
     expect(buildCreateFolderSuccessMessage('archive')).toBe('Folder "archive" created.');
 
@@ -146,6 +170,7 @@ describe('ui action presenters', () => {
 
     const help = buildHelpOverlayOptions();
     expect(help.title).toBe('Help');
+    expect(help.content).toContain('M: edit selected volume name and description');
     expect(help.content).toContain('Host Import Modal');
     expect(help.content).toContain('Enter or E: export into the current host folder');
 

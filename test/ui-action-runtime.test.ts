@@ -12,6 +12,7 @@ import type {
 import {
   runCreateFolderWizard,
   runCreateVolumeWizard,
+  runEditSelectedVolumeWizard,
   runDeleteSelectedEntry,
   runDeleteSelectedVolume,
   runExportWizard,
@@ -184,6 +185,11 @@ const createActionRuntimeHarness = (
     detail?: string;
     label: string;
   }[];
+  updateVolumeCalls: {
+    description?: string;
+    name: string;
+    volumeId: string;
+  }[];
 } => {
   const notifications: { detail?: string; message: string; tone: string }[] = [];
   const taskCalls: { detail?: string; label: string }[] = [];
@@ -218,6 +224,11 @@ const createActionRuntimeHarness = (
   const exportCalls: {
     destinationHostDirectory: string;
     sourcePath: string;
+    volumeId: string;
+  }[] = [];
+  const updateVolumeCalls: {
+    description?: string;
+    name: string;
     volumeId: string;
   }[] = [];
   const moveCalls: {
@@ -301,6 +312,19 @@ const createActionRuntimeHarness = (
       deleteVolume: (volumeId) => {
         deleteVolumeCalls.push(volumeId);
         return Promise.resolve();
+      },
+      updateVolumeMetadata: (volumeId, input) => {
+        updateVolumeCalls.push({ volumeId, ...input });
+        const currentVolume =
+          runtime.volumes.find((volume) => volume.id === volumeId) ?? sampleVolume;
+
+        return Promise.resolve({
+          ...currentVolume,
+          name: input.name,
+          description: input.description ?? '',
+          revision: currentVolume.revision + 1,
+          updatedAt: '2026-04-03T09:00:00.000Z',
+        });
       },
       previewFile: (volumeId, sourcePath) => {
         previewCalls.push({ volumeId, sourcePath });
@@ -389,6 +413,7 @@ const createActionRuntimeHarness = (
       runtime.volumes = volumes;
     },
     taskCalls,
+    updateVolumeCalls,
   };
 };
 
@@ -441,6 +466,46 @@ describe('ui action runtime', () => {
       message: 'Volume "Roadmap" created.',
       detail: undefined,
     });
+  });
+
+  it('updates the selected volume name and description through the dashboard wizard', async () => {
+    const harness = createActionRuntimeHarness({
+      promptValues: ['Finance FY26', 'Year-end workspace'],
+      selectedVolumeIndex: 0,
+      volumes: [sampleVolume],
+    });
+
+    harness.setVolumes([
+      {
+        ...sampleVolume,
+        name: 'Finance FY26',
+        description: 'Year-end workspace',
+        revision: sampleVolume.revision + 1,
+      },
+    ]);
+
+    await runEditSelectedVolumeWizard(harness.runtime);
+
+    expect(harness.updateVolumeCalls).toEqual([
+      {
+        volumeId: 'volume-1',
+        name: 'Finance FY26',
+        description: 'Year-end workspace',
+      },
+    ]);
+    expect(harness.taskCalls).toContainEqual({
+      label: 'Updating volume',
+      detail: undefined,
+    });
+    expect(harness.notifications).toContainEqual({
+      tone: 'success',
+      message: 'Volume "Finance FY26" updated.',
+      detail: undefined,
+    });
+    expect(harness.loadVolumesCalls).toBe(1);
+    expect(harness.selectedVolumeAssignments).toEqual([0]);
+    expect(harness.runtime.selectedVolumeIndex).toBe(0);
+    expect(harness.renderCalls).toBe(1);
   });
 
   it('rejects invalid create-volume quota input before running the task', async () => {

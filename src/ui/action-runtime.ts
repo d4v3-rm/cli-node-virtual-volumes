@@ -16,6 +16,7 @@ import type { ToastTone } from './runtime-state.js';
 import {
   getCreateFolderAction,
   getCreatedVolumeSelectionIndex,
+  getEditVolumeAction,
   getDeleteEntryAction,
   getDeleteVolumeAction,
   getExportAction,
@@ -29,6 +30,8 @@ import {
   buildCreateFolderSuccessMessage,
   buildCreateVolumePrompts,
   buildCreateVolumeSuccessMessage,
+  buildEditVolumePrompts,
+  buildEditVolumeSuccessMessage,
   buildDeleteEntryConfirmation,
   buildDeleteEntrySuccessMessage,
   buildDeleteVolumeConfirmation,
@@ -58,6 +61,7 @@ type ActionRuntimeVolumeService = Pick<
   | 'importHostPaths'
   | 'moveEntry'
   | 'previewFile'
+  | 'updateVolumeMetadata'
 >;
 
 export interface ActionRuntime {
@@ -199,6 +203,44 @@ export const runCreateFolderWizard = async (runtime: ActionRuntime): Promise<voi
     action.refreshRequest.targetPath,
     action.refreshRequest.selectionIndex,
   );
+};
+
+export const runEditSelectedVolumeWizard = async (runtime: ActionRuntime): Promise<void> => {
+  const action = resolveReadyAction(
+    runtime,
+    getEditVolumeAction(runtime.volumes, runtime.selectedVolumeIndex),
+  );
+  if (!action) {
+    return;
+  }
+
+  const prompts = buildEditVolumePrompts(action.volume);
+  const name = await runtime.promptValue(prompts.name);
+  if (name === null) {
+    return;
+  }
+
+  const description = await runtime.promptValue(prompts.description);
+  if (description === null) {
+    return;
+  }
+
+  const updatedVolume = await runtime.runTask('Updating volume', () =>
+    runtime.volumeService.updateVolumeMetadata(action.volume.id, {
+      name,
+      description,
+    }),
+  );
+  if (!updatedVolume) {
+    return;
+  }
+
+  runtime.notify('success', buildEditVolumeSuccessMessage(updatedVolume.name));
+  await runtime.loadVolumes();
+  runtime.setSelectedVolumeIndex(
+    getCreatedVolumeSelectionIndex(runtime.getVolumes(), updatedVolume.id),
+  );
+  runtime.render();
 };
 
 export const runImportWizard = async (runtime: ActionRuntime): Promise<void> => {

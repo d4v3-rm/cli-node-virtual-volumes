@@ -187,6 +187,29 @@ export const parseVolumeQuotaInput = (
 export const buildCreateVolumeSuccessMessage = (volumeName: string): string =>
   `Volume "${volumeName}" created.`;
 
+export const buildEditVolumePrompts = (
+  volume: Pick<VolumeManifest, 'description' | 'name'>,
+): {
+  description: PromptOverlayOptions;
+  name: PromptOverlayOptions;
+} => ({
+  name: {
+    title: 'Edit Volume',
+    description: 'Volume name',
+    initialValue: volume.name,
+    footer: 'Enter saves. Esc cancels.',
+  },
+  description: {
+    title: 'Edit Volume',
+    description: 'Optional description',
+    initialValue: volume.description,
+    footer: 'Enter saves. Esc cancels.',
+  },
+});
+
+export const buildEditVolumeSuccessMessage = (volumeName: string): string =>
+  `Volume "${volumeName}" updated.`;
+
 export const buildCreateFolderPrompt = (currentPath: string): PromptOverlayOptions => ({
   title: 'Create Folder',
   description: `New folder inside ${currentPath}`,
@@ -287,6 +310,7 @@ export const buildHelpOverlayOptions = (): ScrollableOverlayOptions => ({
     'Up/Down: move selection',
     'Enter or O: open selected volume',
     'N: create volume',
+    'M: edit selected volume name and description',
     'X: delete volume',
     'R: refresh volumes',
     '? : help',

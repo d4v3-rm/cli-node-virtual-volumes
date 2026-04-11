@@ -171,7 +171,10 @@ describe('ui shell panels', () => {
 
   it('builds shortcuts content for both shells', () => {
     expect(buildShortcutsPanelContent({ mode: 'dashboard', width: 80 })).toContain(
-      '[N] New volume',
+      '[M] Edit volume',
+    );
+    expect(buildShortcutsPanelContent({ mode: 'dashboard', width: 80 })).toContain(
+      '[Q] Quit',
     );
     expect(buildShortcutsPanelContent({ mode: 'explorer', width: 80 })).toContain(
       '[I] Import [E] Export',

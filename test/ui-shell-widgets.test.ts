@@ -63,6 +63,7 @@ describe('ui shell widget specs', () => {
     });
 
     expect(specs.shortcutsBox).toMatchObject({
+      height: 10,
       label: ' Keyboard ',
       style: {
         bg: THEME.panelShortcuts,

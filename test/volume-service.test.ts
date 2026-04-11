@@ -189,6 +189,39 @@ describe('VolumeService', () => {
     expect(snapshot.volume.entryCount).toBe(2);
   });
 
+  it('updates volume metadata and rejects empty names', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({
+      name: 'Contracts',
+      description: 'Legal docs',
+    });
+
+    const updatedVolume = await runtime.volumeService.updateVolumeMetadata(volume.id, {
+      name: 'Contracts FY26',
+      description: 'Renewed legal archive',
+    });
+    const volumes = await runtime.volumeService.listVolumes();
+
+    expect(updatedVolume.name).toBe('Contracts FY26');
+    expect(updatedVolume.description).toBe('Renewed legal archive');
+    expect(updatedVolume.revision).toBeGreaterThan(volume.revision);
+    expect(volumes[0]).toMatchObject({
+      id: volume.id,
+      name: 'Contracts FY26',
+      description: 'Renewed legal archive',
+    });
+
+    await expect(
+      runtime.volumeService.updateVolumeMetadata(volume.id, {
+        name: '   ',
+        description: 'still invalid',
+      }),
+    ).rejects.toMatchObject({
+      code: 'INVALID_NAME',
+      message: 'Volume name cannot be empty.',
+    });
+  });
+
   it('writes text files through the Node API and previews them', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Notes' });

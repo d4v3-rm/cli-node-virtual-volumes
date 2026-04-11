@@ -60,6 +60,10 @@ export type DeleteVolumeAction =
   | { kind: 'notify'; message: string }
   | { kind: 'ready'; volume: VolumeManifest };
 
+export type EditVolumeAction =
+  | { kind: 'notify'; message: string }
+  | { kind: 'ready'; volume: VolumeManifest };
+
 const getExplorerRefreshRequest = (
   context: ExplorerActionContext,
 ): ExplorerOpenRequest | null => {
@@ -182,6 +186,21 @@ export const getDeleteVolumeAction = (
   volumes: VolumeManifest[],
   selectedVolumeIndex: number,
 ): DeleteVolumeAction => {
+  const selectedVolume = getSelectedVolume(volumes, selectedVolumeIndex);
+  if (!selectedVolume) {
+    return { kind: 'notify', message: 'No volume selected.' };
+  }
+
+  return {
+    kind: 'ready',
+    volume: selectedVolume,
+  };
+};
+
+export const getEditVolumeAction = (
+  volumes: VolumeManifest[],
+  selectedVolumeIndex: number,
+): EditVolumeAction => {
   const selectedVolume = getSelectedVolume(volumes, selectedVolumeIndex);
   if (!selectedVolume) {
     return { kind: 'notify', message: 'No volume selected.' };

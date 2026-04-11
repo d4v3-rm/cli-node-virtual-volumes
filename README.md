@@ -195,6 +195,7 @@ Operational notes:
 | `Home / End` | First / last volume |
 | `Right`, `Enter`, `O` | Open selected volume |
 | `N` | Create volume |
+| `M` | Edit selected volume |
 | `X` | Delete selected volume |
 | `R` | Refresh |
 | `?` | Help |
