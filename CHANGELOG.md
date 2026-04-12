@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.1.1 - 2026-04-16
+
+- fix: harden smoke scripts against build artifact churn (`bd430a3`)
+
 ## 2.1.0 - 2026-04-16
 
 - feat: enrich import and export status progress (`4dbcb85`)
