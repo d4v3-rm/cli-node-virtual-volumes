@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { open } from 'sqlite';
@@ -31,6 +32,32 @@ const pathExists = async (targetPath) => {
 
 const readJson = async (filePath) =>
   JSON.parse(await fs.readFile(filePath, 'utf8'));
+
+const sleep = (ms) => delay(ms);
+
+const copyDistSnapshot = async (options) => {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt <= options.timeoutMs) {
+    if ((await pathExists(distCliPath)) && (await pathExists(distLibPath))) {
+      try {
+        await Promise.all([
+          fs.copyFile(distCliPath, options.cliPath),
+          fs.copyFile(distLibPath, options.libPath),
+        ]);
+        return;
+      } catch (error) {
+        if (error?.code !== 'ENOENT') {
+          throw error;
+        }
+      }
+    }
+
+    await sleep(options.pollIntervalMs);
+  }
+
+  throw new Error('Run npm run build before npm run smoke:ops.');
+};
 
 const tamperBlobSize = async (databasePath, entryName, deltaBytes) => {
   const database = await open({
@@ -65,10 +92,11 @@ const tamperBlobSize = async (databasePath, entryName, deltaBytes) => {
 };
 
 const runCli = (args, runtimePaths) => {
+  const cliEntryPath = runtimePaths.cliPath ?? distCliPath;
   const result = spawnSync(
     process.execPath,
     [
-      distCliPath,
+      cliEntryPath,
       '--data-dir',
       runtimePaths.dataDir,
       '--log-dir',
@@ -151,29 +179,43 @@ const assertArtifactEnvelope = (artifact, expectedCommand, expectedVersion) => {
 let sandboxRoot = null;
 let runtime = null;
 let validationRuntime = null;
+let shouldCleanupSandbox = true;
 
 try {
   const packageJson = await readJson(packageJsonPath);
-  assert(
-    (await pathExists(distCliPath)) && (await pathExists(distLibPath)),
-    'Run npm run build before npm run smoke:ops.',
-  );
-
-  const { createRuntime } = await import(pathToFileURL(distLibPath).href);
 
   sandboxRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), 'virtual-volumes-ops-smoke-'),
   );
 
+  const smokeDistDir = path.join(sandboxRoot, 'dist-snapshot');
+  const smokeCliPath = path.join(smokeDistDir, 'index.js');
+  const smokeLibPath = path.join(smokeDistDir, 'lib.js');
+  const smokeNodeModulesPath = path.join(sandboxRoot, 'node_modules');
   const runtimePaths = {
+    cliPath: smokeCliPath,
     dataDir: path.join(sandboxRoot, 'data'),
     logDir: path.join(sandboxRoot, 'logs'),
   };
   const backupsDir = path.join(sandboxRoot, 'backups');
   const reportsDir = path.join(sandboxRoot, 'reports');
 
+  await fs.mkdir(smokeDistDir, { recursive: true });
   await fs.mkdir(backupsDir, { recursive: true });
   await fs.mkdir(reportsDir, { recursive: true });
+  await fs.symlink(
+    path.join(rootDir, 'node_modules'),
+    smokeNodeModulesPath,
+    process.platform === 'win32' ? 'junction' : 'dir',
+  );
+  await copyDistSnapshot({
+    cliPath: smokeCliPath,
+    libPath: smokeLibPath,
+    timeoutMs: 15000,
+    pollIntervalMs: 100,
+  });
+
+  const { createRuntime } = await import(pathToFileURL(smokeLibPath).href);
 
   runtime = await createRuntime({
     dataDir: runtimePaths.dataDir,
@@ -657,6 +699,7 @@ try {
 } catch (error) {
   const message = error instanceof Error ? error.message : 'Unknown smoke failure.';
   if (sandboxRoot) {
+    shouldCleanupSandbox = false;
     process.stderr.write(`[ops-smoke] sandbox preserved at ${sandboxRoot}\n`);
   }
   process.stderr.write(`${message}\n`);
@@ -668,7 +711,7 @@ try {
   if (runtime) {
     await runtime.close().catch(() => undefined);
   }
-  if (sandboxRoot) {
+  if (sandboxRoot && shouldCleanupSandbox) {
     await fs.rm(sandboxRoot, { recursive: true, force: true }).catch(() => undefined);
   }
 }

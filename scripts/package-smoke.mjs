@@ -173,6 +173,7 @@ const resolveTarballPath = async () => {
 };
 
 let sandboxRoot = null;
+let shouldCleanupSandbox = true;
 
 try {
   const packageJson = await readJson(packageJsonPath);
@@ -691,12 +692,13 @@ try {
   const message =
     error instanceof Error ? error.message : 'Unknown packaged smoke failure.';
   if (sandboxRoot) {
+    shouldCleanupSandbox = false;
     process.stderr.write(`[package-smoke] sandbox preserved at ${sandboxRoot}\n`);
   }
   process.stderr.write(`${message}\n`);
   process.exitCode = 1;
 } finally {
-  if (sandboxRoot) {
+  if (sandboxRoot && shouldCleanupSandbox) {
     await fs.rm(sandboxRoot, { recursive: true, force: true }).catch(() => undefined);
   }
 }
