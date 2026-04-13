@@ -63,4 +63,17 @@ describe('loadAppConfig', () => {
     expect(fromOverrides.redactSensitiveDetails).toBe(true);
     expect(fromOverrides.supportBundleLogTailLines).toBe(80);
   });
+
+  it('allows runtime overrides to disable log retention configured through the environment', () => {
+    const config = loadAppConfig(
+      {
+        logRetentionDays: null,
+      },
+      {
+        VOLUME_LOG_RETENTION_DAYS: '14',
+      },
+    );
+
+    expect(config.logRetentionDays).toBeNull();
+  });
 });

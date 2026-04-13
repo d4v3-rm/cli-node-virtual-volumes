@@ -8,6 +8,10 @@ const DEFAULT_PREVIEW_BYTES = 4 * 1024;
 const DEFAULT_SUPPORT_BUNDLE_LOG_TAIL_LINES = 400;
 
 const emptyStringToUndefined = (value: unknown): unknown => {
+  if (value === null) {
+    return undefined;
+  }
+
   if (typeof value !== 'string') {
     return value;
   }
@@ -161,7 +165,9 @@ export const loadAppConfig = (
     VOLUME_LOG_DIR: overrides.logDir ?? inputEnvironment.VOLUME_LOG_DIR,
     VOLUME_LOG_LEVEL: overrides.logLevel ?? inputEnvironment.VOLUME_LOG_LEVEL,
     VOLUME_LOG_RETENTION_DAYS:
-      overrides.logRetentionDays ?? inputEnvironment.VOLUME_LOG_RETENTION_DAYS,
+      overrides.logRetentionDays !== undefined
+        ? overrides.logRetentionDays
+        : inputEnvironment.VOLUME_LOG_RETENTION_DAYS,
     VOLUME_REDACT_SENSITIVE_DETAILS:
       overrides.redactSensitiveDetails ?? inputEnvironment.VOLUME_REDACT_SENSITIVE_DETAILS,
     VOLUME_LOG_TO_STDOUT:
