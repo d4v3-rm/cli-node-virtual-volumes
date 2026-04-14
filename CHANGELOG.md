@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.1.2 - 2026-04-16
+
+- test: cover host input and browser defaults (`2c7f16a`)
+- test: remove timing-based log waits (`22102db`)
+- fix: allow clearing log retention overrides (`0474a8f`)
+
 ## 2.1.1 - 2026-04-16
 
 - fix: harden smoke scripts against build artifact churn (`bd430a3`)
