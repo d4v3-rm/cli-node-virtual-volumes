@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  getDefaultHostPath,
   getParentHostPath,
   listHostBrowserSnapshot,
 } from '../src/ui/host-browser.js';
@@ -20,6 +21,10 @@ afterEach(async () => {
 });
 
 describe('host browser', () => {
+  it('uses the current working directory as the default host path when it exists', async () => {
+    await expect(getDefaultHostPath()).resolves.toBe(path.resolve(process.cwd()));
+  });
+
   it('lists directories before files and includes a parent entry when available', async () => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-host-browser-'));
     sandboxes.push(sandboxRoot);
@@ -47,6 +52,8 @@ describe('host browser', () => {
     sandboxes.push(sandboxRoot);
 
     const resolvedRoot = path.resolve(sandboxRoot);
+    expect(getParentHostPath(null)).toBeNull();
+
     const parentPath = getParentHostPath(resolvedRoot);
     const filesystemRoot = path.parse(resolvedRoot).root;
 
