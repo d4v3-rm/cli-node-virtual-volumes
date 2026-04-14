@@ -20,6 +20,7 @@ import type {
 import { ensureDirectory, pathExists, readJsonFile } from '../utils/fs.js';
 import { BlobStore } from './blob-store.js';
 import {
+  type SqliteVolumeDatabase,
   VOLUME_DATABASE_EXTENSION,
   type VolumeEntryRow,
   type VolumeManifestRow,
@@ -371,6 +372,48 @@ export class VolumeRepository {
     );
   }
 
+  public async mutateVolume<T>(
+    volumeId: string,
+    mutate: (
+      record: VolumeRecord,
+      database: SqliteVolumeDatabase,
+    ) => Promise<T> | T,
+  ): Promise<T> {
+    const databasePath = this.getVolumeDatabasePath(volumeId);
+    if (!(await pathExists(databasePath))) {
+      throw new VolumeError('NOT_FOUND', `Volume ${volumeId} does not exist.`, {
+        volumeId,
+      });
+    }
+
+    return withVolumeDatabase(databasePath, async (database) => {
+      await database.exec('BEGIN IMMEDIATE TRANSACTION');
+
+      try {
+        const record = await this.loadVolumeFromDatabase(database, volumeId);
+        const result = await mutate(record, database);
+        await this.persistVolumeToDatabase(database, record);
+        await database.exec('COMMIT');
+
+        this.volumeCache.set(record.manifest.id, record);
+        this.logger.debug(
+          {
+            volumeId: record.manifest.id,
+            entryCount: record.manifest.entryCount,
+            logicalUsedBytes: record.manifest.logicalUsedBytes,
+            revision: record.manifest.revision,
+          },
+          'Volume mutated transactionally.',
+        );
+
+        return result;
+      } catch (error) {
+        await database.exec('ROLLBACK').catch(() => undefined);
+        throw error;
+      }
+    });
+  }
+
   public async runDoctor(volumeId?: string): Promise<StorageDoctorReport> {
     const manifests = volumeId
       ? [(await this.loadVolume(volumeId)).manifest]
@@ -713,5 +756,188 @@ export class VolumeRepository {
       issueCount: issues.length,
       issues,
     };
+  }
+
+  private async loadVolumeFromDatabase(
+    database: SqliteVolumeDatabase,
+    volumeId: string,
+  ): Promise<VolumeRecord> {
+    const manifestRow = await database.get<VolumeManifestRow>(
+      `SELECT
+         id,
+         name,
+         description,
+         quota_bytes,
+         logical_used_bytes,
+         entry_count,
+         revision,
+         created_at,
+         updated_at
+       FROM manifest
+       LIMIT 1`,
+    );
+
+    if (!manifestRow) {
+      throw new VolumeError('NOT_FOUND', `Volume ${volumeId} does not exist.`, {
+        volumeId,
+      });
+    }
+
+    const entryRows = await database.all<VolumeEntryRow[]>(
+      `SELECT
+         id,
+         kind,
+         name,
+         parent_id,
+         created_at,
+         updated_at,
+         size,
+         content_ref,
+         imported_from_host_path
+       FROM entries`,
+    );
+
+    return {
+      manifest: this.toManifest(manifestRow),
+      state: this.toState(entryRows, volumeId),
+    };
+  }
+
+  private async persistVolumeToDatabase(
+    database: SqliteVolumeDatabase,
+    record: VolumeRecord,
+  ): Promise<void> {
+    const now = new Date().toISOString();
+    const expectedRevision = record.manifest.revision ?? 0;
+    let nextRevision: number;
+
+    record.manifest.logicalUsedBytes = this.getLogicalUsedBytes(record.state);
+    record.manifest.entryCount = Object.keys(record.state.entries).length;
+    record.manifest.updatedAt = now;
+
+    const persistedManifest = await database.get<{
+      id: string;
+      revision: number;
+    }>(
+      `SELECT
+         id,
+         revision
+       FROM manifest
+       LIMIT 1`,
+    );
+
+    if (persistedManifest) {
+      if (persistedManifest.id !== record.manifest.id) {
+        throw new VolumeError(
+          'CONCURRENT_MODIFICATION',
+          `Volume ${record.manifest.id} no longer matches the persisted manifest.`,
+          {
+            volumeId: record.manifest.id,
+            persistedVolumeId: persistedManifest.id,
+          },
+        );
+      }
+
+      if (persistedManifest.revision !== expectedRevision) {
+        throw new VolumeError(
+          'CONCURRENT_MODIFICATION',
+          `Volume ${record.manifest.id} was modified concurrently. Reload the volume and retry.`,
+          {
+            volumeId: record.manifest.id,
+            expectedRevision,
+            actualRevision: persistedManifest.revision,
+          },
+        );
+      }
+
+      nextRevision = persistedManifest.revision + 1;
+    } else if (expectedRevision !== 0) {
+      throw new VolumeError(
+        'CONCURRENT_MODIFICATION',
+        `Volume ${record.manifest.id} could not be initialized with revision ${expectedRevision}.`,
+        {
+          volumeId: record.manifest.id,
+          expectedRevision,
+        },
+      );
+    } else {
+      nextRevision = 1;
+    }
+
+    await database.exec('DELETE FROM manifest');
+    await database.run(
+      `INSERT INTO manifest (
+         id,
+         name,
+         description,
+         quota_bytes,
+         logical_used_bytes,
+         entry_count,
+         revision,
+         created_at,
+         updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      record.manifest.id,
+      record.manifest.name,
+      record.manifest.description,
+      record.manifest.quotaBytes,
+      record.manifest.logicalUsedBytes,
+      record.manifest.entryCount,
+      nextRevision,
+      record.manifest.createdAt,
+      record.manifest.updatedAt,
+    );
+
+    await database.exec('DELETE FROM entries');
+
+    for (const entry of Object.values(record.state.entries)) {
+      if (entry.kind === 'directory') {
+        await database.run(
+          `INSERT INTO entries (
+             id,
+             kind,
+             name,
+             parent_id,
+             created_at,
+             updated_at,
+             size,
+             content_ref,
+             imported_from_host_path
+           ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL)`,
+          entry.id,
+          entry.kind,
+          entry.name,
+          entry.parentId,
+          entry.createdAt,
+          entry.updatedAt,
+        );
+        continue;
+      }
+
+      await database.run(
+        `INSERT INTO entries (
+           id,
+           kind,
+           name,
+           parent_id,
+           created_at,
+           updated_at,
+           size,
+           content_ref,
+           imported_from_host_path
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        entry.id,
+        entry.kind,
+        entry.name,
+        entry.parentId,
+        entry.createdAt,
+        entry.updatedAt,
+        entry.size,
+        entry.contentRef,
+        entry.importedFromHostPath,
+      );
+    }
+
+    record.manifest.revision = nextRevision;
   }
 }
