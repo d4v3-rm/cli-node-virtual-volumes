@@ -7,6 +7,7 @@ export interface VolumeManifest {
   quotaBytes: number;
   logicalUsedBytes: number;
   entryCount: number;
+  revision: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -133,4 +134,38 @@ export interface MoveEntryInput {
   sourcePath: string;
   destinationDirectoryPath: string;
   newName?: string;
+}
+
+export interface StorageDoctorIssue {
+  code:
+    | 'BROKEN_ROOT'
+    | 'DUPLICATE_CHILD_NAME'
+    | 'MANIFEST_ENTRY_COUNT_MISMATCH'
+    | 'MANIFEST_USAGE_MISMATCH'
+    | 'MISSING_BLOB'
+    | 'MISSING_CONTENT_REF'
+    | 'MISSING_PARENT'
+    | 'ORPHAN_BLOB'
+    | 'PARENT_NOT_DIRECTORY';
+  severity: 'error' | 'warn';
+  message: string;
+  contentRef?: string;
+  entryId?: string;
+}
+
+export interface StorageDoctorVolumeReport {
+  volumeId: string;
+  volumeName: string;
+  revision: number;
+  healthy: boolean;
+  issueCount: number;
+  issues: StorageDoctorIssue[];
+}
+
+export interface StorageDoctorReport {
+  generatedAt: string;
+  healthy: boolean;
+  checkedVolumes: number;
+  issueCount: number;
+  volumes: StorageDoctorVolumeReport[];
 }

@@ -21,6 +21,7 @@ import type {
   ImportProgress,
   ImportSummary,
   MoveEntryInput,
+  StorageDoctorReport,
   VolumeEntry,
   VolumeManifest,
   VolumeRecord,
@@ -79,6 +80,10 @@ export class VolumeService {
 
   public async deleteVolume(volumeId: string): Promise<void> {
     await this.repository.deleteVolume(volumeId);
+  }
+
+  public async runDoctor(volumeId?: string): Promise<StorageDoctorReport> {
+    return this.repository.runDoctor(volumeId);
   }
 
   public async getExplorerSnapshot(

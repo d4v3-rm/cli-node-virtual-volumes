@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 
 import { createRuntime } from './bootstrap/create-runtime.js';
+import { formatDoctorReport } from './cli/doctor.js';
 import { TerminalApp } from './ui/terminal-app.js';
 
 const main = async (): Promise<void> => {
@@ -15,26 +16,56 @@ const main = async (): Promise<void> => {
       'Mirror logs to the terminal stream (not recommended while the fullscreen UI is active)',
     );
 
-  await program.parseAsync(process.argv);
-
-  const options = program.opts<{
+  const getRuntimeOverrides = (): {
     dataDir?: string;
     logDir?: string;
     logLevel?: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
-    stdoutLogs?: boolean;
-  }>();
-  const logLevelSource = program.getOptionValueSource('logLevel');
-  const stdoutLogsSource = program.getOptionValueSource('stdoutLogs');
+    logToStdout?: boolean;
+  } => {
+    const options = program.opts<{
+      dataDir?: string;
+      logDir?: string;
+      logLevel?: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
+      stdoutLogs?: boolean;
+    }>();
+    const logLevelSource = program.getOptionValueSource('logLevel');
+    const stdoutLogsSource = program.getOptionValueSource('stdoutLogs');
 
-  const runtime = await createRuntime({
-    dataDir: options.dataDir,
-    logDir: options.logDir,
-    logLevel: logLevelSource === 'cli' ? options.logLevel : undefined,
-    logToStdout: stdoutLogsSource === 'cli' ? options.stdoutLogs : undefined,
+    return {
+      dataDir: options.dataDir,
+      logDir: options.logDir,
+      logLevel: logLevelSource === 'cli' ? options.logLevel : undefined,
+      logToStdout: stdoutLogsSource === 'cli' ? options.stdoutLogs : undefined,
+    };
+  };
+
+  program.action(async () => {
+    const runtime = await createRuntime(getRuntimeOverrides());
+    const app = new TerminalApp(runtime);
+    await app.start();
   });
 
-  const app = new TerminalApp(runtime);
-  await app.start();
+  program
+    .command('doctor')
+    .description('Run storage diagnostics across all volumes or a specific volume.')
+    .argument('[volumeId]', 'Diagnose a specific volume by id')
+    .option('--json', 'Output the report as JSON')
+    .action(async (volumeId: string | undefined, options: { json?: boolean }) => {
+      const runtime = await createRuntime(getRuntimeOverrides());
+      const report = await runtime.volumeService.runDoctor(volumeId);
+
+      if (options.json) {
+        console.log(JSON.stringify(report, null, 2));
+      } else {
+        console.log(formatDoctorReport(report));
+      }
+
+      if (!report.healthy) {
+        process.exitCode = 1;
+      }
+    });
+
+  await program.parseAsync(process.argv);
 };
 
 void main().catch((error: unknown) => {

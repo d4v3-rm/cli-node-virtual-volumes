@@ -14,6 +14,9 @@ export type {
   ImportHostPathsInput,
   ImportSummary,
   MoveEntryInput,
+  StorageDoctorIssue,
+  StorageDoctorReport,
+  StorageDoctorVolumeReport,
   VolumeManifest,
 } from './domain/types.js';
 export { formatBytes, formatDateTime } from './utils/formatters.js';

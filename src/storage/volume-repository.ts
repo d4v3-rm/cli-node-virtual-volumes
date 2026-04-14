@@ -9,6 +9,9 @@ import type {
   CreateVolumeInput,
   DirectoryEntry,
   FileEntry,
+  StorageDoctorIssue,
+  StorageDoctorReport,
+  StorageDoctorVolumeReport,
   VolumeEntry,
   VolumeManifest,
   VolumeRecord,
@@ -70,6 +73,7 @@ export class VolumeRepository {
                    quota_bytes,
                    logical_used_bytes,
                    entry_count,
+                   revision,
                    created_at,
                    updated_at
                  FROM manifest
@@ -128,6 +132,7 @@ export class VolumeRepository {
         quotaBytes: input.quotaBytes,
         logicalUsedBytes: 0,
         entryCount: 1,
+        revision: 0,
         createdAt: now,
         updatedAt: now,
       },
@@ -167,6 +172,7 @@ export class VolumeRepository {
            quota_bytes,
            logical_used_bytes,
            entry_count,
+           revision,
            created_at,
            updated_at
          FROM manifest
@@ -209,16 +215,67 @@ export class VolumeRepository {
 
   public async saveVolume(record: VolumeRecord): Promise<void> {
     const now = new Date().toISOString();
+    const expectedRevision = record.manifest.revision ?? 0;
     record.manifest.logicalUsedBytes = this.getLogicalUsedBytes(record.state);
     record.manifest.entryCount = Object.keys(record.state.entries).length;
     record.manifest.updatedAt = now;
 
     const databasePath = this.getVolumeDatabasePath(record.manifest.id);
+    let nextRevision = expectedRevision;
 
     await withVolumeDatabase(databasePath, async (database) => {
       await database.exec('BEGIN IMMEDIATE TRANSACTION');
 
       try {
+        const persistedManifest = await database.get<{
+          id: string;
+          revision: number;
+        }>(
+          `SELECT
+             id,
+             revision
+           FROM manifest
+           LIMIT 1`,
+        );
+
+        if (persistedManifest) {
+          if (persistedManifest.id !== record.manifest.id) {
+            throw new VolumeError(
+              'CONCURRENT_MODIFICATION',
+              `Volume ${record.manifest.id} no longer matches the persisted manifest.`,
+              {
+                volumeId: record.manifest.id,
+                persistedVolumeId: persistedManifest.id,
+              },
+            );
+          }
+
+          if (persistedManifest.revision !== expectedRevision) {
+            throw new VolumeError(
+              'CONCURRENT_MODIFICATION',
+              `Volume ${record.manifest.id} was modified concurrently. Reload the volume and retry.`,
+              {
+                volumeId: record.manifest.id,
+                expectedRevision,
+                actualRevision: persistedManifest.revision,
+              },
+            );
+          }
+
+          nextRevision = persistedManifest.revision + 1;
+        } else if (expectedRevision !== 0) {
+          throw new VolumeError(
+            'CONCURRENT_MODIFICATION',
+            `Volume ${record.manifest.id} could not be initialized with revision ${expectedRevision}.`,
+            {
+              volumeId: record.manifest.id,
+              expectedRevision,
+            },
+          );
+        } else {
+          nextRevision = 1;
+        }
+
         await database.exec('DELETE FROM manifest');
         await database.run(
           `INSERT INTO manifest (
@@ -228,15 +285,17 @@ export class VolumeRepository {
              quota_bytes,
              logical_used_bytes,
              entry_count,
+             revision,
              created_at,
              updated_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           record.manifest.id,
           record.manifest.name,
           record.manifest.description,
           record.manifest.quotaBytes,
           record.manifest.logicalUsedBytes,
           record.manifest.entryCount,
+          nextRevision,
           record.manifest.createdAt,
           record.manifest.updatedAt,
         );
@@ -298,6 +357,7 @@ export class VolumeRepository {
       }
     });
 
+    record.manifest.revision = nextRevision;
     this.volumeCache.set(record.manifest.id, record);
 
     this.logger.debug(
@@ -305,9 +365,31 @@ export class VolumeRepository {
         volumeId: record.manifest.id,
         entryCount: record.manifest.entryCount,
         logicalUsedBytes: record.manifest.logicalUsedBytes,
+        revision: record.manifest.revision,
       },
       'Volume persisted.',
     );
+  }
+
+  public async runDoctor(volumeId?: string): Promise<StorageDoctorReport> {
+    const manifests = volumeId
+      ? [(await this.loadVolume(volumeId)).manifest]
+      : await this.listVolumes();
+    const volumeReports = await Promise.all(
+      manifests.map(async (manifest) => this.inspectVolume(manifest.id)),
+    );
+    const issueCount = volumeReports.reduce(
+      (total, report) => total + report.issueCount,
+      0,
+    );
+
+    return {
+      generatedAt: new Date().toISOString(),
+      healthy: issueCount === 0,
+      checkedVolumes: volumeReports.length,
+      issueCount,
+      volumes: volumeReports,
+    };
   }
 
   public async deleteVolume(volumeId: string): Promise<void> {
@@ -348,6 +430,7 @@ export class VolumeRepository {
       quotaBytes: row.quota_bytes,
       logicalUsedBytes: row.logical_used_bytes,
       entryCount: row.entry_count,
+      revision: row.revision,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -432,6 +515,7 @@ export class VolumeRepository {
 
       try {
         const manifest = await readJsonFile<VolumeManifest>(manifestPath);
+        manifest.revision ??= 0;
         const state = await readJsonFile<VolumeState>(statePath);
         const databasePath = this.getVolumeDatabasePath(manifest.id);
 
@@ -491,5 +575,143 @@ export class VolumeRepository {
       const buffer = await fs.readFile(legacyBlobPath);
       await blobStore.putKnownBuffer(contentRef, buffer);
     }
+  }
+
+  private async inspectVolume(volumeId: string): Promise<StorageDoctorVolumeReport> {
+    const record = await this.loadVolume(volumeId);
+    const issues: StorageDoctorIssue[] = [];
+    const entries = Object.values(record.state.entries);
+    const rootEntry = record.state.entries[record.state.rootId];
+    const referencedBlobRefs = new Set<string>();
+
+    if (rootEntry?.kind !== 'directory') {
+      issues.push({
+        code: 'BROKEN_ROOT',
+        severity: 'error',
+        message: `Volume ${volumeId} does not contain a valid root directory.`,
+        entryId: record.state.rootId,
+      });
+    }
+
+    const siblingNames = new Map<string, string>();
+
+    for (const entry of entries) {
+      if (entry.parentId !== null) {
+        const parentEntry = record.state.entries[entry.parentId];
+
+        if (!parentEntry) {
+          issues.push({
+            code: 'MISSING_PARENT',
+            severity: 'error',
+            message: `Entry ${entry.id} (${entry.name}) references missing parent ${entry.parentId}.`,
+            entryId: entry.id,
+          });
+        } else if (parentEntry.kind !== 'directory') {
+          issues.push({
+            code: 'PARENT_NOT_DIRECTORY',
+            severity: 'error',
+            message: `Entry ${entry.id} (${entry.name}) points to non-directory parent ${entry.parentId}.`,
+            entryId: entry.id,
+          });
+        }
+
+        const siblingKey = `${entry.parentId}:${entry.name}`;
+        const existingEntryId = siblingNames.get(siblingKey);
+        if (existingEntryId && existingEntryId !== entry.id) {
+          issues.push({
+            code: 'DUPLICATE_CHILD_NAME',
+            severity: 'error',
+            message: `Sibling name collision detected for "${entry.name}" under parent ${entry.parentId}.`,
+            entryId: entry.id,
+          });
+        } else {
+          siblingNames.set(siblingKey, entry.id);
+        }
+      }
+
+      if (entry.kind !== 'file') {
+        continue;
+      }
+
+      if (entry.contentRef.length === 0) {
+        issues.push({
+          code: 'MISSING_CONTENT_REF',
+          severity: 'error',
+          message: `File ${entry.id} (${entry.name}) does not reference any blob content.`,
+          entryId: entry.id,
+        });
+        continue;
+      }
+
+      referencedBlobRefs.add(entry.contentRef);
+    }
+
+    const persistedBlobRefs = await withVolumeDatabase(
+      this.getVolumeDatabasePath(volumeId),
+      async (database) => {
+        const blobRows = await database.all<{ content_ref: string }[]>(
+          `SELECT content_ref
+             FROM blobs`,
+        );
+
+        return new Set(blobRows.map((row) => row.content_ref));
+      },
+    );
+
+    for (const entry of entries) {
+      if (entry.kind !== 'file' || entry.contentRef.length === 0) {
+        continue;
+      }
+
+      if (!persistedBlobRefs.has(entry.contentRef)) {
+        issues.push({
+          code: 'MISSING_BLOB',
+          severity: 'error',
+          message: `File ${entry.id} (${entry.name}) references missing blob ${entry.contentRef}.`,
+          contentRef: entry.contentRef,
+          entryId: entry.id,
+        });
+      }
+    }
+
+    for (const persistedBlobRef of persistedBlobRefs) {
+      if (referencedBlobRefs.has(persistedBlobRef)) {
+        continue;
+      }
+
+      issues.push({
+        code: 'ORPHAN_BLOB',
+        severity: 'warn',
+        message: `Blob ${persistedBlobRef} is stored in SQLite but is not referenced by any file entry.`,
+        contentRef: persistedBlobRef,
+      });
+    }
+
+    const logicalUsedBytes = this.getLogicalUsedBytes(record.state);
+    if (logicalUsedBytes !== record.manifest.logicalUsedBytes) {
+      issues.push({
+        code: 'MANIFEST_USAGE_MISMATCH',
+        severity: 'error',
+        message: `Manifest logicalUsedBytes is ${record.manifest.logicalUsedBytes}, but computed usage is ${logicalUsedBytes}.`,
+      });
+    }
+
+    const entryCount = Object.keys(record.state.entries).length;
+    if (entryCount !== record.manifest.entryCount) {
+      issues.push({
+        code: 'MANIFEST_ENTRY_COUNT_MISMATCH',
+        severity: 'error',
+        message: `Manifest entryCount is ${record.manifest.entryCount}, but computed count is ${entryCount}.`,
+      });
+    }
+
+    return {
+      volumeId: record.manifest.id,
+      volumeName: record.manifest.name,
+      revision: record.manifest.revision,
+      healthy: issues.length === 0,
+      issueCount: issues.length,
+      issues,
+    };
   }
 }
