@@ -128,7 +128,7 @@ describe('audit log', () => {
     });
 
     await runtime.volumeService.createVolume({ name: 'Correlation Trace' });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await runtime.close();
 
     const appEntries = await readJsonLogEntries(resolveAppLogFilePath(runtime.config));
     const auditEntries = await readJsonLogEntries(resolveAuditLogFilePath(runtime.config));
@@ -192,7 +192,7 @@ describe('audit log', () => {
       sourcePath: '/import.txt',
       destinationHostDirectory: exportRoot,
     });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await runtime.close();
 
     const auditEntries = await readJsonLogEntries(resolveAuditLogFilePath(runtime.config));
     const appLogRaw = await fs.readFile(resolveAppLogFilePath(runtime.config), 'utf8');
