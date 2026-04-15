@@ -497,20 +497,11 @@ export class VolumeRepository {
     }
 
     await ensureDirectory(path.dirname(absoluteDestinationPath));
-    if (destinationExists) {
-      await this.deleteDatabaseArtifacts(absoluteDestinationPath);
-    }
-
-    const manifest = await withVolumeDatabase(databasePath, async (database) => {
-      const manifestRow = await this.requireManifestRow(database, volumeId);
-
-      await database.get('PRAGMA wal_checkpoint(TRUNCATE)');
-      await database.exec(
-        `VACUUM INTO '${escapeSqliteStringLiteral(absoluteDestinationPath)}'`,
-      );
-
-      return this.toManifest(manifestRow);
-    });
+    const manifest = await this.snapshotVolumeDatabase(
+      databasePath,
+      absoluteDestinationPath,
+      volumeId,
+    );
 
     const backupStats = await fs.stat(absoluteDestinationPath);
     const result: VolumeBackupResult = {
@@ -554,6 +545,7 @@ export class VolumeRepository {
       `restore_${process.pid}_${Date.now()}_${nanoid(6)}${VOLUME_DATABASE_EXTENSION}`,
     );
     let restoredVolumeId: string | null = null;
+    let rollbackSnapshotPath: string | null = null;
 
     try {
       await fs.copyFile(absoluteBackupPath, temporaryRestorePath);
@@ -588,35 +580,94 @@ export class VolumeRepository {
       }
 
       if (targetExists) {
+        rollbackSnapshotPath = path.join(
+          volumesDirectory,
+          `restore_rollback_${process.pid}_${Date.now()}_${nanoid(6)}${VOLUME_DATABASE_EXTENSION}`,
+        );
+        await this.snapshotVolumeDatabase(
+          targetDatabasePath,
+          rollbackSnapshotPath,
+          manifest.id,
+        );
         await this.deleteDatabaseArtifacts(targetDatabasePath);
       }
 
-      await fs.rename(temporaryRestorePath, targetDatabasePath);
+      try {
+        await fs.rename(temporaryRestorePath, targetDatabasePath);
+      } catch (error) {
+        const rollbackError = rollbackSnapshotPath
+          ? await this.rollbackOverwrittenRestore(
+              rollbackSnapshotPath,
+              targetDatabasePath,
+              manifest.id,
+            )
+          : null;
+        if (rollbackError) {
+          throw new VolumeError(
+            'INVALID_OPERATION',
+            `Restore failed and the previous state of volume ${manifest.id} could not be recovered automatically.`,
+            {
+              backupPath: absoluteBackupPath,
+              volumeId: manifest.id,
+              restoreError:
+                error instanceof Error ? error.message : String(error),
+              rollbackError: rollbackError.message,
+            },
+          );
+        }
+
+        throw error;
+      }
       this.volumeCache.delete(manifest.id);
 
-      const restoredManifest = (await this.loadVolume(manifest.id)).manifest;
-      const restoredStats = await fs.stat(targetDatabasePath);
-      const result: VolumeRestoreResult = {
-        volumeId: restoredManifest.id,
-        volumeName: restoredManifest.name,
-        revision: restoredManifest.revision,
-        backupPath: absoluteBackupPath,
-        bytesRestored: restoredStats.size,
-        restoredAt: new Date().toISOString(),
-      };
-
-      this.logger.info(
-        {
+      try {
+        const restoredManifest = (await this.loadVolume(manifest.id)).manifest;
+        const restoredStats = await fs.stat(targetDatabasePath);
+        const result: VolumeRestoreResult = {
           volumeId: restoredManifest.id,
+          volumeName: restoredManifest.name,
+          revision: restoredManifest.revision,
           backupPath: absoluteBackupPath,
           bytesRestored: restoredStats.size,
-          overwrite: options.overwrite ?? false,
-          revision: restoredManifest.revision,
-        },
-        'Volume restored from backup.',
-      );
+          restoredAt: new Date().toISOString(),
+        };
 
-      return result;
+        this.logger.info(
+          {
+            volumeId: restoredManifest.id,
+            backupPath: absoluteBackupPath,
+            bytesRestored: restoredStats.size,
+            overwrite: options.overwrite ?? false,
+            revision: restoredManifest.revision,
+          },
+          'Volume restored from backup.',
+        );
+
+        return result;
+      } catch (error) {
+        const rollbackError = rollbackSnapshotPath
+          ? await this.rollbackOverwrittenRestore(
+              rollbackSnapshotPath,
+              targetDatabasePath,
+              manifest.id,
+            )
+          : null;
+        if (rollbackError) {
+          throw new VolumeError(
+            'INVALID_OPERATION',
+            `Restore validation failed and the previous state of volume ${manifest.id} could not be recovered automatically.`,
+            {
+              backupPath: absoluteBackupPath,
+              volumeId: manifest.id,
+              restoreError:
+                error instanceof Error ? error.message : String(error),
+              rollbackError: rollbackError.message,
+            },
+          );
+        }
+
+        throw error;
+      }
     } catch (error) {
       await this.deleteDatabaseArtifacts(temporaryRestorePath).catch(() => undefined);
 
@@ -625,6 +676,11 @@ export class VolumeRepository {
       }
 
       throw error;
+    }
+    finally {
+      if (rollbackSnapshotPath) {
+        await this.deleteDatabaseArtifacts(rollbackSnapshotPath).catch(() => undefined);
+      }
     }
   }
 
@@ -702,6 +758,54 @@ export class VolumeRepository {
       fs.rm(`${databasePath}-wal`, { force: true }),
       fs.rm(`${databasePath}-shm`, { force: true }),
     ]);
+  }
+
+  private async snapshotVolumeDatabase(
+    sourceDatabasePath: string,
+    destinationPath: string,
+    volumeId: string,
+  ): Promise<VolumeManifest> {
+    await ensureDirectory(path.dirname(destinationPath));
+    if (await pathExists(destinationPath)) {
+      await this.deleteDatabaseArtifacts(destinationPath);
+    }
+
+    return withVolumeDatabase(sourceDatabasePath, async (database) => {
+      const manifestRow = await this.requireManifestRow(database, volumeId);
+
+      await database.get('PRAGMA wal_checkpoint(TRUNCATE)');
+      await database.exec(
+        `VACUUM INTO '${escapeSqliteStringLiteral(destinationPath)}'`,
+      );
+
+      return this.toManifest(manifestRow);
+    });
+  }
+
+  private async rollbackOverwrittenRestore(
+    rollbackSnapshotPath: string,
+    targetDatabasePath: string,
+    volumeId: string,
+  ): Promise<Error | null> {
+    try {
+      await this.deleteDatabaseArtifacts(targetDatabasePath).catch(() => undefined);
+      await fs.rename(rollbackSnapshotPath, targetDatabasePath);
+      this.volumeCache.delete(volumeId);
+      return null;
+    } catch (error) {
+      const rollbackError =
+        error instanceof Error ? error : new Error(String(error));
+      this.logger.error(
+        {
+          volumeId,
+          rollbackSnapshotPath,
+          targetDatabasePath,
+          error: rollbackError.message,
+        },
+        'Automatic restore rollback failed.',
+      );
+      return rollbackError;
+    }
   }
 
   private toState(entryRows: VolumeEntryRow[], volumeId: string): VolumeState {
