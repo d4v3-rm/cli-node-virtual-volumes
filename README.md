@@ -314,7 +314,8 @@ Available scripts:
 | `npm run lint` | Run ESLint |
 | `npm run typecheck` | Run TypeScript with no emit |
 | `npm run test` | Run tests with coverage |
-| `npm run verify` | Run full verification and build |
+| `npm run smoke:ops` | Run a compiled CLI smoke for backup, inspect, restore, and doctor |
+| `npm run verify` | Run full verification, build, and the operational smoke |
 | `npm run pack:local` | Build and generate a local tarball |
 
 The current quality bar includes:
