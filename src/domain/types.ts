@@ -326,7 +326,9 @@ export interface SupportBundleContentProfile {
   includesBackupManifestCopy: boolean;
   sensitivity: SupportBundleSensitivity;
   sharingRecommendation: SupportBundleSharingRecommendation;
+  recommendedRetentionDays: number;
   sharingNotes: string[];
+  disposalNotes: string[];
 }
 
 export interface SupportBundleInspectionIssue {

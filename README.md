@@ -294,7 +294,7 @@ For the full operational procedure, drills, and audit checklist, see [docs/BACKU
 Each support bundle includes:
 
 - `manifest.json` with runtime/config metadata
-- `contentProfile` in the manifest, with explicit sensitivity and sharing guidance
+- `contentProfile` in the manifest, with explicit sensitivity, sharing, retention, and disposal guidance
 - `correlationId` inside the support bundle manifest for log lookup
 - `checksums.json` with SHA-256 inventory for the generated files
 - `doctor-report.json`
@@ -309,7 +309,7 @@ Each support bundle includes:
 - manifest path consistency
 - checksum inventory structure
 - file size and SHA-256 integrity for the tracked files
-- bundle sensitivity and sharing metadata so operators can see whether the artifact is external-shareable or internal-only
+- bundle sensitivity, sharing, and handling metadata so operators can see whether the artifact is external-shareable or internal-only and how long it should be retained
 
 Use `virtual-volumes inspect-support-bundle ... --require-sharing external-shareable` before an external handoff, or `--require-sharing internal-only` to ensure the bundle is at least safe for internal escalation.
 

@@ -125,6 +125,7 @@ describe('support bundle', () => {
       includesBackupManifestCopy: true,
       sensitivity: 'restricted',
       sharingRecommendation: 'internal-only',
+      recommendedRetentionDays: 7,
     });
     expect(result.auditLogSnapshotPath).not.toBeNull();
     expect(result.logSnapshotPath).not.toBeNull();
@@ -264,6 +265,7 @@ describe('support bundle', () => {
       includesAuditLogSnapshot: false,
       sensitivity: 'restricted',
       sharingRecommendation: 'internal-only',
+      recommendedRetentionDays: 7,
     });
     expect(findBundleFileRecord(checksumManifest.files, 'log-snapshot')).toBeUndefined();
     expect(
@@ -293,6 +295,7 @@ describe('support bundle', () => {
       includesAuditLogSnapshot: false,
       sensitivity: 'sanitized',
       sharingRecommendation: 'external-shareable',
+      recommendedRetentionDays: 30,
     });
     expect(inspection.contentProfile).toMatchObject({
       redacted: true,
@@ -300,6 +303,7 @@ describe('support bundle', () => {
       includesAuditLogSnapshot: false,
       sensitivity: 'sanitized',
       sharingRecommendation: 'external-shareable',
+      recommendedRetentionDays: 30,
     });
   });
 
@@ -376,10 +380,16 @@ describe('support bundle', () => {
         includesBackupManifestCopy: true,
         sensitivity: 'restricted',
         sharingRecommendation: 'internal-only',
+        recommendedRetentionDays: 7,
         sharingNotes: [
           'Runtime metadata and embedded reports are not redacted.',
           'Log snapshots are included and may contain sensitive operational context.',
           'A backup manifest copy is included for artifact correlation and recovery review.',
+        ],
+        disposalNotes: [
+          'Delete this bundle after the incident or support escalation is closed.',
+          'Purge embedded log snapshots together with the bundle; they are not intended for long-term archival.',
+          'Remove the copied backup manifest together with the bundle to avoid stale recovery metadata.',
         ],
       },
       issues: [],
@@ -468,6 +478,7 @@ describe('support bundle', () => {
       includesAuditLogSnapshot: false,
       sensitivity: 'sanitized',
       sharingRecommendation: 'external-shareable',
+      recommendedRetentionDays: 30,
     });
   });
 
@@ -514,6 +525,7 @@ describe('support bundle', () => {
       includesBackupManifestCopy: true,
       sensitivity: 'restricted',
       sharingRecommendation: 'internal-only',
+      recommendedRetentionDays: 7,
     });
     expect(result.config.dataDir).toMatch(/^<redacted:/u);
     expect(result.config.logDir).toMatch(/^<redacted:/u);

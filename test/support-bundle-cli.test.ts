@@ -45,10 +45,16 @@ describe('support bundle cli formatter', () => {
         includesBackupManifestCopy: true,
         sensitivity: 'restricted',
         sharingRecommendation: 'internal-only',
+        recommendedRetentionDays: 7,
         sharingNotes: [
           'Runtime metadata and embedded reports are not redacted.',
           'Log snapshots are included and may contain sensitive operational context.',
           'A backup manifest copy is included for artifact correlation and recovery review.',
+        ],
+        disposalNotes: [
+          'Delete this bundle after the incident or support escalation is closed.',
+          'Purge embedded log snapshots together with the bundle; they are not intended for long-term archival.',
+          'Remove the copied backup manifest together with the bundle to avoid stale recovery metadata.',
         ],
       },
       config: {
@@ -83,10 +89,11 @@ describe('support bundle cli formatter', () => {
         'Correlation ID: corr_support-bundle',
         'Sensitivity: restricted',
         'Sharing: internal-only',
+        'Retention: 7 days',
         'Scope: volume-1',
         'Volumes checked: 1',
-        'Issues detected: 0',
         'Backup path: C:\\backups\\finance.sqlite',
+        'Issues detected: 0',
         'Doctor report: C:\\reports\\support-bundle\\doctor-report.json',
         'Backup inspection: C:\\reports\\support-bundle\\backup-inspection.json',
         'Backup manifest copy: C:\\reports\\support-bundle\\backup-artifact.manifest.json',
@@ -99,6 +106,10 @@ describe('support bundle cli formatter', () => {
         '- Runtime metadata and embedded reports are not redacted.',
         '- Log snapshots are included and may contain sensitive operational context.',
         '- A backup manifest copy is included for artifact correlation and recovery review.',
+        'Disposal notes:',
+        '- Delete this bundle after the incident or support escalation is closed.',
+        '- Purge embedded log snapshots together with the bundle; they are not intended for long-term archival.',
+        '- Remove the copied backup manifest together with the bundle to avoid stale recovery metadata.',
       ].join('\n'),
     );
   });
@@ -131,8 +142,12 @@ describe('support bundle cli formatter', () => {
         includesBackupManifestCopy: false,
         sensitivity: 'sanitized',
         sharingRecommendation: 'external-shareable',
+        recommendedRetentionDays: 30,
         sharingNotes: [
           'Bundle metadata is redacted and log snapshots are excluded, which is suitable for broader sharing.',
+        ],
+        disposalNotes: [
+          'Delete this bundle when the diagnostic handoff or review window ends.',
         ],
       },
       config: {
@@ -166,6 +181,7 @@ describe('support bundle cli formatter', () => {
     expect(formatSupportBundleResult(result)).toContain(
       'Sharing: external-shareable',
     );
+    expect(formatSupportBundleResult(result)).toContain('Retention: 30 days');
     expect(formatSupportBundleResult(result)).toContain(
       'Backup inspection: not included',
     );
@@ -201,8 +217,13 @@ describe('support bundle cli formatter', () => {
         includesBackupManifestCopy: true,
         sensitivity: 'sanitized',
         sharingRecommendation: 'external-shareable',
+        recommendedRetentionDays: 30,
         sharingNotes: [
           'Bundle metadata is redacted and log snapshots are excluded, which is suitable for broader sharing.',
+        ],
+        disposalNotes: [
+          'Delete this bundle when the diagnostic handoff or review window ends.',
+          'Remove the copied backup manifest together with the bundle to avoid stale recovery metadata.',
         ],
       },
       issues: [],
@@ -219,6 +240,7 @@ describe('support bundle cli formatter', () => {
         'Bundle correlation ID: corr_bundle-inspect',
         'Sensitivity: sanitized',
         'Sharing: external-shareable',
+        'Retention: 30 days',
         `Bundle created at: ${formatDateTime(result.bundleCreatedAt!)}`,
         'Scope: volume-1',
         'Verified files: 5/5',
@@ -226,6 +248,9 @@ describe('support bundle cli formatter', () => {
         `Inspected at: ${formatDateTime(result.generatedAt)}`,
         'Sharing notes:',
         '- Bundle metadata is redacted and log snapshots are excluded, which is suitable for broader sharing.',
+        'Disposal notes:',
+        '- Delete this bundle when the diagnostic handoff or review window ends.',
+        '- Remove the copied backup manifest together with the bundle to avoid stale recovery metadata.',
       ].join('\n'),
     );
   });
@@ -275,6 +300,7 @@ describe('support bundle cli formatter', () => {
       'Sensitivity: unknown',
     );
     expect(formatSupportBundleInspectionResult(result)).toContain('Sharing: unknown');
+    expect(formatSupportBundleInspectionResult(result)).toContain('Retention: unknown');
     expect(formatSupportBundleInspectionResult(result)).toContain(
       'Bundle created at: unknown',
     );
@@ -309,7 +335,9 @@ describe('support bundle cli formatter', () => {
           includesBackupManifestCopy: false,
           sensitivity: 'sanitized',
           sharingRecommendation: 'external-shareable',
+          recommendedRetentionDays: 30,
           sharingNotes: [],
+          disposalNotes: [],
         },
       },
       'internal-only',
@@ -336,7 +364,9 @@ describe('support bundle cli formatter', () => {
           includesBackupManifestCopy: true,
           sensitivity: 'restricted',
           sharingRecommendation: 'internal-only',
+          recommendedRetentionDays: 7,
           sharingNotes: [],
+          disposalNotes: [],
         },
       },
       'external-shareable',
