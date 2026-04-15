@@ -8,7 +8,9 @@ import type {
 } from '../src/domain/types.js';
 import type { HostBrowserEntry } from '../src/ui/host-browser.js';
 import {
+  buildAsciiMeter,
   fitSingleLine,
+  formatPercentage,
   formatEntryRow,
   formatExportProgress,
   formatHostBrowserRow,
@@ -18,6 +20,7 @@ import {
   getHostEntryIcon,
   getVirtualEntryIcon,
   TERMINAL_ICONS,
+  wrapTextLines,
 } from '../src/ui/presenters.js';
 
 describe('ui presenters', () => {
@@ -36,6 +39,21 @@ describe('ui presenters', () => {
   it('normalizes and truncates single-line text', () => {
     expect(fitSingleLine('  hello   world  ', 40)).toBe('hello world');
     expect(fitSingleLine('alpha beta gamma delta', 10)).toBe('alpha b...');
+  });
+
+  it('wraps text and renders ascii usage meters', () => {
+    expect(wrapTextLines('alpha beta gamma delta', 10)).toEqual([
+      'alpha beta',
+      'gamma',
+      'delta',
+    ]);
+    expect(wrapTextLines('C:/very/long/path/value', 8)).toEqual([
+      'C:/very/',
+      'long/pat',
+      'h/value',
+    ]);
+    expect(buildAsciiMeter(50, 100, 10)).toBe('[#####.....]');
+    expect(formatPercentage(1536, 2048)).toBe('75%');
   });
 
   it('formats volume and entry rows with the terminal icon set', () => {
