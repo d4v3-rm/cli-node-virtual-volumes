@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.1.3 - 2026-04-16
+
+- fix: handle Windows import paths on POSIX runners (`13b15a0`)
+
 ## 2.1.2 - 2026-04-16
 
 - test: cover host input and browser defaults (`2c7f16a`)
