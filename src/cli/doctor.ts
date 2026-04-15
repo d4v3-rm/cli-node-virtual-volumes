@@ -35,6 +35,7 @@ const formatVolumeReport = (report: StorageDoctorVolumeReport): string => {
 export const formatDoctorReport = (report: StorageDoctorReport): string => {
   const lines = [
     `Storage doctor: ${report.healthy ? 'HEALTHY' : 'ISSUES FOUND'}`,
+    `Generated at: ${report.generatedAt}`,
     `Checked volumes: ${report.checkedVolumes}`,
     `Total issues: ${report.issueCount}`,
   ];
@@ -73,6 +74,7 @@ const formatRepairVolumeReport = (report: StorageRepairVolumeReport): string => 
 export const formatRepairReport = (report: StorageRepairReport): string => {
   const lines = [
     `Storage repair: ${report.healthy ? 'HEALTHY' : 'ISSUES REMAIN'}`,
+    `Generated at: ${report.generatedAt}`,
     `Checked volumes: ${report.checkedVolumes}`,
     `Repaired volumes: ${report.repairedVolumes}`,
     `Actions applied: ${report.actionsApplied}`,
