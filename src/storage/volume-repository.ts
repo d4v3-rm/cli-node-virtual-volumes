@@ -563,8 +563,8 @@ export class VolumeRepository {
         const databasePath = this.getVolumeDatabasePath(manifest.id);
 
         if (!(await pathExists(databasePath))) {
-          await this.saveVolume({ manifest, state });
           await this.migrateLegacyBlobs(legacyDirectoryPath, databasePath, state);
+          await this.saveVolume({ manifest, state });
         }
 
         await fs.rm(legacyDirectoryPath, { recursive: true, force: true });
