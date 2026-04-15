@@ -78,6 +78,14 @@ import {
   formatExportProgress as formatExportProgressText,
   formatImportProgress as formatImportProgressText,
 } from './presenters.js';
+import {
+  applyBusyStateUpdate,
+  createBusyState,
+  createToastState,
+  type BusyState,
+  type ToastState,
+  type ToastTone,
+} from './runtime-state.js';
 import type {
   OverlayBorderTone,
   OverlayFrameMode,
@@ -119,14 +127,7 @@ import {
 } from './shell-navigation.js';
 
 type ScreenMode = 'dashboard' | 'explorer';
-type ToastTone = 'success' | 'error' | 'info';
 type OverlayMode = OverlayFrameMode | null;
-
-interface ToastState {
-  tone: ToastTone;
-  message: string;
-  detail?: string;
-}
 
 interface LayoutPositionSpec {
   width?: number | string;
@@ -288,8 +289,6 @@ export class TerminalApp {
 
   private toastTimeout: NodeJS.Timeout | null = null;
 
-  private lastBusyRefreshAt = 0;
-
   private mode: ScreenMode = 'dashboard';
 
   private volumes: VolumeManifest[] = [];
@@ -302,15 +301,11 @@ export class TerminalApp {
 
   private selectedEntryIndex = 0;
 
-  private busyLabel: string | null = 'Loading volumes';
-
-  private busyDetail: string | null = 'Initializing terminal shell.';
-
-  private busyProgressCurrent: number | null = null;
-
-  private busyProgressTotal: number | null = null;
-
-  private busyStartedAt = Date.now();
+  private busyState: BusyState | null = createBusyState(
+    'Loading volumes',
+    'Initializing terminal shell.',
+    Date.now(),
+  );
 
   private toast: ToastState | null = null;
 
@@ -483,7 +478,7 @@ export class TerminalApp {
     });
 
     this.spinnerInterval = setInterval(() => {
-      if (!this.busyLabel) {
+      if (!this.busyState) {
         return;
       }
 
@@ -526,7 +521,7 @@ export class TerminalApp {
         return;
       }
 
-      if (this.busyLabel) {
+      if (this.isBusy()) {
         this.notify('info', 'An operation is still running. Press Ctrl+C to force exit.');
         return;
       }
@@ -540,7 +535,7 @@ export class TerminalApp {
     });
 
     this.screen.key(['?'], () => {
-      if (this.busyLabel || this.overlayMode) {
+      if (this.isBusy() || this.overlayMode) {
         return;
       }
 
@@ -596,7 +591,7 @@ export class TerminalApp {
     });
 
     this.screen.key(['left', 'backspace', 'b'], () => {
-      if (this.busyLabel || this.overlayMode) {
+      if (this.isBusy() || this.overlayMode) {
         return;
       }
 
@@ -606,7 +601,7 @@ export class TerminalApp {
     });
 
     this.screen.key(['right', 'enter', 'o'], () => {
-      if (this.busyLabel || this.overlayMode) {
+      if (this.isBusy() || this.overlayMode) {
         return;
       }
 
@@ -619,7 +614,7 @@ export class TerminalApp {
     });
 
     this.screen.key(['r'], () => {
-      if (this.busyLabel || this.overlayMode) {
+      if (this.isBusy() || this.overlayMode) {
         return;
       }
 
@@ -627,7 +622,7 @@ export class TerminalApp {
     });
 
     this.screen.key(['n'], () => {
-      if (this.busyLabel || this.overlayMode || this.mode !== 'dashboard') {
+      if (this.isBusy() || this.overlayMode || this.mode !== 'dashboard') {
         return;
       }
 
@@ -635,7 +630,7 @@ export class TerminalApp {
     });
 
     this.screen.key(['x'], () => {
-      if (this.busyLabel || this.overlayMode || this.mode !== 'dashboard') {
+      if (this.isBusy() || this.overlayMode || this.mode !== 'dashboard') {
         return;
       }
 
@@ -643,7 +638,7 @@ export class TerminalApp {
     });
 
     this.screen.key(['c'], () => {
-      if (this.busyLabel || this.overlayMode || this.mode !== 'explorer') {
+      if (this.isBusy() || this.overlayMode || this.mode !== 'explorer') {
         return;
       }
 
@@ -651,7 +646,7 @@ export class TerminalApp {
     });
 
     this.screen.key(['i'], () => {
-      if (this.busyLabel || this.overlayMode || this.mode !== 'explorer') {
+      if (this.isBusy() || this.overlayMode || this.mode !== 'explorer') {
         return;
       }
 
@@ -659,7 +654,7 @@ export class TerminalApp {
     });
 
     this.screen.key(['e'], () => {
-      if (this.busyLabel || this.overlayMode || this.mode !== 'explorer') {
+      if (this.isBusy() || this.overlayMode || this.mode !== 'explorer') {
         return;
       }
 
@@ -667,7 +662,7 @@ export class TerminalApp {
     });
 
     this.screen.key(['m'], () => {
-      if (this.busyLabel || this.overlayMode || this.mode !== 'explorer') {
+      if (this.isBusy() || this.overlayMode || this.mode !== 'explorer') {
         return;
       }
 
@@ -675,7 +670,7 @@ export class TerminalApp {
     });
 
     this.screen.key(['d'], () => {
-      if (this.busyLabel || this.overlayMode || this.mode !== 'explorer') {
+      if (this.isBusy() || this.overlayMode || this.mode !== 'explorer') {
         return;
       }
 
@@ -683,7 +678,7 @@ export class TerminalApp {
     });
 
     this.screen.key(['p'], () => {
-      if (this.busyLabel || this.overlayMode || this.mode !== 'explorer') {
+      if (this.isBusy() || this.overlayMode || this.mode !== 'explorer') {
         return;
       }
 
@@ -693,12 +688,16 @@ export class TerminalApp {
 
   private canHandleNavigation(): boolean {
     return canHandleShellNavigation({
-      busy: this.busyLabel !== null,
+      busy: this.isBusy(),
       currentSnapshot: this.currentSnapshot,
       mode: this.mode,
       overlayOpen: this.overlayMode !== null,
       volumesLength: this.volumes.length,
     });
+  }
+
+  private isBusy(): boolean {
+    return this.busyState !== null;
   }
 
   private render(): void {
@@ -817,11 +816,11 @@ export class TerminalApp {
       currentSnapshot: this.currentSnapshot,
       selectedEntry: this.getSelectedEntry(),
       logDir: this.runtime.config.logDir,
-      busyLabel: this.busyLabel,
-      busyDetail: this.busyDetail,
-      busyProgressCurrent: this.busyProgressCurrent,
-      busyProgressTotal: this.busyProgressTotal,
-      elapsedMs: Date.now() - this.busyStartedAt,
+      busyLabel: this.busyState?.label ?? null,
+      busyDetail: this.busyState?.detail ?? null,
+      busyProgressCurrent: this.busyState?.progressCurrent ?? null,
+      busyProgressTotal: this.busyState?.progressTotal ?? null,
+      elapsedMs: this.busyState ? Date.now() - this.busyState.startedAt : 0,
       spinnerIndex: this.spinnerIndex,
       spinnerFrames: SPINNER_FRAMES,
       toast: this.toast,
@@ -2039,11 +2038,7 @@ export class TerminalApp {
       return;
     }
 
-    this.toast = {
-      tone,
-      message,
-      detail,
-    };
+    this.toast = createToastState(tone, message, detail);
 
     if (this.toastTimeout) {
       clearTimeout(this.toastTimeout);
@@ -2058,12 +2053,11 @@ export class TerminalApp {
   }
 
   private startBusyState(label: string, detail?: string): void {
-    this.busyLabel = label;
-    this.busyDetail = detail ?? this.buildStatusContextLine(false);
-    this.busyProgressCurrent = null;
-    this.busyProgressTotal = null;
-    this.busyStartedAt = Date.now();
-    this.lastBusyRefreshAt = 0;
+    this.busyState = createBusyState(
+      label,
+      detail ?? this.buildStatusContextLine(false),
+      Date.now(),
+    );
   }
 
   private buildStatusContextLine(includeLogs: boolean): string {
@@ -2079,11 +2073,7 @@ export class TerminalApp {
   }
 
   private finishBusyState(): void {
-    this.busyLabel = null;
-    this.busyDetail = null;
-    this.busyProgressCurrent = null;
-    this.busyProgressTotal = null;
-    this.lastBusyRefreshAt = 0;
+    this.busyState = null;
     this.render();
   }
 
@@ -2093,32 +2083,16 @@ export class TerminalApp {
     currentValue?: number | null;
     totalValue?: number | null;
   }): void {
-    if (this.destroyed || !this.busyLabel) {
+    if (this.destroyed || !this.busyState) {
       return;
     }
 
-    if (options.label !== undefined) {
-      this.busyLabel = options.label;
-    }
-
-    if (options.detail !== undefined) {
-      this.busyDetail = options.detail;
-    }
-
-    if (options.currentValue !== undefined) {
-      this.busyProgressCurrent = options.currentValue;
-    }
-
-    if (options.totalValue !== undefined) {
-      this.busyProgressTotal = options.totalValue;
-    }
-
-    const now = Date.now();
-    if (now - this.lastBusyRefreshAt < 80) {
+    const patched = applyBusyStateUpdate(this.busyState, options, Date.now());
+    this.busyState = patched.state;
+    if (!patched.shouldRender) {
       return;
     }
 
-    this.lastBusyRefreshAt = now;
     this.renderStatus();
     this.screen.render();
   }
