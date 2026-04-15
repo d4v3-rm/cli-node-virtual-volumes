@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { APP_VERSION } from '../src/config/app-metadata.js';
 import { renderCliResult, writeCliJsonArtifact } from '../src/cli/output.js';
 
 const sandboxes: string[] = [];
@@ -26,14 +27,22 @@ describe('cli output helpers', () => {
       checkedVolumes: 1,
     };
 
-    const artifactPath = await writeCliJsonArtifact(payload, outputPath);
+    const artifactPath = await writeCliJsonArtifact('doctor', payload, outputPath);
     const artifactContent = JSON.parse(await fs.readFile(artifactPath, 'utf8')) as {
-      healthy: boolean;
-      checkedVolumes: number;
+      cliVersion: string;
+      command: string;
+      generatedAt: string;
+      payload: {
+        healthy: boolean;
+        checkedVolumes: number;
+      };
     };
 
     expect(artifactPath).toBe(path.resolve(outputPath));
-    expect(artifactContent).toEqual(payload);
+    expect(artifactContent.command).toBe('doctor');
+    expect(artifactContent.cliVersion).toBe(APP_VERSION);
+    expect(Date.parse(artifactContent.generatedAt)).not.toBeNaN();
+    expect(artifactContent.payload).toEqual(payload);
   });
 
   it('appends the artifact path to human-readable output', () => {

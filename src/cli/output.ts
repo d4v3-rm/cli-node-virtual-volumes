@@ -1,13 +1,28 @@
 import path from 'node:path';
 
+import { APP_VERSION } from '../config/app-metadata.js';
 import { writeJsonAtomic } from '../utils/fs.js';
 
+export interface CliJsonArtifact<T> {
+  cliVersion: string;
+  command: string;
+  generatedAt: string;
+  payload: T;
+}
+
 export const writeCliJsonArtifact = async (
+  command: string,
   payload: unknown,
   outputPath: string,
 ): Promise<string> => {
   const absoluteOutputPath = path.resolve(outputPath);
-  await writeJsonAtomic(absoluteOutputPath, payload);
+  const artifact: CliJsonArtifact<unknown> = {
+    cliVersion: APP_VERSION,
+    command,
+    generatedAt: new Date().toISOString(),
+    payload,
+  };
+  await writeJsonAtomic(absoluteOutputPath, artifact);
   return absoluteOutputPath;
 };
 
