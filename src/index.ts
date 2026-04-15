@@ -8,8 +8,11 @@ import {
 } from './cli/backup.js';
 import { formatDoctorReport, formatRepairReport } from './cli/doctor.js';
 import { renderCliResult, writeCliJsonArtifact } from './cli/output.js';
-import { formatSupportBundleResult } from './cli/support-bundle.js';
-import { createSupportBundle } from './ops/support-bundle.js';
+import {
+  formatSupportBundleInspectionResult,
+  formatSupportBundleResult,
+} from './cli/support-bundle.js';
+import { createSupportBundle, inspectSupportBundle } from './ops/support-bundle.js';
 import { TerminalApp } from './ui/terminal-app.js';
 
 const main = async (): Promise<void> => {
@@ -197,12 +200,18 @@ const main = async (): Promise<void> => {
     .argument('[volumeId]', 'Limit the doctor report to a specific volume id')
     .option('--backup-path <path>', 'Inspect this backup and include the report')
     .option('--json', 'Output the bundle summary as JSON')
+    .option('--output <path>', 'Write the structured JSON result to this file')
     .option('--force', 'Overwrite an existing destination directory')
     .action(
       async (
         destinationPath: string,
         volumeId: string | undefined,
-        options: { backupPath?: string; json?: boolean; force?: boolean },
+        options: {
+          backupPath?: string;
+          json?: boolean;
+          output?: string;
+          force?: boolean;
+        },
       ) => {
         const runtime = await createRuntime(getRuntimeOverrides());
         const result = await createSupportBundle(runtime, {
@@ -211,12 +220,51 @@ const main = async (): Promise<void> => {
           backupPath: options.backupPath,
           overwrite: options.force,
         });
+        const artifactPath = options.output
+          ? await writeCliJsonArtifact('support-bundle', result, options.output)
+          : null;
 
         console.log(
           renderCliResult(result, formatSupportBundleResult, {
+            artifactPath,
             json: options.json,
           }),
         );
+      },
+    );
+
+  program
+    .command('inspect-support-bundle')
+    .description(
+      'Inspect a support bundle and verify its manifest, inventory, and checksums.',
+    )
+    .argument('<bundlePath>', 'Inspect a support bundle directory')
+    .option('--json', 'Output the inspection result as JSON')
+    .option('--output <path>', 'Write the structured JSON result to this file')
+    .action(
+      async (
+        bundlePath: string,
+        options: { json?: boolean; output?: string },
+      ) => {
+        const result = await inspectSupportBundle(bundlePath);
+        const artifactPath = options.output
+          ? await writeCliJsonArtifact(
+              'inspect-support-bundle',
+              result,
+              options.output,
+            )
+          : null;
+
+        console.log(
+          renderCliResult(result, formatSupportBundleInspectionResult, {
+            artifactPath,
+            json: options.json,
+          }),
+        );
+
+        if (!result.healthy) {
+          process.exitCode = 1;
+        }
       },
     );
 
