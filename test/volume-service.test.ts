@@ -627,6 +627,35 @@ describe('VolumeService', () => {
     });
   });
 
+  it('inspects backup artifacts without touching the live volume', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Inspection Drill' });
+    const backupRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-inspect-backup-'));
+    sandboxes.push(backupRoot);
+    const backupPath = path.join(backupRoot, 'inspection-drill.sqlite');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/report.txt', 'inspection payload');
+
+    const backupResult = await runtime.volumeService.backupVolume(volume.id, backupPath);
+    const inspection = await runtime.volumeService.inspectVolumeBackup(backupPath);
+    const preview = await runtime.volumeService.previewFile(volume.id, '/report.txt');
+
+    expect(inspection).toMatchObject({
+      volumeId: volume.id,
+      volumeName: 'Inspection Drill',
+      revision: backupResult.revision,
+      schemaVersion: 3,
+      backupPath: path.resolve(backupPath),
+      manifestPath: backupResult.manifestPath,
+      formatVersion: 1,
+      checksumSha256: backupResult.checksumSha256,
+      bytesWritten: backupResult.bytesWritten,
+      createdAt: backupResult.createdAt,
+      validatedWithManifest: true,
+    });
+    expect(preview.content).toContain('inspection payload');
+  });
+
   it('restores legacy backups even when the backup manifest sidecar is missing', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Legacy Recovery' });
@@ -652,6 +681,33 @@ describe('VolumeService', () => {
     });
     expect(restoreResult.checksumSha256).toBe(backupResult.checksumSha256);
     expect(preview.content).toContain('legacy snapshot');
+  });
+
+  it('inspects legacy backups without requiring a manifest sidecar', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Legacy Inspection' });
+    const backupRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-legacy-inspect-'));
+    sandboxes.push(backupRoot);
+    const backupPath = path.join(backupRoot, 'legacy-inspection.sqlite');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/report.txt', 'legacy inspection');
+
+    const backupResult = await runtime.volumeService.backupVolume(volume.id, backupPath);
+    await fs.rm(backupResult.manifestPath, { force: true });
+
+    const inspection = await runtime.volumeService.inspectVolumeBackup(backupPath);
+
+    expect(inspection).toMatchObject({
+      volumeId: volume.id,
+      volumeName: 'Legacy Inspection',
+      backupPath: path.resolve(backupPath),
+      manifestPath: null,
+      formatVersion: null,
+      checksumSha256: backupResult.checksumSha256,
+      validatedWithManifest: false,
+      schemaVersion: 3,
+    });
+    expect(inspection.createdAt).toBeNull();
   });
 
   it('rejects backups that target the live managed database path', async () => {

@@ -19,6 +19,7 @@ import type {
   StorageRepairReport,
   StorageRepairVolumeReport,
   VolumeBackupManifest,
+  VolumeBackupInspectionResult,
   VolumeEntry,
   VolumeBackupResult,
   VolumeManifest,
@@ -60,6 +61,14 @@ interface SqliteForeignKeyCheckRow {
 interface VolumeDatabaseSnapshot {
   manifest: VolumeManifest;
   schemaVersion: number;
+}
+
+interface VolumeBackupArtifactMetadata {
+  backupManifest: VolumeBackupManifest | null;
+  backupManifestPath: string;
+  bytesWritten: number;
+  checksumSha256: string;
+  snapshot: VolumeDatabaseSnapshot;
 }
 
 const escapeSqliteStringLiteral = (value: string): string => value.replaceAll("'", "''");
@@ -489,7 +498,7 @@ export class VolumeRepository {
   public async backupVolume(
     volumeId: string,
     destinationPath: string,
-  options: { overwrite?: boolean } = {},
+    options: { overwrite?: boolean } = {},
   ): Promise<VolumeBackupResult> {
     const databasePath = this.getVolumeDatabasePath(volumeId);
     if (!(await pathExists(databasePath))) {
@@ -574,6 +583,48 @@ export class VolumeRepository {
     }
   }
 
+  public async inspectVolumeBackup(
+    backupPath: string,
+  ): Promise<VolumeBackupInspectionResult> {
+    const absoluteBackupPath = path.resolve(backupPath);
+    if (!(await pathExists(absoluteBackupPath))) {
+      throw new VolumeError('NOT_FOUND', `Backup file does not exist: ${absoluteBackupPath}`, {
+        backupPath: absoluteBackupPath,
+      });
+    }
+
+    const volumesDirectory = this.getVolumesDirectory();
+    await ensureDirectory(volumesDirectory);
+
+    const temporaryInspectionPath = path.join(
+      volumesDirectory,
+      `inspect_${process.pid}_${Date.now()}_${nanoid(6)}${VOLUME_DATABASE_EXTENSION}`,
+    );
+
+    try {
+      const artifact = await this.loadBackupArtifactMetadata(
+        absoluteBackupPath,
+        temporaryInspectionPath,
+      );
+
+      return {
+        volumeId: artifact.snapshot.manifest.id,
+        volumeName: artifact.snapshot.manifest.name,
+        revision: artifact.snapshot.manifest.revision,
+        schemaVersion: artifact.snapshot.schemaVersion,
+        backupPath: absoluteBackupPath,
+        manifestPath: artifact.backupManifest ? artifact.backupManifestPath : null,
+        formatVersion: artifact.backupManifest?.formatVersion ?? null,
+        checksumSha256: artifact.checksumSha256,
+        bytesWritten: artifact.bytesWritten,
+        createdAt: artifact.backupManifest?.createdAt ?? null,
+        validatedWithManifest: artifact.backupManifest !== null,
+      };
+    } finally {
+      await this.deleteDatabaseArtifacts(temporaryInspectionPath).catch(() => undefined);
+    }
+  }
+
   public async restoreVolumeBackup(
     backupPath: string,
     options: RestoreVolumeBackupOptions = {},
@@ -584,11 +635,6 @@ export class VolumeRepository {
         backupPath: absoluteBackupPath,
       });
     }
-    const backupManifestPath = this.getBackupManifestPath(absoluteBackupPath);
-    const backupManifest = await this.readBackupManifest(backupManifestPath);
-    const backupArtifactStats = await fs.stat(absoluteBackupPath);
-    const backupChecksumSha256 = await this.computeFileSha256(absoluteBackupPath);
-
     const volumesDirectory = this.getVolumesDirectory();
     await ensureDirectory(volumesDirectory);
 
@@ -600,21 +646,11 @@ export class VolumeRepository {
     let rollbackSnapshotPath: string | null = null;
 
     try {
-      await fs.copyFile(absoluteBackupPath, temporaryRestorePath);
-
-      const snapshot = await this.inspectVolumeDatabase(temporaryRestorePath, 'backup');
-      const manifest = snapshot.manifest;
-
-      if (backupManifest) {
-        this.assertBackupManifestMatchesArtifact(
-          backupManifest,
-          snapshot,
-          backupArtifactStats.size,
-          backupChecksumSha256,
-          absoluteBackupPath,
-          backupManifestPath,
-        );
-      }
+      const artifact = await this.loadBackupArtifactMetadata(
+        absoluteBackupPath,
+        temporaryRestorePath,
+      );
+      const manifest = artifact.snapshot.manifest;
       restoredVolumeId = manifest.id;
 
       const targetDatabasePath = this.getVolumeDatabasePath(manifest.id);
@@ -689,24 +725,24 @@ export class VolumeRepository {
           volumeId: restoredManifest.id,
           volumeName: restoredManifest.name,
           revision: restoredManifest.revision,
-          schemaVersion: snapshot.schemaVersion,
+          schemaVersion: artifact.snapshot.schemaVersion,
           backupPath: absoluteBackupPath,
-          manifestPath: backupManifest ? backupManifestPath : null,
-          checksumSha256: backupChecksumSha256,
+          manifestPath: artifact.backupManifest ? artifact.backupManifestPath : null,
+          checksumSha256: artifact.checksumSha256,
           bytesRestored: restoredStats.size,
           restoredAt: new Date().toISOString(),
-          validatedWithManifest: backupManifest !== null,
+          validatedWithManifest: artifact.backupManifest !== null,
         };
 
         this.logger.info(
           {
             volumeId: restoredManifest.id,
             backupPath: absoluteBackupPath,
-            manifestPath: backupManifest ? backupManifestPath : null,
+            manifestPath: artifact.backupManifest ? artifact.backupManifestPath : null,
             bytesRestored: restoredStats.size,
-            checksumSha256: backupChecksumSha256,
-            schemaVersion: snapshot.schemaVersion,
-            validatedWithManifest: backupManifest !== null,
+            checksumSha256: artifact.checksumSha256,
+            schemaVersion: artifact.snapshot.schemaVersion,
+            validatedWithManifest: artifact.backupManifest !== null,
             overwrite: options.overwrite ?? false,
             revision: restoredManifest.revision,
           },
@@ -884,6 +920,39 @@ export class VolumeRepository {
 
   private getBackupManifestPath(backupPath: string): string {
     return `${backupPath}${BACKUP_MANIFEST_SUFFIX}`;
+  }
+
+  private async loadBackupArtifactMetadata(
+    absoluteBackupPath: string,
+    temporaryDatabasePath: string,
+  ): Promise<VolumeBackupArtifactMetadata> {
+    const backupManifestPath = this.getBackupManifestPath(absoluteBackupPath);
+    const backupManifest = await this.readBackupManifest(backupManifestPath);
+    const backupStats = await fs.stat(absoluteBackupPath);
+    const checksumSha256 = await this.computeFileSha256(absoluteBackupPath);
+
+    await fs.copyFile(absoluteBackupPath, temporaryDatabasePath);
+
+    const snapshot = await this.inspectVolumeDatabase(temporaryDatabasePath, 'backup');
+
+    if (backupManifest) {
+      this.assertBackupManifestMatchesArtifact(
+        backupManifest,
+        snapshot,
+        backupStats.size,
+        checksumSha256,
+        absoluteBackupPath,
+        backupManifestPath,
+      );
+    }
+
+    return {
+      backupManifest,
+      backupManifestPath,
+      bytesWritten: backupStats.size,
+      checksumSha256,
+      snapshot,
+    };
   }
 
   private async readBackupManifest(

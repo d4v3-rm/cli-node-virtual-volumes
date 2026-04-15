@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatBackupResult, formatRestoreResult } from '../src/cli/backup.js';
-import type { VolumeBackupResult, VolumeRestoreResult } from '../src/domain/types.js';
+import {
+  formatBackupInspectionResult,
+  formatBackupResult,
+  formatRestoreResult,
+} from '../src/cli/backup.js';
+import type {
+  VolumeBackupInspectionResult,
+  VolumeBackupResult,
+  VolumeRestoreResult,
+} from '../src/domain/types.js';
 import { formatDateTime } from '../src/utils/formatters.js';
 
 describe('backup cli formatters', () => {
@@ -93,6 +101,39 @@ describe('backup cli formatters', () => {
         'SHA-256: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
         'Bytes restored: 16384',
         `Restored at: ${formatDateTime(result.restoredAt)}`,
+      ].join('\n'),
+    );
+  });
+
+  it('formats backup inspection output with manifest validation details', () => {
+    const result: VolumeBackupInspectionResult = {
+      volumeId: 'volume-1',
+      volumeName: 'Finance',
+      revision: 7,
+      schemaVersion: 3,
+      backupPath: 'C:\\backups\\finance.sqlite',
+      manifestPath: 'C:\\backups\\finance.sqlite.manifest.json',
+      formatVersion: 1,
+      checksumSha256:
+        'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+      bytesWritten: 16384,
+      createdAt: '2026-04-15T13:30:00.000Z',
+      validatedWithManifest: true,
+    };
+
+    expect(formatBackupInspectionResult(result)).toBe(
+      [
+        'Volume backup: VERIFIED',
+        'Volume: Finance (volume-1)',
+        'Revision: 7',
+        'Schema version: 3',
+        'Backup path: C:\\backups\\finance.sqlite',
+        'Artifact manifest: C:\\backups\\finance.sqlite.manifest.json',
+        'Artifact validation: PASSED',
+        'Format version: 1',
+        'SHA-256: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+        'Bytes written: 16384',
+        `Created at: ${formatDateTime(result.createdAt!)}`,
       ].join('\n'),
     );
   });
