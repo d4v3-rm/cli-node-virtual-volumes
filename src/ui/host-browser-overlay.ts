@@ -32,7 +32,37 @@ export interface HostOverlayView {
   summaryContent: string;
 }
 
+export interface HostBrowserModeConfig {
+  browserPaneLabel: string;
+  confirmKeys: string[];
+  containerLabel: string;
+  emptySelectionMessage: string | null;
+  summaryPaneLabel: string;
+  variant: HostOverlayMode;
+}
+
 export const HOST_BROWSER_VISIBLE_ROWS = 14;
+
+export const getHostBrowserModeConfig = (
+  mode: HostOverlayMode,
+): HostBrowserModeConfig =>
+  mode === 'import'
+    ? {
+        browserPaneLabel: ' Host Filesystem ',
+        confirmKeys: ['enter', 'i'],
+        containerLabel: ' Host Import ',
+        emptySelectionMessage: 'Select one or more host files or folders with Space.',
+        summaryPaneLabel: ' Selection ',
+        variant: 'import',
+      }
+    : {
+        browserPaneLabel: ' Host Destination ',
+        confirmKeys: ['enter', 'e'],
+        containerLabel: ' Host Export ',
+        emptySelectionMessage: 'Enter a drive or folder before exporting.',
+        summaryPaneLabel: ' Export Summary ',
+        variant: 'export',
+      };
 
 export const getHostOverlayDimensions = (
   viewportWidth: number,

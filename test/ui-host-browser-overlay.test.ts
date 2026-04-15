@@ -5,6 +5,7 @@ import {
   buildHostExportOverlayView,
   buildHostImportOverlayView,
   getExportDestinationPath,
+  getHostBrowserModeConfig,
   getHostOverlayDimensions,
   getHostRowsSignature,
   getHostVisibleEntries,
@@ -59,6 +60,24 @@ describe('ui host browser overlay helpers', () => {
       overlayWidth: 78,
       overlayHeight: 19,
       summaryWidth: 25,
+    });
+
+    expect(getHostBrowserModeConfig('import')).toEqual({
+      browserPaneLabel: ' Host Filesystem ',
+      confirmKeys: ['enter', 'i'],
+      containerLabel: ' Host Import ',
+      emptySelectionMessage: 'Select one or more host files or folders with Space.',
+      summaryPaneLabel: ' Selection ',
+      variant: 'import',
+    });
+
+    expect(getHostBrowserModeConfig('export')).toEqual({
+      browserPaneLabel: ' Host Destination ',
+      confirmKeys: ['enter', 'e'],
+      containerLabel: ' Host Export ',
+      emptySelectionMessage: 'Enter a drive or folder before exporting.',
+      summaryPaneLabel: ' Export Summary ',
+      variant: 'export',
     });
   });
 

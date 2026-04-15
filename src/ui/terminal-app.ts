@@ -43,6 +43,7 @@ import {
   buildHostExportOverlayView,
   buildHostImportOverlayView,
   getExportDestinationPath,
+  getHostBrowserModeConfig,
   getHostOverlayDimensions,
   getHostRowsSignature,
   getHostVisibleEntries,
@@ -1188,15 +1189,42 @@ export class TerminalApp {
   }
 
   private async openHostImportOverlay(destinationPath: string): Promise<string[] | null> {
-    const initialHostPath = await getDefaultHostPath();
+    const result = await this.openHostBrowserOverlay({
+      mode: 'import',
+      destinationPath,
+    });
 
-    return new Promise<string[] | null>((resolve) => {
+    return Array.isArray(result) ? result : null;
+  }
+
+  private async openHostExportOverlay(sourcePath: string): Promise<string | null> {
+    const result = await this.openHostBrowserOverlay({
+      mode: 'export',
+      sourcePath,
+    });
+
+    return typeof result === 'string' || result === null ? result : null;
+  }
+
+  private async openHostBrowserOverlay(
+    options:
+      | { mode: 'import'; destinationPath: string }
+      | { mode: 'export'; sourcePath: string },
+  ): Promise<string[] | string | null> {
+    const initialHostPath = await getDefaultHostPath();
+    const modeConfig = getHostBrowserModeConfig(options.mode);
+    const isImportMode = options.mode === 'import';
+    const browserAccent = isImportMode ? THEME.success : THEME.accentWarm;
+    const browserBorder = isImportMode ? THEME.borderOverlayAlt : THEME.accentWarm;
+    const browserSelectedFg = isImportMode ? '#081a14' : '#201106';
+
+    return new Promise<string[] | string | null>((resolve) => {
       const viewportWidth = this.getViewportWidth();
       const viewportHeight = this.getViewportHeight();
       const { overlayWidth, overlayHeight, summaryWidth } = getHostOverlayDimensions(
         viewportWidth,
         viewportHeight,
-        'import',
+        options.mode,
       );
       let snapshot: HostBrowserSnapshot = {
         currentPath: initialHostPath,
@@ -1211,7 +1239,7 @@ export class TerminalApp {
 
       this.overlayMode = 'hostBrowser';
       this.overlayBackdrop.show();
-      this.overlayContainer.setLabel(' Host Import ');
+      this.overlayContainer.setLabel(modeConfig.containerLabel);
       this.overlayContainer.width = overlayWidth;
       this.overlayContainer.height = overlayHeight;
       this.overlayContainer.left = Math.max(
@@ -1244,12 +1272,12 @@ export class TerminalApp {
         right: summaryWidth + 2,
         bottom: 3,
         border: 'line',
-        label: ' Host Filesystem ',
+        label: modeConfig.browserPaneLabel,
         style: {
           bg: THEME.panelOverlayAlt,
           fg: THEME.text,
           border: {
-            fg: THEME.borderOverlayAlt,
+            fg: browserBorder,
           },
         },
       });
@@ -1267,8 +1295,8 @@ export class TerminalApp {
           bg: THEME.panelOverlayAlt,
           fg: THEME.text,
           selected: {
-            bg: THEME.success,
-            fg: '#081a14',
+            bg: browserAccent,
+            fg: browserSelectedFg,
             bold: true,
           },
           item: {
@@ -1279,7 +1307,7 @@ export class TerminalApp {
         scrollbar: {
           ch: ' ',
           style: {
-            bg: THEME.success,
+            bg: browserAccent,
           },
         },
       });
@@ -1291,12 +1319,12 @@ export class TerminalApp {
         width: summaryWidth,
         bottom: 3,
         border: 'line',
-        label: ' Selection ',
+        label: modeConfig.summaryPaneLabel,
         style: {
           bg: THEME.panelOverlayAlt,
           fg: THEME.text,
           border: {
-            fg: THEME.borderOverlayAlt,
+            fg: browserBorder,
           },
         },
       });
@@ -1317,7 +1345,7 @@ export class TerminalApp {
         scrollbar: {
           ch: ' ',
           style: {
-            bg: THEME.success,
+            bg: browserAccent,
           },
         },
       });
@@ -1337,7 +1365,7 @@ export class TerminalApp {
       const getCurrentEntry = (): HostBrowserEntry | null =>
         snapshot.entries[selectedIndex] ?? null;
 
-      const close = (result: string[] | null): void => {
+      const close = (result: string[] | string | null): void => {
         if (settled) {
           return;
         }
@@ -1352,19 +1380,29 @@ export class TerminalApp {
         const rowsSignature = getHostRowsSignature({
           loading,
           selectedIndex,
-          selectedPaths,
+          selectedPaths: isImportMode ? selectedPaths : undefined,
           snapshot,
         });
-        const view = buildHostImportOverlayView({
-          browserContentWidth: this.getContentWidth(browserPane),
-          destinationPath,
-          headerWidth: contentWidth,
-          loading,
-          overlayContentWidth: contentWidth,
-          selectedIndex,
-          selectedPaths,
-          snapshot,
-        });
+        const view = isImportMode
+          ? buildHostImportOverlayView({
+              browserContentWidth: this.getContentWidth(browserPane),
+              destinationPath: options.destinationPath,
+              headerWidth: contentWidth,
+              loading,
+              overlayContentWidth: contentWidth,
+              selectedIndex,
+              selectedPaths,
+              snapshot,
+            })
+          : buildHostExportOverlayView({
+              browserContentWidth: this.getContentWidth(browserPane),
+              headerWidth: contentWidth,
+              loading,
+              overlayContentWidth: contentWidth,
+              selectedIndex,
+              snapshot,
+              sourcePath: options.sourcePath,
+            });
 
         headerBox.setContent(view.headerContent);
         browserPane.setLabel(view.browserLabel);
@@ -1427,7 +1465,7 @@ export class TerminalApp {
           return;
         }
 
-        if (currentEntry.selectable && currentEntry.absolutePath !== null) {
+        if (isImportMode && currentEntry.selectable && currentEntry.absolutePath !== null) {
           selectedPaths = toggleHostSelection(selectedPaths, currentEntry);
           renderedRowsSignature = '';
           renderBrowser();
@@ -1448,343 +1486,21 @@ export class TerminalApp {
         await loadSnapshot(parentPath, previousPath);
       };
 
-      const toggleCurrentSelection = (): void => {
-        if (loading) {
-          return;
-        }
-
-        selectedPaths = toggleHostSelection(selectedPaths, getCurrentEntry());
-        renderedRowsSignature = '';
-        renderBrowser();
-      };
-
-      const toggleVisibleSelections = (): void => {
-        const visibleEntries = getHostVisibleEntries(snapshot, selectedIndex).items;
-        if (visibleEntries.length === 0) {
-          return;
-        }
-
-        selectedPaths = toggleVisibleHostSelections(selectedPaths, visibleEntries);
-        renderedRowsSignature = '';
-        renderBrowser();
-      };
-
       const confirmSelection = (): void => {
-        if (selectedPaths.size === 0) {
-          this.notify('info', 'Select one or more host files or folders with Space.');
-          renderBrowser();
+        if (isImportMode) {
+          if (selectedPaths.size === 0) {
+            this.notify('info', modeConfig.emptySelectionMessage ?? 'Nothing selected.');
+            renderBrowser();
+            return;
+          }
+
+          close(Array.from(selectedPaths));
           return;
         }
 
-        close(Array.from(selectedPaths));
-      };
-
-      browserList.key(['up'], () => {
-        moveSelectionBy(-1);
-      });
-      browserList.key(['down'], () => {
-        moveSelectionBy(1);
-      });
-      browserList.key(['right'], () => {
-        void navigateIn();
-      });
-      browserList.key(['left', 'backspace'], () => {
-        void navigateOut();
-      });
-      browserList.key(['space'], () => {
-        toggleCurrentSelection();
-      });
-      browserList.key(['enter', 'i'], () => {
-        confirmSelection();
-      });
-      browserList.key(['a'], () => {
-        toggleVisibleSelections();
-      });
-      browserList.key(['pageup'], () => {
-        moveSelectionBy(-HOST_BROWSER_VISIBLE_ROWS);
-      });
-      browserList.key(['pagedown'], () => {
-        moveSelectionBy(HOST_BROWSER_VISIBLE_ROWS);
-      });
-      browserList.key(['home'], () => {
-        if (loading || snapshot.entries.length === 0) {
-          return;
-        }
-
-        selectedIndex = jumpHostSelection('start', snapshot.entries.length);
-        renderBrowser();
-      });
-      browserList.key(['end'], () => {
-        if (loading || snapshot.entries.length === 0) {
-          return;
-        }
-
-        selectedIndex = jumpHostSelection('end', snapshot.entries.length);
-        renderBrowser();
-      });
-      browserList.key(['escape', 'q'], () => {
-        close(null);
-      });
-
-      browserList.focus();
-      renderBrowser();
-      void loadSnapshot(initialHostPath);
-    });
-  }
-
-  private async openHostExportOverlay(sourcePath: string): Promise<string | null> {
-    const initialHostPath = await getDefaultHostPath();
-
-    return new Promise<string | null>((resolve) => {
-      const viewportWidth = this.getViewportWidth();
-      const viewportHeight = this.getViewportHeight();
-      const { overlayWidth, overlayHeight, summaryWidth } = getHostOverlayDimensions(
-        viewportWidth,
-        viewportHeight,
-        'export',
-      );
-      let snapshot: HostBrowserSnapshot = {
-        currentPath: initialHostPath,
-        displayPath: 'Loading host filesystem...',
-        entries: [],
-      };
-      let selectedIndex = 0;
-      let loading = false;
-      let settled = false;
-      let renderedRowsSignature = '';
-
-      this.overlayMode = 'hostBrowser';
-      this.overlayBackdrop.show();
-      this.overlayContainer.setLabel(' Host Export ');
-      this.overlayContainer.width = overlayWidth;
-      this.overlayContainer.height = overlayHeight;
-      this.overlayContainer.left = Math.max(
-        0,
-        Math.floor((viewportWidth - overlayWidth) / 2),
-      );
-      this.overlayContainer.top = Math.max(
-        1,
-        Math.floor((viewportHeight - overlayHeight) / 2),
-      );
-      this.overlayContainer.show();
-      this.clearChildren(this.overlayContainer);
-
-      const headerBox = blessed.box({
-        parent: this.overlayContainer,
-        top: 1,
-        left: 2,
-        right: 2,
-        height: 3,
-        style: {
-          bg: THEME.panelOverlayAlt,
-          fg: THEME.text,
-        },
-      });
-
-      const browserPane = blessed.box({
-        parent: this.overlayContainer,
-        top: 4,
-        left: 1,
-        right: summaryWidth + 2,
-        bottom: 3,
-        border: 'line',
-        label: ' Host Destination ',
-        style: {
-          bg: THEME.panelOverlayAlt,
-          fg: THEME.text,
-          border: {
-            fg: THEME.accentWarm,
-          },
-        },
-      });
-
-      const browserList = blessed.list({
-        parent: browserPane,
-        top: 1,
-        left: 1,
-        right: 1,
-        bottom: 1,
-        keys: false,
-        mouse: false,
-        tags: false,
-        style: {
-          bg: THEME.panelOverlayAlt,
-          fg: THEME.text,
-          selected: {
-            bg: THEME.accentWarm,
-            fg: '#201106',
-            bold: true,
-          },
-          item: {
-            bg: THEME.panelOverlayAlt,
-            fg: THEME.text,
-          },
-        },
-        scrollbar: {
-          ch: ' ',
-          style: {
-            bg: THEME.accentWarm,
-          },
-        },
-      });
-
-      const summaryPane = blessed.box({
-        parent: this.overlayContainer,
-        top: 4,
-        right: 1,
-        width: summaryWidth,
-        bottom: 3,
-        border: 'line',
-        label: ' Export Summary ',
-        style: {
-          bg: THEME.panelOverlayAlt,
-          fg: THEME.text,
-          border: {
-            fg: THEME.accentWarm,
-          },
-        },
-      });
-
-      const summaryBox = blessed.box({
-        parent: summaryPane,
-        top: 1,
-        left: 1,
-        right: 1,
-        bottom: 1,
-        scrollable: true,
-        alwaysScroll: true,
-        mouse: false,
-        style: {
-          bg: THEME.panelOverlayAlt,
-          fg: THEME.text,
-        },
-        scrollbar: {
-          ch: ' ',
-          style: {
-            bg: THEME.accentWarm,
-          },
-        },
-      });
-
-      const footerBox = blessed.box({
-        parent: this.overlayContainer,
-        left: 2,
-        right: 2,
-        bottom: 1,
-        height: 1,
-        style: {
-          bg: THEME.panelOverlayAlt,
-          fg: THEME.muted,
-        },
-      });
-
-      const getCurrentEntry = (): HostBrowserEntry | null =>
-        snapshot.entries[selectedIndex] ?? null;
-
-      const close = (result: string | null): void => {
-        if (settled) {
-          return;
-        }
-
-        settled = true;
-        this.closeOverlay();
-        resolve(result);
-      };
-
-      const renderBrowser = (): void => {
-        const contentWidth = this.getContentWidth(this.overlayContainer) - 4;
-        const rowsSignature = getHostRowsSignature({
-          loading,
-          selectedIndex,
-          snapshot,
-        });
-        const view = buildHostExportOverlayView({
-          browserContentWidth: this.getContentWidth(browserPane),
-          headerWidth: contentWidth,
-          loading,
-          overlayContentWidth: contentWidth,
-          selectedIndex,
-          snapshot,
-          sourcePath,
-        });
-
-        headerBox.setContent(view.headerContent);
-        browserPane.setLabel(view.browserLabel);
-
-        if (rowsSignature !== renderedRowsSignature) {
-          renderedRowsSignature = rowsSignature;
-          browserList.setItems(view.browserItems);
-        }
-
-        browserList.select(view.browserSelectionIndex);
-        summaryBox.setContent(view.summaryContent);
-        footerBox.setContent(view.footerContent);
-
-        this.screen.render();
-      };
-
-      const loadSnapshot = async (
-        targetPath: string | null,
-        preferredAbsolutePath: string | null = null,
-      ): Promise<void> => {
-        loading = true;
-        renderBrowser();
-
-        try {
-          const nextSnapshot = await listHostBrowserSnapshot(targetPath);
-          snapshot = nextSnapshot;
-          renderedRowsSignature = '';
-          selectedIndex = getPreferredHostSelectionIndex(snapshot, preferredAbsolutePath);
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : 'Unable to browse the host filesystem.';
-          this.notify('error', message);
-        } finally {
-          loading = false;
-          renderBrowser();
-        }
-      };
-
-      const moveSelectionBy = (direction: number): void => {
-        if (loading || snapshot.entries.length === 0) {
-          return;
-        }
-
-        selectedIndex = moveHostSelection(selectedIndex, snapshot.entries.length, direction);
-        renderBrowser();
-      };
-
-      const navigateIn = async (): Promise<void> => {
-        if (loading) {
-          return;
-        }
-
-        const currentEntry = getCurrentEntry();
-        if (!currentEntry?.navigable) {
-          return;
-        }
-
-        await loadSnapshot(currentEntry.absolutePath);
-      };
-
-      const navigateOut = async (): Promise<void> => {
-        if (loading || snapshot.currentPath === null) {
-          return;
-        }
-
-        const previousPath = snapshot.currentPath;
-        const parentPath = getParentHostPath(snapshot.currentPath);
-        if (parentPath === snapshot.currentPath) {
-          return;
-        }
-
-        await loadSnapshot(parentPath, previousPath);
-      };
-
-      const confirmSelection = (): void => {
         const destinationPath = getExportDestinationPath(snapshot, getCurrentEntry());
         if (destinationPath === null) {
-          this.notify('info', 'Enter a drive or folder before exporting.');
+          this.notify('info', modeConfig.emptySelectionMessage ?? 'Select a destination.');
           renderBrowser();
           return;
         }
@@ -1804,9 +1520,30 @@ export class TerminalApp {
       browserList.key(['left', 'backspace'], () => {
         void navigateOut();
       });
-      browserList.key(['enter', 'e'], () => {
-        confirmSelection();
-      });
+      if (isImportMode) {
+        browserList.key(['enter', 'i'], () => {
+          confirmSelection();
+        });
+        browserList.key(['space'], () => {
+          selectedPaths = toggleHostSelection(selectedPaths, getCurrentEntry());
+          renderedRowsSignature = '';
+          renderBrowser();
+        });
+        browserList.key(['a'], () => {
+          const visibleEntries = getHostVisibleEntries(snapshot, selectedIndex).items;
+          if (visibleEntries.length === 0) {
+            return;
+          }
+
+          selectedPaths = toggleVisibleHostSelections(selectedPaths, visibleEntries);
+          renderedRowsSignature = '';
+          renderBrowser();
+        });
+      } else {
+        browserList.key(['enter', 'e'], () => {
+          confirmSelection();
+        });
+      }
       browserList.key(['pageup'], () => {
         moveSelectionBy(-HOST_BROWSER_VISIBLE_ROWS);
       });
