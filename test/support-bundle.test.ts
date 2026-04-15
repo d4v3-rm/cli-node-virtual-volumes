@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createRuntime } from '../src/bootstrap/create-runtime.js';
+import type { AppRuntime } from '../src/bootstrap/create-runtime.js';
 import { APP_VERSION } from '../src/config/app-metadata.js';
 import { resolveAppLogFilePath, resolveAuditLogFilePath } from '../src/logging/logger.js';
 import { createSupportBundle, inspectSupportBundle } from '../src/ops/support-bundle.js';
@@ -15,6 +16,7 @@ import type {
 } from '../src/domain/types.js';
 
 const sandboxes: string[] = [];
+const runtimes: AppRuntime[] = [];
 
 const createIsolatedRuntime = async (
   overrides: Parameters<typeof createRuntime>[0] = {},
@@ -24,13 +26,16 @@ const createIsolatedRuntime = async (
   );
   sandboxes.push(sandboxRoot);
 
-  return createRuntime({
+  const runtime = await createRuntime({
     dataDir: path.join(sandboxRoot, 'data'),
     logDir: path.join(sandboxRoot, 'logs'),
     logLevel: 'silent',
     logToStdout: false,
     ...overrides,
   });
+  runtimes.push(runtime);
+
+  return runtime;
 };
 
 const findBundleFileRecord = (
@@ -40,6 +45,7 @@ const findBundleFileRecord = (
   files.find((file) => file.role === role);
 
 afterEach(async () => {
+  await Promise.all(runtimes.splice(0, runtimes.length).map((runtime) => runtime.close()));
   await Promise.all(
     sandboxes.splice(0, sandboxes.length).map((sandboxRoot) =>
       fs.rm(sandboxRoot, { recursive: true, force: true }),

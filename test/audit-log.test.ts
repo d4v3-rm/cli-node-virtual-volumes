@@ -5,9 +5,11 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createRuntime } from '../src/bootstrap/create-runtime.js';
+import type { AppRuntime } from '../src/bootstrap/create-runtime.js';
 import { resolveAppLogFilePath, resolveAuditLogFilePath } from '../src/logging/logger.js';
 
 const sandboxes: string[] = [];
+const runtimes: AppRuntime[] = [];
 
 const createIsolatedRuntime = async (
   overrides: Parameters<typeof createRuntime>[0] = {},
@@ -15,7 +17,7 @@ const createIsolatedRuntime = async (
   const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cli-node-virtual-volumes-audit-'));
   sandboxes.push(sandboxRoot);
 
-  return createRuntime({
+  const runtime = await createRuntime({
     dataDir: path.join(sandboxRoot, 'data'),
     logDir: path.join(sandboxRoot, 'logs'),
     logLevel: 'silent',
@@ -23,6 +25,9 @@ const createIsolatedRuntime = async (
     logToStdout: false,
     ...overrides,
   });
+  runtimes.push(runtime);
+
+  return runtime;
 };
 
 const readJsonLogEntries = async (logPath: string): Promise<Record<string, unknown>[]> => {
@@ -36,6 +41,7 @@ const readJsonLogEntries = async (logPath: string): Promise<Record<string, unkno
 };
 
 afterEach(async () => {
+  await Promise.all(runtimes.splice(0, runtimes.length).map((runtime) => runtime.close()));
   await Promise.all(
     sandboxes.splice(0, sandboxes.length).map((sandboxRoot) =>
       fs.rm(sandboxRoot, { recursive: true, force: true }),

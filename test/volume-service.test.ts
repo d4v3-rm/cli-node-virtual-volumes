@@ -8,6 +8,7 @@ import sqlite3 from 'sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createRuntime } from '../src/bootstrap/create-runtime.js';
+import type { AppRuntime } from '../src/bootstrap/create-runtime.js';
 import { APP_VERSION } from '../src/config/app-metadata.js';
 import type { RuntimeOverrides } from '../src/config/env.js';
 import type { VolumeBackupManifest } from '../src/domain/types.js';
@@ -20,18 +21,29 @@ import {
 import { VolumeRepository } from '../src/storage/volume-repository.js';
 
 const sandboxes: string[] = [];
+const runtimes: AppRuntime[] = [];
+
+const trackRuntime = async (
+  runtimePromise: Promise<AppRuntime>,
+): Promise<AppRuntime> => {
+  const runtime = await runtimePromise;
+  runtimes.push(runtime);
+  return runtime;
+};
 
 const createIsolatedRuntime = async (overrides: RuntimeOverrides = {}) => {
   const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cli-node-virtual-volumes-'));
   sandboxes.push(sandboxRoot);
 
-  return createRuntime({
-    dataDir: path.join(sandboxRoot, 'data'),
-    logDir: path.join(sandboxRoot, 'logs'),
-    logLevel: 'silent',
-    logToStdout: false,
-    ...overrides,
-  });
+  return trackRuntime(
+    createRuntime({
+      dataDir: path.join(sandboxRoot, 'data'),
+      logDir: path.join(sandboxRoot, 'logs'),
+      logLevel: 'silent',
+      logToStdout: false,
+      ...overrides,
+    }),
+  );
 };
 
 const countPersistedBlobs = async (
@@ -61,6 +73,7 @@ const getPersistedBlobChunkCount = async (
   });
 
 afterEach(async () => {
+  await Promise.all(runtimes.splice(0, runtimes.length).map((runtime) => runtime.close()));
   await Promise.all(
     sandboxes.splice(0, sandboxes.length).map((sandboxRoot) =>
       fs.rm(sandboxRoot, { recursive: true, force: true }),
@@ -271,12 +284,14 @@ describe('VolumeService', () => {
       'utf8',
     );
 
-    const runtime = await createRuntime({
-      dataDir,
-      logDir,
-      logLevel: 'silent',
-      logToStdout: false,
-    });
+    const runtime = await trackRuntime(
+      createRuntime({
+        dataDir,
+        logDir,
+        logLevel: 'silent',
+        logToStdout: false,
+      }),
+    );
 
     const volumes = await runtime.volumeService.listVolumes();
     const preview = await runtime.volumeService.previewFile(legacyVolumeId, '/legacy.txt');
@@ -404,12 +419,14 @@ describe('VolumeService', () => {
       'utf8',
     );
 
-    const runtime = await createRuntime({
-      dataDir,
-      logDir,
-      logLevel: 'silent',
-      logToStdout: false,
-    });
+    const runtime = await trackRuntime(
+      createRuntime({
+        dataDir,
+        logDir,
+        logLevel: 'silent',
+        logToStdout: false,
+      }),
+    );
 
     const volumes = await runtime.volumeService.listVolumes();
     const migratedDatabasePath = getVolumeDatabasePath(dataDir, legacyVolumeId);
@@ -862,18 +879,22 @@ describe('VolumeService', () => {
     sandboxes.push(sandboxRoot);
 
     const sharedDataDir = path.join(sandboxRoot, 'data');
-    const runtimeA = await createRuntime({
-      dataDir: sharedDataDir,
-      logDir: path.join(sandboxRoot, 'logs-a'),
-      logLevel: 'silent',
-      logToStdout: false,
-    });
-    const runtimeB = await createRuntime({
-      dataDir: sharedDataDir,
-      logDir: path.join(sandboxRoot, 'logs-b'),
-      logLevel: 'silent',
-      logToStdout: false,
-    });
+    const runtimeA = await trackRuntime(
+      createRuntime({
+        dataDir: sharedDataDir,
+        logDir: path.join(sandboxRoot, 'logs-a'),
+        logLevel: 'silent',
+        logToStdout: false,
+      }),
+    );
+    const runtimeB = await trackRuntime(
+      createRuntime({
+        dataDir: sharedDataDir,
+        logDir: path.join(sandboxRoot, 'logs-b'),
+        logLevel: 'silent',
+        logToStdout: false,
+      }),
+    );
 
     const volume = await runtimeA.volumeService.createVolume({ name: 'Shared View' });
 
@@ -889,12 +910,14 @@ describe('VolumeService', () => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-concurrency-'));
     sandboxes.push(sandboxRoot);
 
-    const runtime = await createRuntime({
-      dataDir: path.join(sandboxRoot, 'data'),
-      logDir: path.join(sandboxRoot, 'logs'),
-      logLevel: 'silent',
-      logToStdout: false,
-    });
+    const runtime = await trackRuntime(
+      createRuntime({
+        dataDir: path.join(sandboxRoot, 'data'),
+        logDir: path.join(sandboxRoot, 'logs'),
+        logLevel: 'silent',
+        logToStdout: false,
+      }),
+    );
     const volume = await runtime.volumeService.createVolume({ name: 'Concurrent Save' });
     const repositoryA = new VolumeRepository(
       runtime.config,
