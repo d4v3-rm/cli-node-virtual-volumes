@@ -142,6 +142,7 @@ Per escalation o handoff verso supporto tecnico:
 3. Se il bundle deve essere piu' facile da condividere, usa `--no-logs` per escludere gli snapshot app e audit.
 4. Esegui `virtual-volumes inspect-support-bundle <destinationPath>` per verificare integrita' e checksum del bundle.
 5. Condividi la cartella generata, che include `manifest.json`, `checksums.json`, `doctor-report.json`, eventuale `backup-inspection.json`, eventuale copia del manifest del backup e, se non esclusi, tail snapshot del log corrente.
+6. Se usi `VOLUME_REDACT_SENSITIVE_DETAILS=true`, anche i report JSON interni del bundle vengono redatti prima della condivisione.
 
 ## Restore drill periodico
 

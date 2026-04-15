@@ -375,6 +375,12 @@ describe('support bundle', () => {
       volumeId: volume.id,
       backupPath,
     });
+    const backupInspectionReport = JSON.parse(
+      await fs.readFile(result.backupInspectionReportPath!, 'utf8'),
+    ) as {
+      backupPath: string;
+      manifestPath: string | null;
+    };
     const checksumManifest = JSON.parse(
       await fs.readFile(result.checksumsPath, 'utf8'),
     ) as SupportBundleChecksumManifest;
@@ -388,6 +394,10 @@ describe('support bundle', () => {
     expect(result.config.auditLogDir).toMatch(/^<redacted:/u);
     expect(result.config.hostAllowPaths[0]).toMatch(/^<redacted:/u);
     expect(result.config.hostDenyPaths[0]).toMatch(/^<redacted:/u);
+    expect(result.environment.cwd).toMatch(/^<redacted:/u);
+    expect(result.environment.hostname).toMatch(/^<redacted:/u);
+    expect(backupInspectionReport.backupPath).toMatch(/^<redacted:/u);
+    expect(backupInspectionReport.manifestPath).toMatch(/^<redacted:/u);
     expect(auditLogRecord?.sourcePath).toMatch(/^<redacted:/u);
   });
 });

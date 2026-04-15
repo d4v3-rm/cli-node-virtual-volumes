@@ -20,6 +20,8 @@ import { resolveAppLogFilePath, resolveAuditLogFilePath } from '../logging/logge
 import { writeJsonAtomic, pathExists } from '../utils/fs.js';
 import {
   redactFilesystemPath,
+  redactOpaqueValue,
+  sanitizeObservabilityValue,
 } from '../utils/observability-redaction.js';
 import { SUPPORTED_VOLUME_SCHEMA_VERSION } from '../storage/sqlite-volume.js';
 
@@ -339,6 +341,16 @@ export const createSupportBundle = async (
     const backupInspection = backupPath
       ? await runtime.volumeService.inspectVolumeBackup(backupPath)
       : null;
+    const sanitizedDoctorReport = sanitizeObservabilityValue(
+      doctorReport,
+      runtime.config.redactSensitiveDetails,
+    );
+    const sanitizedBackupInspection = backupInspection
+      ? sanitizeObservabilityValue(
+          backupInspection,
+          runtime.config.redactSensitiveDetails,
+        )
+      : null;
     const generatedAt = new Date().toISOString();
     const doctorReportPath = path.join(destinationPath, 'doctor-report.json');
     const backupInspectionReportPath = backupInspection
@@ -362,13 +374,13 @@ export const createSupportBundle = async (
 
     await writeJsonAtomic(
       path.join(temporaryBundlePath, 'doctor-report.json'),
-      doctorReport,
+      sanitizedDoctorReport,
     );
 
-    if (backupInspection) {
+    if (sanitizedBackupInspection) {
       await writeJsonAtomic(
         path.join(temporaryBundlePath, 'backup-inspection.json'),
-        backupInspection,
+        sanitizedBackupInspection,
       );
     }
 
@@ -455,8 +467,12 @@ export const createSupportBundle = async (
         platform: process.platform,
         arch: process.arch,
         nodeVersion: process.version,
-        hostname: os.hostname(),
-        cwd: process.cwd(),
+        hostname: runtime.config.redactSensitiveDetails
+          ? redactOpaqueValue(os.hostname(), 'host')
+          : os.hostname(),
+        cwd: runtime.config.redactSensitiveDetails
+          ? redactFilesystemPath(process.cwd())
+          : process.cwd(),
       },
     };
 
