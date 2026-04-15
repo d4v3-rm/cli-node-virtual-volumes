@@ -38,6 +38,9 @@ import {
   readJsonFile,
   writeJsonAtomic,
 } from '../utils/fs.js';
+import {
+  sanitizeObservabilityValue,
+} from '../utils/observability-redaction.js';
 import { BlobStore } from './blob-store.js';
 import {
   type SqliteVolumeDatabase,
@@ -51,6 +54,7 @@ import {
 
 interface RepositoryConfig {
   dataDir: string;
+  redactSensitiveDetails: boolean;
 }
 
 interface LoadVolumeOptions {
@@ -88,6 +92,10 @@ export class VolumeRepository {
     private readonly config: RepositoryConfig,
     private readonly logger: Logger,
   ) {}
+
+  private sanitizeObservabilityPayload<T>(value: T): T {
+    return sanitizeObservabilityValue(value, this.config.redactSensitiveDetails);
+  }
 
   public async initialize(): Promise<void> {
     await ensureDirectory(this.getVolumesDirectory());
@@ -130,10 +138,10 @@ export class VolumeRepository {
             });
           } catch (error) {
             this.logger.warn(
-              {
+              this.sanitizeObservabilityPayload({
                 databasePath,
                 error: error instanceof Error ? error.message : String(error),
-              },
+              }),
               'Skipping unreadable volume database.',
             );
             return null;
@@ -567,19 +575,19 @@ export class VolumeRepository {
         manifestPath: backupManifestPath,
       };
 
-      this.logger.info(
-        {
-          volumeId: snapshot.manifest.id,
-          backupPath: absoluteDestinationPath,
-          manifestPath: backupManifestPath,
-          bytesWritten: backupStats.size,
-          createdWithVersion: APP_VERSION,
-          checksumSha256,
-          schemaVersion: snapshot.schemaVersion,
-          revision: snapshot.manifest.revision,
-        },
-        'Volume backup created.',
-      );
+        this.logger.info(
+          this.sanitizeObservabilityPayload({
+            volumeId: snapshot.manifest.id,
+            backupPath: absoluteDestinationPath,
+            manifestPath: backupManifestPath,
+            bytesWritten: backupStats.size,
+            createdWithVersion: APP_VERSION,
+            checksumSha256,
+            schemaVersion: snapshot.schemaVersion,
+            revision: snapshot.manifest.revision,
+          }),
+          'Volume backup created.',
+        );
 
       return result;
     } catch (error) {
@@ -744,21 +752,21 @@ export class VolumeRepository {
           validatedWithManifest: artifact.backupManifest !== null,
         };
 
-        this.logger.info(
-          {
-            volumeId: restoredManifest.id,
-            backupPath: absoluteBackupPath,
-            manifestPath: artifact.backupManifest ? artifact.backupManifestPath : null,
-            bytesRestored: restoredStats.size,
-            createdWithVersion: artifact.backupManifest?.createdWithVersion ?? null,
-            checksumSha256: artifact.checksumSha256,
-            schemaVersion: artifact.snapshot.schemaVersion,
-            validatedWithManifest: artifact.backupManifest !== null,
-            overwrite: options.overwrite ?? false,
-            revision: restoredManifest.revision,
-          },
-          'Volume restored from backup.',
-        );
+          this.logger.info(
+            this.sanitizeObservabilityPayload({
+              volumeId: restoredManifest.id,
+              backupPath: absoluteBackupPath,
+              manifestPath: artifact.backupManifest ? artifact.backupManifestPath : null,
+              bytesRestored: restoredStats.size,
+              createdWithVersion: artifact.backupManifest?.createdWithVersion ?? null,
+              checksumSha256: artifact.checksumSha256,
+              schemaVersion: artifact.snapshot.schemaVersion,
+              validatedWithManifest: artifact.backupManifest !== null,
+              overwrite: options.overwrite ?? false,
+              revision: restoredManifest.revision,
+            }),
+            'Volume restored from backup.',
+          );
 
         return result;
       } catch (error) {
@@ -917,12 +925,12 @@ export class VolumeRepository {
       const rollbackError =
         error instanceof Error ? error : new Error(String(error));
       this.logger.error(
-        {
+        this.sanitizeObservabilityPayload({
           volumeId,
           rollbackSnapshotPath,
           targetDatabasePath,
           error: rollbackError.message,
-        },
+        }),
         'Automatic restore rollback failed.',
       );
       return rollbackError;
@@ -1250,20 +1258,20 @@ export class VolumeRepository {
 
         await fs.rm(legacyDirectoryPath, { recursive: true, force: true });
         this.logger.info(
-          { legacyDirectoryPath, volumeId: manifest.id },
+          this.sanitizeObservabilityPayload({ legacyDirectoryPath, volumeId: manifest.id }),
           'Migrated legacy volume directory to sqlite volume file.',
         );
       } catch (error) {
         if (shouldCleanupDatabase && databasePathToCleanup) {
           await this.deleteDatabaseArtifacts(databasePathToCleanup).catch(() => undefined);
-        }
-        this.logger.error(
-          {
-            legacyDirectoryPath,
-            error: error instanceof Error ? error.message : String(error),
-          },
-          'Failed to migrate legacy volume directory.',
-        );
+          }
+          this.logger.error(
+            this.sanitizeObservabilityPayload({
+              legacyDirectoryPath,
+              error: error instanceof Error ? error.message : String(error),
+            }),
+            'Failed to migrate legacy volume directory.',
+          );
       }
     }
   }
@@ -1281,6 +1289,7 @@ export class VolumeRepository {
     const blobStore = new BlobStore(
       databasePath,
       this.logger.child({ scope: 'blob-store-migration', volumeId: manifest.id }),
+      this.config.redactSensitiveDetails,
     );
 
     await withVolumeDatabase(databasePath, async (database) => {

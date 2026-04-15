@@ -19,6 +19,7 @@ const createConfig = (rootPath: string, logRetentionDays: number | null): AppCon
   defaultQuotaBytes: 1024,
   logLevel: 'info',
   logRetentionDays,
+  redactSensitiveDetails: false,
   logToStdout: false,
   previewBytes: 512,
 });
