@@ -12,6 +12,26 @@ import type {
 } from '../domain/types.js';
 import { formatBytes, formatDateTime, truncate } from '../utils/formatters.js';
 import { getParentVirtualPath } from '../utils/virtual-paths.js';
+import {
+  buildCreateFolderPrompt,
+  buildCreateFolderSuccessMessage,
+  buildCreateVolumePrompts,
+  buildCreateVolumeSuccessMessage,
+  buildDeleteEntryConfirmation,
+  buildDeleteEntrySuccessMessage,
+  buildDeleteVolumeConfirmation,
+  buildDeleteVolumeSuccessMessage,
+  buildExportSuccessNotification,
+  buildExportTaskDetail,
+  buildHelpOverlayOptions,
+  buildImportEmptySelectionMessage,
+  buildImportSuccessNotification,
+  buildImportTaskDetail,
+  buildMoveEntryPrompts,
+  buildMoveEntrySuccessMessage,
+  buildPreviewOverlayOptions,
+  parseVolumeQuotaInput,
+} from './action-presenters.js';
 import type { HostBrowserEntry, HostBrowserSnapshot } from './host-browser.js';
 import {
   buildConfirmOverlayView,
@@ -1167,43 +1187,26 @@ export class TerminalApp {
   }
 
   private async createVolumeWizard(): Promise<void> {
-    const name = await this.promptValue({
-      title: 'Create Volume',
-      description: 'Volume name',
-      initialValue: '',
-      footer: 'Enter saves. Esc cancels.',
-    });
+    const prompts = buildCreateVolumePrompts(this.runtime.config.defaultQuotaBytes);
+    const name = await this.promptValue(prompts.name);
 
     if (name === null) {
       return;
     }
 
-    const quotaInput = await this.promptValue({
-      title: 'Create Volume',
-      description: 'Logical quota in bytes. Leave empty to use the default quota.',
-      initialValue: String(this.runtime.config.defaultQuotaBytes),
-      footer: 'Enter saves. Esc cancels.',
-    });
+    const quotaInput = await this.promptValue(prompts.quota);
 
     if (quotaInput === null) {
       return;
     }
 
-    const trimmedQuota = quotaInput.trim();
-    const parsedQuota =
-      trimmedQuota.length === 0 ? undefined : Number.parseInt(trimmedQuota, 10);
-
-    if (parsedQuota !== undefined && Number.isNaN(parsedQuota)) {
-      this.notify('error', 'Quota bytes must be a valid integer.');
+    const parsedQuota = parseVolumeQuotaInput(quotaInput);
+    if (parsedQuota.error) {
+      this.notify('error', parsedQuota.error);
       return;
     }
 
-    const description = await this.promptValue({
-      title: 'Create Volume',
-      description: 'Optional description',
-      initialValue: '',
-      footer: 'Enter saves. Esc cancels.',
-    });
+    const description = await this.promptValue(prompts.description);
 
     if (description === null) {
       return;
@@ -1212,7 +1215,7 @@ export class TerminalApp {
     const createdVolume = await this.runTask('Creating volume', () =>
       this.runtime.volumeService.createVolume({
         name,
-        quotaBytes: parsedQuota,
+        quotaBytes: parsedQuota.quotaBytes,
         description,
       }),
     );
@@ -1221,7 +1224,7 @@ export class TerminalApp {
       return;
     }
 
-    this.notify('success', `Volume "${createdVolume.name}" created.`);
+    this.notify('success', buildCreateVolumeSuccessMessage(createdVolume.name));
     await this.loadVolumes();
     const volumeIndex = this.volumes.findIndex((volume) => volume.id === createdVolume.id);
     this.selectedVolumeIndex = clampIndex(volumeIndex, this.volumes.length);
@@ -1233,12 +1236,9 @@ export class TerminalApp {
       return;
     }
 
-    const name = await this.promptValue({
-      title: 'Create Folder',
-      description: `New folder inside ${this.currentSnapshot.currentPath}`,
-      initialValue: '',
-      footer: 'Enter saves. Esc cancels.',
-    });
+    const name = await this.promptValue(
+      buildCreateFolderPrompt(this.currentSnapshot.currentPath),
+    );
 
     if (name === null) {
       return;
@@ -1253,7 +1253,7 @@ export class TerminalApp {
       return;
     }
 
-    this.notify('success', `Folder "${createdDirectory.name}" created.`);
+    this.notify('success', buildCreateFolderSuccessMessage(createdDirectory.name));
     await this.openVolume(this.currentVolumeId, currentPath, this.selectedEntryIndex);
   }
 
@@ -1269,7 +1269,7 @@ export class TerminalApp {
     }
 
     if (hostPaths.length === 0) {
-      this.notify('info', 'Select at least one host file or folder to import.');
+      this.notify('info', buildImportEmptySelectionMessage());
       return;
     }
 
@@ -1285,18 +1285,15 @@ export class TerminalApp {
           });
         },
       }),
-      `Destination ${destinationPath}  ${hostPaths.length} host items queued.`,
+      buildImportTaskDetail(destinationPath, hostPaths.length),
     );
 
     if (!summary) {
       return;
     }
 
-    this.notify(
-      'success',
-      `Imported ${summary.filesImported} files and ${summary.directoriesImported} directories.`,
-      `Destination ${destinationPath}  ${formatBytes(summary.bytesImported)} transferred  Conflicts ${summary.conflictsResolved}  Integrity ${summary.integrityChecksPassed}`,
-    );
+    const success = buildImportSuccessNotification(summary, destinationPath);
+    this.notify('success', success.message, success.detail);
     await this.openVolume(this.currentVolumeId, destinationPath);
   }
 
@@ -1328,18 +1325,15 @@ export class TerminalApp {
           });
         },
       }),
-      `Source ${selectedEntry.path}  Destination ${destinationHostDirectory}`,
+      buildExportTaskDetail(selectedEntry.path, destinationHostDirectory),
     );
 
     if (!summary) {
       return;
     }
 
-    this.notify(
-      'success',
-      `Exported ${summary.filesExported} files and ${summary.directoriesExported} directories.`,
-      `Destination ${destinationHostDirectory}  ${formatBytes(summary.bytesExported)} transferred  Conflicts ${summary.conflictsResolved}  Integrity ${summary.integrityChecksPassed}`,
-    );
+    const success = buildExportSuccessNotification(summary, destinationHostDirectory);
+    this.notify('success', success.message, success.detail);
     this.render();
   }
 
@@ -2006,23 +2000,17 @@ export class TerminalApp {
       return;
     }
 
-    const destinationPath = await this.promptValue({
-      title: 'Move / Rename',
-      description: `Destination path for ${selectedEntry.name}`,
-      initialValue: this.currentSnapshot.currentPath,
-      footer: 'Enter saves. Esc cancels.',
-    });
+    const movePrompts = buildMoveEntryPrompts(
+      selectedEntry.name,
+      this.currentSnapshot.currentPath,
+    );
+    const destinationPath = await this.promptValue(movePrompts.destination);
 
     if (destinationPath === null) {
       return;
     }
 
-    const newName = await this.promptValue({
-      title: 'Move / Rename',
-      description: 'New name. Leave unchanged to keep the current entry name.',
-      initialValue: selectedEntry.name,
-      footer: 'Enter saves. Esc cancels.',
-    });
+    const newName = await this.promptValue(movePrompts.rename);
 
     if (newName === null) {
       return;
@@ -2040,7 +2028,7 @@ export class TerminalApp {
       return;
     }
 
-    this.notify('success', `Entry moved to ${updatedPath}.`);
+    this.notify('success', buildMoveEntrySuccessMessage(updatedPath));
     await this.openVolume(
       this.currentVolumeId,
       this.currentSnapshot.currentPath,
@@ -2059,11 +2047,7 @@ export class TerminalApp {
       return;
     }
 
-    const confirmed = await this.confirmAction({
-      title: 'Delete Entry',
-      body: `Delete "${selectedEntry.name}" and every nested node inside ${selectedEntry.path}?`,
-      confirmLabel: 'Delete',
-    });
+    const confirmed = await this.confirmAction(buildDeleteEntryConfirmation(selectedEntry));
 
     if (!confirmed) {
       return;
@@ -2077,7 +2061,7 @@ export class TerminalApp {
       return;
     }
 
-    this.notify('success', `Deleted ${deletedCount} entry nodes.`);
+    this.notify('success', buildDeleteEntrySuccessMessage(deletedCount));
     await this.openVolume(
       this.currentVolumeId,
       this.currentSnapshot.currentPath,
@@ -2092,11 +2076,9 @@ export class TerminalApp {
       return;
     }
 
-    const confirmed = await this.confirmAction({
-      title: 'Delete Volume',
-      body: `Delete volume "${selectedVolume.name}" and all persisted blobs and metadata?`,
-      confirmLabel: 'Delete',
-    });
+    const confirmed = await this.confirmAction(
+      buildDeleteVolumeConfirmation(selectedVolume),
+    );
 
     if (!confirmed) {
       return;
@@ -2111,7 +2093,7 @@ export class TerminalApp {
       return;
     }
 
-    this.notify('success', `Volume "${selectedVolume.name}" deleted.`);
+    this.notify('success', buildDeleteVolumeSuccessMessage(selectedVolume.name));
     this.currentVolumeId = null;
     this.currentSnapshot = null;
     this.mode = 'dashboard';
@@ -2146,68 +2128,11 @@ export class TerminalApp {
   }
 
   private async openHelpOverlay(): Promise<void> {
-    await this.openScrollableOverlay({
-      title: 'Help',
-      footer: 'Arrows/PageUp/PageDown scroll. Enter, Q or Esc closes.',
-      content: [
-        'Dashboard',
-        '',
-        'Up/Down: move selection',
-        'Enter or O: open selected volume',
-        'N: create volume',
-        'X: delete volume',
-        'R: refresh volumes',
-        '? : help',
-        'Q: quit',
-        '',
-        'Explorer',
-        '',
-        'Up/Down: move selection',
-        'PageUp/PageDown: move by page',
-        'Home/End: jump first or last entry',
-        'Right or Enter: open directory or preview file',
-        'Backspace, Left or B: parent directory or dashboard',
-        'C: create folder',
-        'I: open host browser import modal',
-        'E: export selected file or folder to host',
-        'M: move or rename entry',
-        'D: delete entry',
-        'P: preview file',
-        'R: refresh current directory',
-        '',
-        'Host Import Modal',
-        '',
-        'Up/Down: move selection',
-        'Right: enter selected folder or drive',
-        'Left: parent folder',
-        'Space: toggle checkbox on file or folder',
-        'Enter or I: import all checked items',
-        'A: toggle all visible entries',
-        'Esc or Q: cancel',
-        '',
-        'Host Export Modal',
-        '',
-        'Up/Down: move selection',
-        'Right: enter selected folder or drive',
-        'Left: parent folder',
-        'Enter or E: export into the current host folder',
-        'Esc or Q: cancel',
-      ].join('\n'),
-    });
+    await this.openScrollableOverlay(buildHelpOverlayOptions());
   }
 
   private async openPreviewOverlay(preview: FilePreview): Promise<void> {
-    await this.openScrollableOverlay({
-      title: `Preview  ${preview.path}`,
-      footer: 'Arrows/PageUp/PageDown scroll. Enter, Q or Esc closes.',
-      content: [
-        `Kind: ${preview.kind.toUpperCase()}`,
-        `Size: ${formatBytes(preview.size)}`,
-        `Truncated: ${preview.truncated ? 'yes' : 'no'}`,
-        '',
-        preview.content,
-      ].join('\n'),
-    });
+    await this.openScrollableOverlay(buildPreviewOverlayOptions(preview));
   }
 
   private async openScrollableOverlay(options: {
