@@ -161,7 +161,7 @@ export const formatHostNavigationRow = (
 ): string => fitSingleLine(`${getHostEntryIcon(entry)} ${entry.name}`, availableWidth);
 
 const getTransferTargetName = (targetPath: string): string =>
-  path.basename(targetPath) || targetPath;
+  path.win32.basename(targetPath) || path.posix.basename(targetPath) || targetPath;
 
 const formatTransferCurrentItem = (options: {
   phase: 'file' | 'directory' | 'integrity';

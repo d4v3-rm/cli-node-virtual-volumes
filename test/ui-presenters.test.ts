@@ -175,4 +175,28 @@ describe('ui presenters', () => {
       'Files 4/6  Dirs 2/3  Verify 6/6  Check 8.0 KB / 8.0 KB',
     );
   });
+
+  it('extracts import progress file names from Windows-style host paths on any runner OS', () => {
+    const progress: ImportProgress = {
+      currentHostPath: 'C:\\imports\\report.txt',
+      phase: 'file',
+      summary: {
+        filesImported: 0,
+        directoriesImported: 0,
+        bytesImported: 0,
+        conflictsResolved: 0,
+        integrityChecksPassed: 0,
+      },
+      currentBytes: 0,
+      currentTotalBytes: 0,
+      metrics: {
+        totalFiles: 1,
+        totalDirectories: 0,
+        totalBytes: 4096,
+        transferredBytes: 0,
+      },
+    };
+
+    expect(formatImportProgressLabel(progress)).toBe('Import file report.txt');
+  });
 });
