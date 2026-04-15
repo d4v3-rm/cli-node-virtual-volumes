@@ -42,6 +42,13 @@ interface LoadVolumeOptions {
   preferCache?: boolean;
 }
 
+interface SqliteForeignKeyCheckRow {
+  fkid: number;
+  parent: string;
+  rowid: number;
+  table: string;
+}
+
 const escapeSqliteStringLiteral = (value: string): string => value.replaceAll("'", "''");
 
 export class VolumeRepository {
@@ -423,11 +430,11 @@ export class VolumeRepository {
   }
 
   public async runDoctor(volumeId?: string): Promise<StorageDoctorReport> {
-    const manifests = volumeId
-      ? [(await this.loadVolume(volumeId)).manifest]
-      : await this.listVolumes();
+    const volumeIds = volumeId
+      ? [volumeId]
+      : await this.listDiscoveredVolumeIds();
     const volumeReports = await Promise.all(
-      manifests.map(async (manifest) => this.inspectVolume(manifest.id)),
+      volumeIds.map(async (discoveredVolumeId) => this.inspectVolume(discoveredVolumeId)),
     );
     const issueCount = volumeReports.reduce(
       (total, report) => total + report.issueCount,
@@ -839,21 +846,32 @@ export class VolumeRepository {
   }
 
   private async inspectVolume(volumeId: string): Promise<StorageDoctorVolumeReport> {
-    const record = await this.loadVolume(volumeId);
-    const persistedBlobRefs = await withVolumeDatabase(
-      this.getVolumeDatabasePath(volumeId),
-      async (database) => this.listPersistedBlobRefs(database),
-    );
-    const issues = this.collectDoctorIssues(record, persistedBlobRefs);
+    const databasePath = this.getVolumeDatabasePath(volumeId);
+    if (!(await pathExists(databasePath))) {
+      throw new VolumeError('NOT_FOUND', `Volume ${volumeId} does not exist.`, {
+        volumeId,
+      });
+    }
 
-    return {
-      volumeId: record.manifest.id,
-      volumeName: record.manifest.name,
-      revision: record.manifest.revision,
-      healthy: issues.length === 0,
-      issueCount: issues.length,
-      issues,
-    };
+    try {
+      return await withVolumeDatabase(databasePath, async (database) => {
+        const record = await this.loadVolumeFromDatabase(database, volumeId);
+        const persistedBlobRefs = await this.listPersistedBlobRefs(database);
+        const sqliteIssues = await this.collectSqliteDoctorIssues(database, volumeId);
+        const issues = [...sqliteIssues, ...this.collectDoctorIssues(record, persistedBlobRefs)];
+
+        return {
+          volumeId: record.manifest.id,
+          volumeName: record.manifest.name,
+          revision: record.manifest.revision,
+          healthy: issues.length === 0,
+          issueCount: issues.length,
+          issues,
+        };
+      });
+    } catch (error) {
+      return this.buildDatabaseOpenFailureReport(volumeId, error);
+    }
   }
 
   private async repairVolume(volumeId: string): Promise<StorageRepairVolumeReport> {
@@ -973,6 +991,84 @@ export class VolumeRepository {
     );
 
     return new Set(blobRows.map((row) => row.content_ref));
+  }
+
+  private async collectSqliteDoctorIssues(
+    database: SqliteVolumeDatabase,
+    volumeId: string,
+  ): Promise<StorageDoctorIssue[]> {
+    const issues: StorageDoctorIssue[] = [];
+    const integrityRows = await database.all<Record<string, string>[]>(
+      'PRAGMA integrity_check',
+    );
+    const integrityMessages = integrityRows
+      .map((row) => String(Object.values(row)[0] ?? ''))
+      .filter((message) => message.length > 0 && message !== 'ok');
+
+    if (integrityMessages.length > 0) {
+      issues.push({
+        code: 'SQLITE_INTEGRITY_CHECK_FAILED',
+        severity: 'error',
+        message: `SQLite integrity_check reported ${integrityMessages.length} problem(s) for volume ${volumeId}: ${integrityMessages.slice(0, 3).join(' | ')}.`,
+      });
+    }
+
+    const foreignKeyViolations = await database.all<SqliteForeignKeyCheckRow[]>(
+      'PRAGMA foreign_key_check',
+    );
+    if (foreignKeyViolations.length > 0) {
+      const firstViolation = foreignKeyViolations[0];
+      issues.push({
+        code: 'SQLITE_FOREIGN_KEY_VIOLATION',
+        severity: 'error',
+        message: `SQLite foreign_key_check reported ${foreignKeyViolations.length} violation(s) for volume ${volumeId}. First violation: table=${firstViolation?.table ?? 'unknown'} rowid=${firstViolation?.rowid ?? -1} parent=${firstViolation?.parent ?? 'unknown'} fkid=${firstViolation?.fkid ?? -1}.`,
+      });
+    }
+
+    return issues;
+  }
+
+  private buildDatabaseOpenFailureReport(
+    volumeId: string,
+    error: unknown,
+  ): StorageDoctorVolumeReport {
+    const message = error instanceof Error ? error.message : String(error);
+
+    this.logger.warn(
+      {
+        volumeId,
+        error: message,
+      },
+      'Doctor could not inspect volume database.',
+    );
+
+    return {
+      volumeId,
+      volumeName: volumeId,
+      revision: 0,
+      healthy: false,
+      issueCount: 1,
+      issues: [
+        {
+          code: 'DATABASE_OPEN_FAILED',
+          severity: 'error',
+          message: `Volume ${volumeId} could not be inspected because its SQLite database is unreadable or invalid: ${message}`,
+        },
+      ],
+    };
+  }
+
+  private async listDiscoveredVolumeIds(): Promise<string[]> {
+    await this.initialize();
+
+    const directoryEntries = await fs.readdir(this.getVolumesDirectory(), {
+      withFileTypes: true,
+    });
+
+    return directoryEntries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(VOLUME_DATABASE_EXTENSION))
+      .map((entry) => entry.name.slice(0, -VOLUME_DATABASE_EXTENSION.length))
+      .sort((left, right) => left.localeCompare(right));
   }
 
   private collectDoctorIssues(
