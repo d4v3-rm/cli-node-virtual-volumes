@@ -94,6 +94,7 @@ describe('support bundle', () => {
 
     expect(result.bundleVersion).toBe(1);
     expect(result.cliVersion).toBe(APP_VERSION);
+    expect(result.correlationId).toBe(runtime.correlationId);
     expect(result.bundlePath).toBe(path.resolve(bundlePath));
     expect(result.backupPath).toBe(path.resolve(backupPath));
     expect(result.volumeId).toBe(volume.id);
@@ -239,6 +240,7 @@ describe('support bundle', () => {
       checksumsPath: path.join(path.resolve(bundlePath), 'checksums.json'),
       bundleVersion: 1,
       bundleCliVersion: APP_VERSION,
+      bundleCorrelationId: runtime.correlationId,
       volumeId: volume.id,
       issueCount: 0,
       expectedFiles: 6,

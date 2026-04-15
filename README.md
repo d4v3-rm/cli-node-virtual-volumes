@@ -168,6 +168,7 @@ Operational notes:
 - If `VOLUME_DATA_DIR` is not set, the runtime uses the current working directory.
 - If `VOLUME_AUDIT_LOG_DIR` is not set, audit logs default to `VOLUME_LOG_DIR/audit`.
 - Audit logs are written separately from application logs and capture structured success/failure events for core write, import, export, delete, backup, restore, and diagnostics operations.
+- Each CLI command runtime gets a correlation ID shared across app logs, audit logs, `--output` artifacts, and support bundles.
 - `VOLUME_HOST_ALLOW_PATHS` and `VOLUME_HOST_DENY_PATHS` accept absolute or relative paths, resolved at startup.
 - Path lists use `;` on Windows and `:` on Linux/macOS.
 - If an allowlist is configured, import and export are blocked outside those roots. Denylist roots always win.
@@ -264,7 +265,7 @@ virtual-volumes support-bundle ./reports/finance-support vol_finance_01 --backup
 virtual-volumes inspect-support-bundle ./reports/finance-support
 ```
 
-For audit and automation, operational commands also support `--output <path>` to persist a structured JSON artifact with `command`, `cliVersion`, `generatedAt`, and `payload`, while keeping the normal CLI output on stdout.
+For audit and automation, operational commands also support `--output <path>` to persist a structured JSON artifact with `command`, `cliVersion`, `correlationId`, `generatedAt`, and `payload`, while keeping the normal CLI output on stdout.
 
 Each standard backup produces:
 
@@ -284,6 +285,7 @@ For the full operational procedure, drills, and audit checklist, see [docs/BACKU
 Each support bundle includes:
 
 - `manifest.json` with runtime/config metadata
+- `correlationId` inside the support bundle manifest for log lookup
 - `checksums.json` with SHA-256 inventory for the generated files
 - `doctor-report.json`
 - optional `backup-inspection.json`

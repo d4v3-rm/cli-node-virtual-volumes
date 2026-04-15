@@ -4,12 +4,25 @@ import pino, { type Logger, type StreamEntry } from 'pino';
 
 import type { AppConfig } from '../config/env.js';
 
+interface LoggerContext {
+  correlationId?: string;
+}
+
 const createFileDestination = (destinationPath: string, sync: boolean) =>
   pino.destination({
     dest: destinationPath,
     mkdir: true,
     sync,
   });
+
+const createLoggerBase = (
+  baseContext: LoggerContext,
+  extraContext: Record<string, unknown> = {},
+): Record<string, unknown> => ({
+  pid: process.pid,
+  ...extraContext,
+  ...(baseContext.correlationId ? { correlationId: baseContext.correlationId } : {}),
+});
 
 export const resolveAppLogFilePath = (
   config: AppConfig,
@@ -27,7 +40,10 @@ export const resolveAuditLogFilePath = (
   return path.join(config.auditLogDir, `cli-node-virtual-volumes-audit-${dayStamp}.log`);
 };
 
-export const createAppLogger = (config: AppConfig): Logger => {
+export const createAppLogger = (
+  config: AppConfig,
+  baseContext: LoggerContext = {},
+): Logger => {
   const streams: StreamEntry[] = [
     {
       stream: createFileDestination(resolveAppLogFilePath(config), false),
@@ -42,24 +58,22 @@ export const createAppLogger = (config: AppConfig): Logger => {
     {
       name: 'cli-node-virtual-volumes',
       level: config.logLevel,
-      base: {
-        pid: process.pid,
-      },
+      base: createLoggerBase(baseContext),
       timestamp: pino.stdTimeFunctions.isoTime,
     },
     pino.multistream(streams),
   );
 };
 
-export const createAuditLogger = (config: AppConfig): Logger =>
+export const createAuditLogger = (
+  config: AppConfig,
+  baseContext: LoggerContext = {},
+): Logger =>
   pino(
     {
       name: 'cli-node-virtual-volumes-audit',
       level: config.auditLogLevel,
-      base: {
-        pid: process.pid,
-        channel: 'audit',
-      },
+      base: createLoggerBase(baseContext, { channel: 'audit' }),
       timestamp: pino.stdTimeFunctions.isoTime,
     },
     createFileDestination(resolveAuditLogFilePath(config), true),

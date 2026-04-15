@@ -93,6 +93,11 @@ const assertArtifactEnvelope = (artifact, expectedCommand, expectedVersion) => {
     `Artifact generatedAt is invalid for ${expectedCommand}.`,
   );
   assert(
+    typeof artifact.correlationId === 'string' &&
+      artifact.correlationId.length > 0,
+    `Artifact correlationId is missing for ${expectedCommand}.`,
+  );
+  assert(
     Object.hasOwn(artifact, 'payload'),
     `Artifact payload missing for ${expectedCommand}.`,
   );
@@ -239,6 +244,10 @@ try {
     doctorRun.stdout.includes(`Artifact path: ${path.resolve(doctorReportPath)}`),
     'Doctor human output should mention the artifact path.',
   );
+  assert(
+    doctorRun.stdout.includes(`Correlation ID: ${doctorArtifact.correlationId}`),
+    'Doctor human output should mention the correlation id.',
+  );
   assertArtifactEnvelope(doctorArtifact, 'doctor', packageJson.version);
   assert(
     doctorArtifact.payload.healthy === true,
@@ -303,6 +312,10 @@ try {
     supportBundleArtifact.payload.checksumsPath ===
       path.join(path.resolve(supportBundlePath), 'checksums.json'),
     'Support bundle artifact should include the checksum inventory path.',
+  );
+  assert(
+    supportBundleManifest.correlationId === supportBundleArtifact.correlationId,
+    'Support bundle manifest should reuse the command correlation id.',
   );
   assert(
     supportBundleManifest.doctorReportPath ===
@@ -403,6 +416,11 @@ try {
   assert(
     supportBundleInspectionArtifact.payload.verifiedFiles >= 6,
     'Support bundle inspection artifact should report verified bundle files.',
+  );
+  assert(
+    supportBundleInspectionArtifact.payload.bundleCorrelationId ===
+      supportBundleManifest.correlationId,
+    'Support bundle inspection should expose the bundle correlation id.',
   );
 
   process.stdout.write(

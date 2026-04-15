@@ -14,6 +14,7 @@ import {
 } from './cli/support-bundle.js';
 import { createSupportBundle, inspectSupportBundle } from './ops/support-bundle.js';
 import { TerminalApp } from './ui/terminal-app.js';
+import { createCorrelationId } from './utils/correlation.js';
 
 const main = async (): Promise<void> => {
   const program = new Command()
@@ -71,16 +72,20 @@ const main = async (): Promise<void> => {
         options: { json?: boolean; output?: string; force?: boolean },
       ) => {
         const runtime = await createRuntime(getRuntimeOverrides());
+        const correlationId = runtime.correlationId;
         const result = await runtime.volumeService.backupVolume(volumeId, destinationPath, {
           overwrite: options.force,
         });
         const artifactPath = options.output
-          ? await writeCliJsonArtifact('backup', result, options.output)
+          ? await writeCliJsonArtifact('backup', result, options.output, {
+              correlationId,
+            })
           : null;
 
         console.log(
           renderCliResult(result, formatBackupResult, {
             artifactPath,
+            correlationId,
             json: options.json,
           }),
         );
@@ -100,16 +105,20 @@ const main = async (): Promise<void> => {
         options: { json?: boolean; output?: string; force?: boolean },
       ) => {
         const runtime = await createRuntime(getRuntimeOverrides());
+        const correlationId = runtime.correlationId;
         const result = await runtime.volumeService.restoreVolumeBackup(backupPath, {
           overwrite: options.force,
         });
         const artifactPath = options.output
-          ? await writeCliJsonArtifact('restore', result, options.output)
+          ? await writeCliJsonArtifact('restore', result, options.output, {
+              correlationId,
+            })
           : null;
 
         console.log(
           renderCliResult(result, formatRestoreResult, {
             artifactPath,
+            correlationId,
             json: options.json,
           }),
         );
@@ -128,14 +137,18 @@ const main = async (): Promise<void> => {
         options: { json?: boolean; output?: string },
       ) => {
         const runtime = await createRuntime(getRuntimeOverrides());
+        const correlationId = runtime.correlationId;
         const result = await runtime.volumeService.inspectVolumeBackup(backupPath);
         const artifactPath = options.output
-          ? await writeCliJsonArtifact('inspect-backup', result, options.output)
+          ? await writeCliJsonArtifact('inspect-backup', result, options.output, {
+              correlationId,
+            })
           : null;
 
         console.log(
           renderCliResult(result, formatBackupInspectionResult, {
             artifactPath,
+            correlationId,
             json: options.json,
           }),
         );
@@ -154,40 +167,47 @@ const main = async (): Promise<void> => {
         volumeId: string | undefined,
         options: { json?: boolean; output?: string; fix?: boolean },
       ) => {
-      const runtime = await createRuntime(getRuntimeOverrides());
-      if (options.fix) {
-        const report = await runtime.volumeService.runRepair(volumeId);
-        const artifactPath = options.output
-          ? await writeCliJsonArtifact('doctor --fix', report, options.output)
-          : null;
+        const runtime = await createRuntime(getRuntimeOverrides());
+        const correlationId = runtime.correlationId;
+        if (options.fix) {
+          const report = await runtime.volumeService.runRepair(volumeId);
+          const artifactPath = options.output
+            ? await writeCliJsonArtifact('doctor --fix', report, options.output, {
+                correlationId,
+              })
+            : null;
 
-        console.log(
-          renderCliResult(report, formatRepairReport, {
-            artifactPath,
-            json: options.json,
-          }),
-        );
+          console.log(
+            renderCliResult(report, formatRepairReport, {
+              artifactPath,
+              correlationId,
+              json: options.json,
+            }),
+          );
 
-        if (!report.healthy) {
-          process.exitCode = 1;
+          if (!report.healthy) {
+            process.exitCode = 1;
+          }
+        } else {
+          const report = await runtime.volumeService.runDoctor(volumeId);
+          const artifactPath = options.output
+            ? await writeCliJsonArtifact('doctor', report, options.output, {
+                correlationId,
+              })
+            : null;
+
+          console.log(
+            renderCliResult(report, formatDoctorReport, {
+              artifactPath,
+              correlationId,
+              json: options.json,
+            }),
+          );
+
+          if (!report.healthy) {
+            process.exitCode = 1;
+          }
         }
-      } else {
-        const report = await runtime.volumeService.runDoctor(volumeId);
-        const artifactPath = options.output
-          ? await writeCliJsonArtifact('doctor', report, options.output)
-          : null;
-
-        console.log(
-          renderCliResult(report, formatDoctorReport, {
-            artifactPath,
-            json: options.json,
-          }),
-        );
-
-        if (!report.healthy) {
-          process.exitCode = 1;
-        }
-      }
       },
     );
 
@@ -214,6 +234,7 @@ const main = async (): Promise<void> => {
         },
       ) => {
         const runtime = await createRuntime(getRuntimeOverrides());
+        const correlationId = runtime.correlationId;
         const result = await createSupportBundle(runtime, {
           destinationPath,
           volumeId,
@@ -221,12 +242,15 @@ const main = async (): Promise<void> => {
           overwrite: options.force,
         });
         const artifactPath = options.output
-          ? await writeCliJsonArtifact('support-bundle', result, options.output)
+          ? await writeCliJsonArtifact('support-bundle', result, options.output, {
+              correlationId,
+            })
           : null;
 
         console.log(
           renderCliResult(result, formatSupportBundleResult, {
             artifactPath,
+            correlationId,
             json: options.json,
           }),
         );
@@ -246,18 +270,23 @@ const main = async (): Promise<void> => {
         bundlePath: string,
         options: { json?: boolean; output?: string },
       ) => {
+        const correlationId = createCorrelationId();
         const result = await inspectSupportBundle(bundlePath);
         const artifactPath = options.output
           ? await writeCliJsonArtifact(
               'inspect-support-bundle',
               result,
               options.output,
+              {
+                correlationId,
+              },
             )
           : null;
 
         console.log(
           renderCliResult(result, formatSupportBundleInspectionResult, {
             artifactPath,
+            correlationId,
             json: options.json,
           }),
         );

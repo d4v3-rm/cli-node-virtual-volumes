@@ -221,6 +221,11 @@ try {
     'Installed CLI artifact should use the packaged CLI version.',
   );
   assert(
+    typeof doctorArtifact.correlationId === 'string' &&
+      doctorArtifact.correlationId.length > 0,
+    'Installed CLI artifact should include a correlation id.',
+  );
+  assert(
     doctorArtifact.payload.volumes?.[0]?.volumeId === volumeId,
     'Installed CLI artifact should reference the smoke-test volume.',
   );
@@ -260,8 +265,17 @@ try {
     'Installed CLI support-bundle artifact should include the command metadata.',
   );
   assert(
+    typeof supportBundleArtifact.correlationId === 'string' &&
+      supportBundleArtifact.correlationId.length > 0,
+    'Installed CLI support-bundle artifact should include a correlation id.',
+  );
+  assert(
     supportBundleArtifact.payload.bundlePath === path.resolve(supportBundlePath),
     'Installed CLI support-bundle artifact should include the bundle path.',
+  );
+  assert(
+    supportBundleManifest.correlationId === supportBundleArtifact.correlationId,
+    'Installed CLI support bundle manifest should reuse the command correlation id.',
   );
   assert(
     supportBundleManifest.doctorReportPath ===
@@ -321,8 +335,18 @@ try {
     'Installed CLI support-bundle inspection artifact should include the command metadata.',
   );
   assert(
+    typeof supportBundleInspectionArtifact.correlationId === 'string' &&
+      supportBundleInspectionArtifact.correlationId.length > 0,
+    'Installed CLI support-bundle inspection artifact should include a correlation id.',
+  );
+  assert(
     supportBundleInspectionArtifact.payload.verifiedFiles >= 3,
     'Installed CLI support-bundle inspection artifact should report verified files.',
+  );
+  assert(
+    supportBundleInspectionArtifact.payload.bundleCorrelationId ===
+      supportBundleManifest.correlationId,
+    'Installed CLI support-bundle inspection should expose the bundle correlation id.',
   );
 
   process.stdout.write(
