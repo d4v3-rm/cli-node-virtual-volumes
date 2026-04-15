@@ -125,10 +125,13 @@ try {
 
   await fs.mkdir(consumerRoot, { recursive: true });
 
+  const consumerTarballPath = path.join(consumerRoot, path.basename(tarballPath));
+  await fs.copyFile(tarballPath, consumerTarballPath);
+
   runCommand(npmCommand, ['init', '-y'], { cwd: consumerRoot });
   runCommand(
     npmCommand,
-    ['install', '--no-package-lock', tarballPath],
+    ['install', '--no-package-lock', `./${path.basename(consumerTarballPath)}`],
     { cwd: consumerRoot },
   );
 
