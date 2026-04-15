@@ -111,6 +111,7 @@ import {
 import {
   canRunShellHotkey,
   getShellHotkeyBindings,
+  getQuitHotkeyAction,
   type ShellHotkeyAction,
   type ShellHotkeyContext,
 } from './shell-hotkeys.js';
@@ -325,21 +326,25 @@ export class TerminalApp {
     });
 
     this.screen.key(['q'], () => {
-      if (this.overlayMode) {
-        return;
-      }
+      const action = getQuitHotkeyAction({
+        busy: this.isBusy(),
+        mode: this.mode,
+        overlayOpen: this.overlayMode !== null,
+      });
 
-      if (this.isBusy()) {
-        this.notify('info', 'An operation is still running. Press Ctrl+C to force exit.');
-        return;
+      switch (action.kind) {
+        case 'notify':
+          this.notify('info', action.message);
+          return;
+        case 'shutdown':
+          void this.shutdown();
+          return;
+        case 'dashboard':
+          void this.goToDashboard();
+          return;
+        default:
+          return;
       }
-
-      if (this.mode === 'dashboard') {
-        void this.shutdown();
-        return;
-      }
-
-      void this.goToDashboard();
     });
 
     for (const binding of getShellHotkeyBindings()) {

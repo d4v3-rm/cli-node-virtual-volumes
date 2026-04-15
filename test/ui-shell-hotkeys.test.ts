@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildShellShortcutLines,
   canRunShellHotkey,
   getShellHotkeyBindings,
+  getQuitHotkeyAction,
   type ShellHotkeyContext,
 } from '../src/ui/shell-hotkeys.js';
 
@@ -81,5 +83,66 @@ describe('ui shell hotkeys', () => {
 
     expect(canRunShellHotkey('dashboard', explorerContext)).toBe(false);
     expect(canRunShellHotkey('explorer', explorerContext)).toBe(true);
+  });
+
+  it('builds the shell shortcut legend for dashboard and explorer modes', () => {
+    expect(buildShellShortcutLines('dashboard')).toEqual([
+      '[UP/DOWN] Select volume',
+      '[RIGHT/ENTER] Open volume',
+      '[PGUP/PGDN] Page volumes',
+      '[HOME/END] Jump list bounds',
+      '[N] New volume',
+      '[X] Delete volume',
+      '[R] Refresh   [?] Help',
+      '[Q] Quit',
+    ]);
+
+    expect(buildShellShortcutLines('explorer')).toEqual([
+      '[UP/DOWN] Select entry',
+      '[LEFT/RIGHT] Parent or open',
+      '[PGUP/PGDN] Page entries',
+      '[HOME/END] Jump list bounds',
+      '[I] Import   [E] Export',
+      '[C] Folder   [M] Move',
+      '[D] Delete   [P] Preview',
+      '[R] Refresh  [B/Q] Dashboard',
+    ]);
+  });
+
+  it('derives quit-key behavior for overlay, busy, dashboard, and explorer states', () => {
+    expect(
+      getQuitHotkeyAction({
+        busy: false,
+        mode: 'dashboard',
+        overlayOpen: true,
+      }),
+    ).toEqual({ kind: 'noop' });
+
+    expect(
+      getQuitHotkeyAction({
+        busy: true,
+        mode: 'explorer',
+        overlayOpen: false,
+      }),
+    ).toEqual({
+      kind: 'notify',
+      message: 'An operation is still running. Press Ctrl+C to force exit.',
+    });
+
+    expect(
+      getQuitHotkeyAction({
+        busy: false,
+        mode: 'dashboard',
+        overlayOpen: false,
+      }),
+    ).toEqual({ kind: 'shutdown' });
+
+    expect(
+      getQuitHotkeyAction({
+        busy: false,
+        mode: 'explorer',
+        overlayOpen: false,
+      }),
+    ).toEqual({ kind: 'dashboard' });
   });
 });
