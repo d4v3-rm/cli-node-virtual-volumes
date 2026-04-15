@@ -21,11 +21,14 @@ import type {
   ImportProgress,
   ImportSummary,
   MoveEntryInput,
+  RestoreVolumeBackupOptions,
   StorageDoctorReport,
   StorageRepairReport,
   VolumeEntry,
+  VolumeBackupResult,
   VolumeManifest,
   VolumeRecord,
+  VolumeRestoreResult,
   VolumeState,
 } from '../domain/types.js';
 import { BlobStore } from '../storage/blob-store.js';
@@ -82,6 +85,21 @@ export class VolumeService {
 
   public async deleteVolume(volumeId: string): Promise<void> {
     await this.repository.deleteVolume(volumeId);
+  }
+
+  public async backupVolume(
+    volumeId: string,
+    destinationPath: string,
+    options: { overwrite?: boolean } = {},
+  ): Promise<VolumeBackupResult> {
+    return this.repository.backupVolume(volumeId, destinationPath, options);
+  }
+
+  public async restoreVolumeBackup(
+    backupPath: string,
+    options: RestoreVolumeBackupOptions = {},
+  ): Promise<VolumeRestoreResult> {
+    return this.repository.restoreVolumeBackup(backupPath, options);
   }
 
   public async runDoctor(volumeId?: string): Promise<StorageDoctorReport> {

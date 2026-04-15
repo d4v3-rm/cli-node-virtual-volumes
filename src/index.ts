@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 
 import { createRuntime } from './bootstrap/create-runtime.js';
+import { formatBackupResult, formatRestoreResult } from './cli/backup.js';
 import { formatDoctorReport, formatRepairReport } from './cli/doctor.js';
 import { TerminalApp } from './ui/terminal-app.js';
 
@@ -44,6 +45,56 @@ const main = async (): Promise<void> => {
     const app = new TerminalApp(runtime);
     await app.start();
   });
+
+  program
+    .command('backup')
+    .description('Create a consistent SQLite backup for a specific volume.')
+    .argument('<volumeId>', 'Back up a specific volume by id')
+    .argument('<destinationPath>', 'Write the backup snapshot to this path')
+    .option('--json', 'Output the result as JSON')
+    .option('--force', 'Overwrite the destination file if it already exists')
+    .action(
+      async (
+        volumeId: string,
+        destinationPath: string,
+        options: { json?: boolean; force?: boolean },
+      ) => {
+        const runtime = await createRuntime(getRuntimeOverrides());
+        const result = await runtime.volumeService.backupVolume(volumeId, destinationPath, {
+          overwrite: options.force,
+        });
+
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          console.log(formatBackupResult(result));
+        }
+      },
+    );
+
+  program
+    .command('restore')
+    .description('Restore a volume SQLite backup into the managed data directory.')
+    .argument('<backupPath>', 'Restore a backup snapshot previously created by the CLI')
+    .option('--json', 'Output the result as JSON')
+    .option('--force', 'Overwrite an existing volume with the same id')
+    .action(
+      async (
+        backupPath: string,
+        options: { json?: boolean; force?: boolean },
+      ) => {
+        const runtime = await createRuntime(getRuntimeOverrides());
+        const result = await runtime.volumeService.restoreVolumeBackup(backupPath, {
+          overwrite: options.force,
+        });
+
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          console.log(formatRestoreResult(result));
+        }
+      },
+    );
 
   program
     .command('doctor')

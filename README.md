@@ -73,6 +73,7 @@ In pratica ottieni volumi virtuali persistenti, con spazio logico configurabile,
 - Preview rapida dei file di testo.
 - Persistenza dei contenuti e dei metadata.
 - Un file `.sqlite` dedicato per ogni volume virtuale.
+- Backup e restore consistenti dei volumi SQLite.
 
 ### Terminal experience
 
@@ -99,6 +100,7 @@ In pratica ottieni volumi virtuali persistenti, con spazio logico configurabile,
 
 - Configurazione via `.env`.
 - Logging strutturato su file.
+- Comandi CLI per doctor, repair, backup e restore.
 - Build TypeScript con `tsup`.
 - Test con `vitest`.
 - Linting con `eslint`.
@@ -148,7 +150,7 @@ npm install
 
 ```bash
 npm pack
-npm install -g ./cli-node-virtual-volumes-0.3.0.tgz
+npm install -g ./cli-node-virtual-volumes-1.1.0.tgz
 ```
 
 Dopo l'installazione globale il comando disponibile e':
