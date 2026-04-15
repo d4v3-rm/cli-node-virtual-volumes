@@ -1223,6 +1223,8 @@ export class VolumeRepository {
       const legacyDirectoryPath = path.join(this.getVolumesDirectory(), entry.name);
       const manifestPath = path.join(legacyDirectoryPath, 'manifest.json');
       const statePath = path.join(legacyDirectoryPath, 'state.json');
+      let databasePathToCleanup: string | null = null;
+      let shouldCleanupDatabase = false;
 
       if (!(await pathExists(manifestPath)) || !(await pathExists(statePath))) {
         continue;
@@ -1233,10 +1235,17 @@ export class VolumeRepository {
         manifest.revision ??= 0;
         const state = await readJsonFile<VolumeState>(statePath);
         const databasePath = this.getVolumeDatabasePath(manifest.id);
+        databasePathToCleanup = databasePath;
+        const databaseAlreadyExists = await pathExists(databasePath);
+        shouldCleanupDatabase = !databaseAlreadyExists;
 
-        if (!(await pathExists(databasePath))) {
-          await this.migrateLegacyBlobs(legacyDirectoryPath, databasePath, state);
-          await this.saveVolume({ manifest, state });
+        if (!databaseAlreadyExists) {
+          await this.migrateLegacyVolumeToDatabase(
+            legacyDirectoryPath,
+            databasePath,
+            manifest,
+            state,
+          );
         }
 
         await fs.rm(legacyDirectoryPath, { recursive: true, force: true });
@@ -1245,6 +1254,9 @@ export class VolumeRepository {
           'Migrated legacy volume directory to sqlite volume file.',
         );
       } catch (error) {
+        if (shouldCleanupDatabase && databasePathToCleanup) {
+          await this.deleteDatabaseArtifacts(databasePathToCleanup).catch(() => undefined);
+        }
         this.logger.error(
           {
             legacyDirectoryPath,
@@ -1256,19 +1268,52 @@ export class VolumeRepository {
     }
   }
 
-  private async migrateLegacyBlobs(
+  private async migrateLegacyVolumeToDatabase(
     legacyDirectoryPath: string,
     databasePath: string,
+    manifest: VolumeManifest,
+    state: VolumeState,
+  ): Promise<void> {
+    const record: VolumeRecord = {
+      manifest,
+      state,
+    };
+    const blobStore = new BlobStore(
+      databasePath,
+      this.logger.child({ scope: 'blob-store-migration', volumeId: manifest.id }),
+    );
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      await database.exec('BEGIN IMMEDIATE TRANSACTION');
+
+      try {
+        await this.migrateLegacyBlobsInDatabase(
+          database,
+          legacyDirectoryPath,
+          blobStore,
+          state,
+        );
+        await this.persistVolumeToDatabase(database, record);
+        await database.exec('COMMIT');
+      } catch (error) {
+        await database.exec('ROLLBACK').catch(() => undefined);
+        throw error;
+      }
+    });
+
+    this.volumeCache.set(record.manifest.id, record);
+  }
+
+  private async migrateLegacyBlobsInDatabase(
+    database: SqliteVolumeDatabase,
+    legacyDirectoryPath: string,
+    blobStore: BlobStore,
     state: VolumeState,
   ): Promise<void> {
     const contentRefs = new Set(
       Object.values(state.entries).flatMap((entry) =>
         entry.kind === 'file' ? [entry.contentRef] : [],
       ),
-    );
-    const blobStore = new BlobStore(
-      databasePath,
-      this.logger.child({ scope: 'blob-store-migration' }),
     );
 
     for (const contentRef of contentRefs) {
@@ -1280,15 +1325,36 @@ export class VolumeRepository {
       );
 
       if (!(await pathExists(legacyBlobPath))) {
-        this.logger.warn(
-          { legacyBlobPath, contentRef },
-          'Legacy blob file is missing during sqlite migration.',
+        throw new VolumeError(
+          'INTEGRITY_CHECK_FAILED',
+          `Legacy blob file is missing during sqlite migration: ${legacyBlobPath}`,
+          {
+            legacyBlobPath,
+            contentRef,
+          },
         );
-        continue;
       }
 
-      const buffer = await fs.readFile(legacyBlobPath);
-      await blobStore.putKnownBuffer(contentRef, buffer);
+      const blobStats = await fs.stat(legacyBlobPath);
+      const descriptor = await blobStore.putHostFileInDatabase(
+        database,
+        legacyBlobPath,
+        {
+          totalBytes: blobStats.size,
+        },
+      );
+
+      if (descriptor.contentRef !== contentRef) {
+        throw new VolumeError(
+          'INTEGRITY_CHECK_FAILED',
+          `Legacy blob ${legacyBlobPath} does not match expected content ref ${contentRef}.`,
+          {
+            legacyBlobPath,
+            expectedContentRef: contentRef,
+            actualContentRef: descriptor.contentRef,
+          },
+        );
+      }
     }
   }
 
