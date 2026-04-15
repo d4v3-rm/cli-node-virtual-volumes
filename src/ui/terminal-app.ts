@@ -108,6 +108,7 @@ import {
   buildPrimaryPanelView,
   buildShortcutsPanelContent,
 } from './shell-panels.js';
+import { buildScreenOptions, buildShellWidgetSpecs } from './shell-widgets.js';
 import {
   buildExplorerOpenRequest,
   canHandleShellNavigation,
@@ -125,6 +126,7 @@ import {
   pageDashboardSelection,
   pageExplorerSelection,
 } from './shell-navigation.js';
+import { THEME } from './theme.js';
 
 type ScreenMode = 'dashboard' | 'explorer';
 type OverlayMode = OverlayFrameMode | null;
@@ -161,74 +163,6 @@ interface MutableElementStyle {
   selected?: MutableSelectedStyle;
 }
 
-interface ThemePalette {
-  background: string;
-  headerDashboard: string;
-  headerExplorer: string;
-  panelNavigation: string;
-  panelInspector: string;
-  panelShortcuts: string;
-  panelOverlay: string;
-  panelOverlayAlt: string;
-  borderNavigation: string;
-  borderInspector: string;
-  borderShortcuts: string;
-  borderOverlay: string;
-  borderOverlayAlt: string;
-  borderStatus: string;
-  accent: string;
-  accentSecondary: string;
-  accentWarm: string;
-  accentMuted: string;
-  text: string;
-  muted: string;
-  info: string;
-  infoBg: string;
-  success: string;
-  successBg: string;
-  warning: string;
-  warningBg: string;
-  danger: string;
-  dangerBg: string;
-  statusIdleBg: string;
-  statusBusyBg: string;
-  input: string;
-}
-
-const THEME: ThemePalette = {
-  background: 'black',
-  headerDashboard: 'black',
-  headerExplorer: 'black',
-  panelNavigation: 'black',
-  panelInspector: 'black',
-  panelShortcuts: 'black',
-  panelOverlay: 'black',
-  panelOverlayAlt: 'black',
-  borderNavigation: '#3b82f6',
-  borderInspector: '#2dd4bf',
-  borderShortcuts: '#f59e0b',
-  borderOverlay: '#60a5fa',
-  borderOverlayAlt: '#34d399',
-  borderStatus: '#64748b',
-  accent: '#2dd4bf',
-  accentSecondary: '#60a5fa',
-  accentWarm: '#f59e0b',
-  accentMuted: '#14b8a6',
-  text: '#f3f4f6',
-  muted: '#94a3b8',
-  info: '#38bdf8',
-  infoBg: 'black',
-  success: '#34d399',
-  successBg: 'black',
-  warning: '#fbbf24',
-  warningBg: 'black',
-  danger: '#fb7185',
-  dangerBg: 'black',
-  statusIdleBg: 'black',
-  statusBusyBg: 'black',
-  input: 'black',
-};
-
 const SPINNER_FRAMES = ['|', '/', '-', '\\'];
 // Legacy icon table retained while terminal-app extraction is still in progress.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -241,24 +175,6 @@ const ICONS = {
   parent: '↰',
   volume: '◈',
 } as const;
-
-const createPanel = (
-  screen: Widgets.Screen,
-  options: Widgets.BoxOptions,
-): Widgets.BoxElement =>
-  blessed.box({
-    parent: screen,
-    border: 'line',
-    tags: false,
-    style: {
-      bg: THEME.panelNavigation,
-      fg: THEME.text,
-      border: {
-        fg: THEME.borderNavigation,
-      },
-    },
-    ...options,
-  });
 
 export class TerminalApp {
   private readonly screen: Widgets.Screen;
@@ -314,167 +230,53 @@ export class TerminalApp {
   private destroyed = false;
 
   public constructor(private readonly runtime: AppRuntime) {
-    this.screen = blessed.screen({
-      smartCSR: false,
-      fullUnicode: true,
-      dockBorders: true,
-      autoPadding: false,
-      title: 'Virtual Volumes',
-      warnings: false,
-    });
+    const widgetSpecs = buildShellWidgetSpecs(THEME);
+
+    this.screen = blessed.screen(buildScreenOptions());
 
     this.headerBox = blessed.box({
       parent: this.screen,
-      top: 0,
-      left: 0,
-      width: '100%',
-      height: 3,
-      style: {
-        bg: THEME.headerDashboard,
-        fg: THEME.accentSecondary,
-      },
-      padding: {
-        left: 1,
-        right: 1,
-      },
+      ...widgetSpecs.headerBox,
     });
 
-    this.leftPane = createPanel(this.screen, {
-      top: 3,
-      left: 0,
-      width: '62%',
-      bottom: 4,
-      label: ' Navigation ',
+    this.leftPane = blessed.box({
+      parent: this.screen,
+      ...widgetSpecs.leftPane,
     });
 
     this.primaryList = blessed.list({
       parent: this.leftPane,
-      top: 1,
-      left: 1,
-      right: 1,
-      bottom: 1,
-      keys: false,
-      mouse: true,
-      vi: false,
-      tags: false,
-      style: {
-        bg: THEME.panelNavigation,
-        fg: THEME.text,
-        selected: {
-          bg: THEME.accentSecondary,
-          fg: '#020617',
-          bold: true,
-        },
-        item: {
-          fg: THEME.text,
-          bg: THEME.panelNavigation,
-        },
-      },
-      scrollbar: {
-        ch: ' ',
-        style: {
-          bg: THEME.borderNavigation,
-        },
-      },
+      ...widgetSpecs.primaryList,
     });
 
-    this.rightPane = createPanel(this.screen, {
-      top: 3,
-      left: '62%',
-      width: '38%',
-      bottom: 13,
-      label: ' Inspector ',
-      style: {
-        bg: THEME.panelInspector,
-        fg: THEME.text,
-        border: {
-          fg: THEME.borderInspector,
-        },
-      },
+    this.rightPane = blessed.box({
+      parent: this.screen,
+      ...widgetSpecs.rightPane,
     });
 
     this.inspectorBox = blessed.box({
       parent: this.rightPane,
-      top: 1,
-      left: 1,
-      right: 1,
-      bottom: 1,
-      scrollable: true,
-      alwaysScroll: true,
-      keys: false,
-      mouse: false,
-      tags: false,
-      style: {
-        bg: THEME.panelInspector,
-        fg: THEME.text,
-      },
-      scrollbar: {
-        ch: ' ',
-        style: {
-          bg: THEME.borderInspector,
-        },
-      },
+      ...widgetSpecs.inspectorBox,
     });
 
-    this.shortcutsBox = createPanel(this.screen, {
-      height: 9,
-      bottom: 4,
-      left: '62%',
-      width: '38%',
-      label: ' Keyboard ',
-      style: {
-        bg: THEME.panelShortcuts,
-        fg: THEME.text,
-        border: {
-          fg: THEME.borderShortcuts,
-        },
-      },
+    this.shortcutsBox = blessed.box({
+      parent: this.screen,
+      ...widgetSpecs.shortcutsBox,
     });
 
-    this.statusBox = createPanel(this.screen, {
-      height: 4,
-      bottom: 0,
-      left: 0,
-      width: '100%',
-      label: ' Status ',
-      style: {
-        bg: THEME.statusIdleBg,
-        fg: THEME.text,
-        border: {
-          fg: THEME.borderStatus,
-        },
-      },
+    this.statusBox = blessed.box({
+      parent: this.screen,
+      ...widgetSpecs.statusBox,
     });
 
     this.overlayBackdrop = blessed.box({
       parent: this.screen,
-      top: 0,
-      left: 0,
-      width: '100%',
-      height: '100%',
-      hidden: true,
-      style: {
-        bg: THEME.background,
-        transparent: false,
-      },
+      ...widgetSpecs.overlayBackdrop,
     });
 
     this.overlayContainer = blessed.box({
       parent: this.screen,
-      top: 'center',
-      left: 'center',
-      width: '78%',
-      height: '72%',
-      hidden: true,
-      border: 'line',
-      label: ' Modal ',
-      style: {
-        bg: THEME.panelOverlay,
-        fg: THEME.text,
-        border: {
-          fg: THEME.borderOverlay,
-        },
-      },
+      ...widgetSpecs.overlayContainer,
     });
 
     this.spinnerInterval = setInterval(() => {
