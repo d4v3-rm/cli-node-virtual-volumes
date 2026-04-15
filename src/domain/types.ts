@@ -341,6 +341,7 @@ export interface SupportBundleInspectionIssue {
     | 'MANIFEST_PATH_MISMATCH'
     | 'MISSING_BUNDLE_FILE'
     | 'MISSING_CHECKSUM_RECORD'
+    | 'RETENTION_WINDOW_EXCEEDED'
     | 'UNSUPPORTED_BUNDLE_VERSION';
   severity: 'error' | 'warn';
   message: string;

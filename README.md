@@ -311,6 +311,7 @@ Each support bundle includes:
 - checksum inventory structure
 - file size and SHA-256 integrity for the tracked files
 - bundle sensitivity, sharing, and handling metadata so operators can see whether the artifact is external-shareable or internal-only and how long it should be retained
+- retention window compliance, so stale bundles can be flagged before a handoff
 
 Use `virtual-volumes inspect-support-bundle ... --require-sharing external-shareable` before an external handoff, or `--require-sharing internal-only` to ensure the bundle is at least safe for internal escalation.
 

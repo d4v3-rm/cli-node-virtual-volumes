@@ -442,6 +442,61 @@ describe('support bundle', () => {
     expect(issueCodes).toContain('MISSING_BUNDLE_FILE');
   });
 
+  it('flags support bundles that exceed their recommended retention window', async () => {
+    const runtime = await createIsolatedRuntime({
+      redactSensitiveDetails: true,
+    });
+    const volume = await runtime.volumeService.createVolume({ name: 'Expired Bundle' });
+    const bundlePath = path.join(runtime.config.dataDir, '..', 'expired-support-bundle');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/hello.txt', 'retention');
+
+    const bundle = await createSupportBundle(runtime, {
+      destinationPath: bundlePath,
+      volumeId: volume.id,
+      includeLogs: false,
+    });
+    const manifest = JSON.parse(
+      await fs.readFile(bundle.manifestPath, 'utf8'),
+    ) as Record<string, unknown>;
+    const checksumManifestPath = path.join(bundlePath, 'checksums.json');
+    const checksumManifest = JSON.parse(
+      await fs.readFile(checksumManifestPath, 'utf8'),
+    ) as SupportBundleChecksumManifest;
+
+    manifest.generatedAt = '2026-01-01T00:00:00.000Z';
+    const serializedManifest = JSON.stringify(manifest, null, 2);
+    await fs.writeFile(bundle.manifestPath, serializedManifest, 'utf8');
+
+    const manifestRecord = checksumManifest.files.find((file) => file.role === 'manifest');
+    expect(manifestRecord).toBeDefined();
+    if (manifestRecord) {
+      manifestRecord.bytes = Buffer.byteLength(serializedManifest, 'utf8');
+      manifestRecord.checksumSha256 = createHash('sha256')
+        .update(serializedManifest)
+        .digest('hex');
+    }
+
+    await fs.writeFile(
+      checksumManifestPath,
+      JSON.stringify(checksumManifest, null, 2),
+      'utf8',
+    );
+
+    const inspection = await inspectSupportBundle(bundlePath);
+    const retentionIssue = inspection.issues.find(
+      (issue: SupportBundleInspectionIssue) =>
+        issue.code === 'RETENTION_WINDOW_EXCEEDED',
+    );
+
+    expect(inspection.healthy).toBe(false);
+    expect(retentionIssue).toMatchObject({
+      code: 'RETENTION_WINDOW_EXCEEDED',
+      severity: 'warn',
+    });
+    expect(retentionIssue?.message).toContain('retention window');
+  });
+
   it('inspects legacy support bundle manifests that do not include a content profile', async () => {
     const runtime = await createIsolatedRuntime({
       redactSensitiveDetails: true,

@@ -284,6 +284,37 @@ const addInspectionIssue = (
   issues.push(issue);
 };
 
+const addRetentionIssueIfExpired = (
+  issues: SupportBundleInspectionIssue[],
+  manifest: SupportBundleResult,
+  manifestPath: string,
+): void => {
+  const createdAt = Date.parse(manifest.generatedAt);
+  if (Number.isNaN(createdAt)) {
+    return;
+  }
+
+  const retentionWindowMs =
+    manifest.contentProfile.recommendedRetentionDays * 24 * 60 * 60 * 1000;
+  if (retentionWindowMs <= 0) {
+    return;
+  }
+
+  const expiresAt = createdAt + retentionWindowMs;
+  if (Date.now() <= expiresAt) {
+    return;
+  }
+
+  addInspectionIssue(issues, {
+    code: 'RETENTION_WINDOW_EXCEEDED',
+    severity: 'warn',
+    message: `Support bundle retention window of ${manifest.contentProfile.recommendedRetentionDays} day(s) has been exceeded.`,
+    path: manifestPath,
+    relativePath: 'manifest.json',
+    role: 'manifest',
+  });
+};
+
 const validateBundlePath = (
   issues: SupportBundleInspectionIssue[],
   actualPath: string,
@@ -938,6 +969,7 @@ export const inspectSupportBundle = async (
       checksumsPath,
       'Support bundle manifest points to an unexpected checksum manifest path.',
     );
+    addRetentionIssueIfExpired(issues, manifest, manifestPath);
 
     if (checksumManifest) {
       for (const expectedFile of getExpectedBundleFiles(manifest)) {
