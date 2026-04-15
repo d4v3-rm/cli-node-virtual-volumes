@@ -543,6 +543,47 @@ describe('VolumeService', () => {
     });
   });
 
+  it('rejects symbolic-link host imports before staging metadata or blobs', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Symlink Guard' });
+    const fakeSymlinkPath = path.join(runtime.config.dataDir, 'host-link');
+    const realLstat = fs.lstat.bind(fs);
+
+    const lstatSpy = vi
+      .spyOn(fs, 'lstat')
+      .mockImplementation(async (targetPath: Parameters<typeof fs.lstat>[0]) => {
+        const targetPathText =
+          typeof targetPath === 'string' ? targetPath : targetPath.toString();
+        if (path.resolve(targetPathText) === path.resolve(fakeSymlinkPath)) {
+          return {
+            isSymbolicLink: () => true,
+            isDirectory: () => false,
+            isFile: () => false,
+            size: 0,
+          } as Awaited<ReturnType<typeof fs.lstat>>;
+        }
+
+        return realLstat(targetPath);
+      });
+
+    await expect(
+      runtime.volumeService.importHostPaths(volume.id, {
+        destinationPath: '/',
+        hostPaths: [fakeSymlinkPath],
+      }),
+    ).rejects.toMatchObject({
+      code: 'UNSUPPORTED_HOST_ENTRY',
+      message: `Symbolic links are not supported: ${path.resolve(fakeSymlinkPath)}`,
+    });
+
+    lstatSpy.mockRestore();
+
+    const snapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+
+    expect(snapshot.entries).toHaveLength(0);
+    await expect(countPersistedBlobs(runtime.config.dataDir, volume.id)).resolves.toBe(0);
+  });
+
   it('exports virtual files and directories to the host and resolves name conflicts', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Exports' });
@@ -583,6 +624,29 @@ describe('VolumeService', () => {
     await expect(
       fs.readFile(path.join(hostRoot, 'alpha (2).txt'), 'utf8'),
     ).resolves.toBe('alpha');
+  });
+
+  it('rejects export destinations that already exist as host files', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Export Guard' });
+    const hostRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-export-guard-'));
+    sandboxes.push(hostRoot);
+    const hostFilePath = path.join(hostRoot, 'not-a-directory.txt');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/report.txt', 'export me');
+    await fs.writeFile(hostFilePath, 'existing host file');
+
+    await expect(
+      runtime.volumeService.exportEntryToHost(volume.id, {
+        sourcePath: '/report.txt',
+        destinationHostDirectory: hostFilePath,
+      }),
+    ).rejects.toMatchObject({
+      code: 'INVALID_OPERATION',
+      message: `The host destination must be a directory: ${path.resolve(hostFilePath)}`,
+    });
+
+    await expect(fs.readFile(hostFilePath, 'utf8')).resolves.toBe('existing host file');
   });
 
   it('reports export progress while virtual files are being written to the host', async () => {

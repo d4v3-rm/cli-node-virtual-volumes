@@ -20,26 +20,41 @@ import {
   buildMoveEntrySuccessMessage,
   buildPreviewOverlayOptions,
   parseVolumeQuotaInput,
+  VOLUME_QUOTA_UNITS,
 } from '../src/ui/action-presenters.js';
 
 describe('ui action presenters', () => {
   it('builds create volume prompts and parses quota input safely', () => {
-    const prompts = buildCreateVolumePrompts(8192);
+    const prompts = buildCreateVolumePrompts(10 * 1024 ** 4);
 
     expect(prompts.name.description).toBe('Volume name');
-    expect(prompts.quota.initialValue).toBe('8192');
+    expect(prompts.quotaValue.initialValue).toBe('10');
+    expect(prompts.quotaUnit.choices).toEqual([...VOLUME_QUOTA_UNITS]);
+    expect(prompts.quotaUnit.initialIndex).toBe(3);
     expect(prompts.description.description).toBe('Optional description');
 
-    expect(parseVolumeQuotaInput('')).toEqual({
+    expect(parseVolumeQuotaInput('', 'TB')).toEqual({
       error: null,
       quotaBytes: undefined,
     });
-    expect(parseVolumeQuotaInput('4096')).toEqual({
+    expect(parseVolumeQuotaInput('1.5', 'GB')).toEqual({
       error: null,
-      quotaBytes: 4096,
+      quotaBytes: 1610612736,
     });
-    expect(parseVolumeQuotaInput('abc')).toEqual({
-      error: 'Quota bytes must be a valid integer.',
+    expect(parseVolumeQuotaInput('10,5', 'MB')).toEqual({
+      error: null,
+      quotaBytes: 11010048,
+    });
+    expect(parseVolumeQuotaInput('abc', 'TB')).toEqual({
+      error: 'Quota value must be a valid number.',
+      quotaBytes: undefined,
+    });
+    expect(parseVolumeQuotaInput('0', 'TB')).toEqual({
+      error: 'Quota must be greater than zero.',
+      quotaBytes: undefined,
+    });
+    expect(parseVolumeQuotaInput('1.1', 'BORK')).toEqual({
+      error: 'Quota unit must be one of KB, MB, GB, TB.',
       quotaBytes: undefined,
     });
   });

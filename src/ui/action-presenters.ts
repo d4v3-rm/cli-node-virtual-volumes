@@ -7,29 +7,110 @@ import type {
 } from '../domain/types.js';
 import { formatBytes } from '../utils/formatters.js';
 import type {
+  ChoiceOverlayOptions,
   ConfirmOverlayOptions,
   PromptOverlayOptions,
   ScrollableOverlayOptions,
 } from './dialog-overlay.js';
+
+export const VOLUME_QUOTA_UNITS = ['KB', 'MB', 'GB', 'TB'] as const;
+export type VolumeQuotaUnit = (typeof VOLUME_QUOTA_UNITS)[number];
+
+const QUOTA_UNIT_MULTIPLIERS: Record<VolumeQuotaUnit, bigint> = {
+  KB: 1024n,
+  MB: 1024n ** 2n,
+  GB: 1024n ** 3n,
+  TB: 1024n ** 4n,
+};
+
+const clampChoiceIndex = (selectedIndex: number, choicesLength: number): number => {
+  if (choicesLength <= 0) {
+    return 0;
+  }
+
+  return Math.min(Math.max(0, selectedIndex), choicesLength - 1);
+};
+
+const formatExactQuotaValue = (quotaBytes: number, unit: VolumeQuotaUnit): string => {
+  const denominator = QUOTA_UNIT_MULTIPLIERS[unit];
+  const whole = BigInt(quotaBytes) / denominator;
+  let remainder = BigInt(quotaBytes) % denominator;
+
+  if (remainder === 0n) {
+    return whole.toString();
+  }
+
+  const fractionalDigits: string[] = [];
+  while (remainder > 0n) {
+    remainder *= 10n;
+    fractionalDigits.push((remainder / denominator).toString());
+    remainder %= denominator;
+  }
+
+  return `${whole}.${fractionalDigits.join('').replace(/0+$/, '')}`;
+};
+
+const getPreferredQuotaUnit = (quotaBytes: number): VolumeQuotaUnit => {
+  const rankedUnits: VolumeQuotaUnit[] = ['TB', 'GB', 'MB', 'KB'];
+
+  for (const unit of rankedUnits) {
+    const multiplier = QUOTA_UNIT_MULTIPLIERS[unit];
+    if (BigInt(quotaBytes) >= multiplier) {
+      return unit;
+    }
+  }
+
+  return 'KB';
+};
+
+const getDefaultQuotaPresentation = (
+  defaultQuotaBytes: number,
+): {
+  unit: VolumeQuotaUnit;
+  value: string;
+} => {
+  const unit = getPreferredQuotaUnit(defaultQuotaBytes);
+  return {
+    unit,
+    value: formatExactQuotaValue(defaultQuotaBytes, unit),
+  };
+};
+
+export const isVolumeQuotaUnit = (value: string): value is VolumeQuotaUnit =>
+  VOLUME_QUOTA_UNITS.includes(value as VolumeQuotaUnit);
 
 export const buildCreateVolumePrompts = (
   defaultQuotaBytes: number,
 ): {
   description: PromptOverlayOptions;
   name: PromptOverlayOptions;
-  quota: PromptOverlayOptions;
-} => ({
+  quotaUnit: ChoiceOverlayOptions;
+  quotaValue: PromptOverlayOptions;
+} => {
+  const defaultQuota = getDefaultQuotaPresentation(defaultQuotaBytes);
+
+  return {
   name: {
     title: 'Create Volume',
     description: 'Volume name',
     initialValue: '',
     footer: 'Enter saves. Esc cancels.',
   },
-  quota: {
+  quotaValue: {
     title: 'Create Volume',
-    description: 'Logical quota in bytes. Leave empty to use the default quota.',
-    initialValue: String(defaultQuotaBytes),
+    description: `Logical quota value. Leave empty to use the default quota of ${formatBytes(defaultQuotaBytes)}.`,
+    initialValue: defaultQuota.value,
     footer: 'Enter saves. Esc cancels.',
+  },
+  quotaUnit: {
+    title: 'Create Volume',
+    description: 'Quota unit. Left/Right or Tab switches between binary units.',
+    choices: [...VOLUME_QUOTA_UNITS],
+    initialIndex: clampChoiceIndex(
+      VOLUME_QUOTA_UNITS.indexOf(defaultQuota.unit),
+      VOLUME_QUOTA_UNITS.length,
+    ),
+    footer: 'Left/Right or Tab switches. Enter saves. Esc cancels.',
   },
   description: {
     title: 'Create Volume',
@@ -37,28 +118,69 @@ export const buildCreateVolumePrompts = (
     initialValue: '',
     footer: 'Enter saves. Esc cancels.',
   },
-});
+  };
+};
 
 export const parseVolumeQuotaInput = (
   quotaInput: string,
+  quotaUnit: string,
 ): {
   error: string | null;
   quotaBytes: number | undefined;
 } => {
   const trimmedQuota = quotaInput.trim();
-  const parsedQuota =
-    trimmedQuota.length === 0 ? undefined : Number.parseInt(trimmedQuota, 10);
-
-  if (parsedQuota !== undefined && Number.isNaN(parsedQuota)) {
+  if (trimmedQuota.length === 0) {
     return {
-      error: 'Quota bytes must be a valid integer.',
+      error: null,
+      quotaBytes: undefined,
+    };
+  }
+
+  if (!isVolumeQuotaUnit(quotaUnit)) {
+    return {
+      error: `Quota unit must be one of ${VOLUME_QUOTA_UNITS.join(', ')}.`,
+      quotaBytes: undefined,
+    };
+  }
+
+  const normalizedQuota = trimmedQuota.replace(',', '.');
+  if (!/^\d+(?:\.\d+)?$/.test(normalizedQuota)) {
+    return {
+      error: 'Quota value must be a valid number.',
+      quotaBytes: undefined,
+    };
+  }
+
+  const [wholePart, fractionalPart = ''] = normalizedQuota.split('.');
+  const scale = 10n ** BigInt(fractionalPart.length);
+  const numerator = BigInt(`${wholePart}${fractionalPart}`);
+  const bytesNumerator = numerator * QUOTA_UNIT_MULTIPLIERS[quotaUnit];
+
+  if (bytesNumerator % scale !== 0n) {
+    return {
+      error: `Quota ${trimmedQuota} ${quotaUnit} does not resolve to a whole number of bytes.`,
+      quotaBytes: undefined,
+    };
+  }
+
+  const quotaBytes = bytesNumerator / scale;
+  if (quotaBytes <= 0n) {
+    return {
+      error: 'Quota must be greater than zero.',
+      quotaBytes: undefined,
+    };
+  }
+
+  if (quotaBytes > BigInt(Number.MAX_SAFE_INTEGER)) {
+    return {
+      error: 'Quota exceeds the supported size for this runtime.',
       quotaBytes: undefined,
     };
   }
 
   return {
     error: null,
-    quotaBytes: parsedQuota,
+    quotaBytes: Number(quotaBytes),
   };
 };
 

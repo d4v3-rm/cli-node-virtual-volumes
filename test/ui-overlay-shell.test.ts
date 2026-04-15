@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildOverlayFrame,
   formatOverlayLabel,
+  getChoiceOverlayLayout,
   getConfirmOverlayLayout,
   getPromptOverlayLayout,
   getScrollableOverlayLayout,
@@ -108,6 +109,27 @@ describe('ui overlay shell helpers', () => {
         left: 2,
         right: 2,
         height: 3,
+      },
+      footerBox: {
+        left: 2,
+        right: 2,
+        bottom: 0,
+        height: 1,
+      },
+    });
+
+    expect(getChoiceOverlayLayout()).toEqual({
+      descriptionBox: {
+        top: 1,
+        left: 2,
+        right: 2,
+        height: 2,
+      },
+      choiceRow: {
+        top: 4,
+        left: 2,
+        right: 2,
+        height: 2,
       },
       footerBox: {
         left: 2,

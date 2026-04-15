@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildChoiceButtonRow,
+  buildChoiceOverlayView,
   buildConfirmButtonRow,
   buildConfirmOverlayView,
   buildPromptOverlayView,
   buildScrollableOverlayView,
+  cycleChoiceIndex,
   getScrollableOverlayMode,
   isDangerConfirmAction,
   resolvePromptValue,
@@ -104,5 +107,34 @@ describe('ui dialog overlay helpers', () => {
     expect(resolvePromptValue('renamed.txt', 'report.txt')).toBe('renamed.txt');
     expect(resolvePromptValue(undefined, 'report.txt')).toBe('report.txt');
     expect(resolvePromptValue(null, 'report.txt')).toBe('report.txt');
+  });
+
+  it('builds choice overlays and cycles selections safely', () => {
+    expect(cycleChoiceIndex(0, 4, -1)).toBe(3);
+    expect(cycleChoiceIndex(3, 4, 1)).toBe(0);
+    expect(buildChoiceButtonRow(['KB', 'MB', 'GB', 'TB'], 2)).toContain('[ GB ]');
+
+    const view = buildChoiceOverlayView(
+      {
+        title: 'Create Volume',
+        description: 'Quota unit',
+        choices: ['KB', 'MB', 'GB', 'TB'],
+        initialIndex: 2,
+        footer: 'Left/Right switches.',
+      },
+      2,
+    );
+
+    expect(view).toMatchObject({
+      borderTone: 'accentWarm',
+      description: 'Quota unit',
+      footer: 'Left/Right switches.',
+      height: 9,
+      mode: 'choice',
+      selectedIndex: 2,
+      title: 'Create Volume',
+      width: '68%',
+    });
+    expect(view.choicesContent).toContain('[ GB ]');
   });
 });

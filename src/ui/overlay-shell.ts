@@ -1,4 +1,10 @@
-export type OverlayFrameMode = 'help' | 'preview' | 'confirm' | 'input' | 'hostBrowser';
+export type OverlayFrameMode =
+  | 'help'
+  | 'preview'
+  | 'confirm'
+  | 'input'
+  | 'choice'
+  | 'hostBrowser';
 export type OverlayBorderTone =
   | 'info'
   | 'accentSecondary'
@@ -106,6 +112,31 @@ export const getPromptOverlayLayout = (): {
     left: 2,
     right: 2,
     height: 3,
+  },
+  footerBox: {
+    left: 2,
+    right: 2,
+    bottom: 0,
+    height: 1,
+  },
+});
+
+export const getChoiceOverlayLayout = (): {
+  choiceRow: OverlayRegionLayout;
+  descriptionBox: OverlayRegionLayout;
+  footerBox: OverlayRegionLayout;
+} => ({
+  descriptionBox: {
+    top: 1,
+    left: 2,
+    right: 2,
+    height: 2,
+  },
+  choiceRow: {
+    top: 4,
+    left: 2,
+    right: 2,
+    height: 2,
   },
   footerBox: {
     left: 2,

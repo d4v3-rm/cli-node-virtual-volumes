@@ -38,9 +38,11 @@ import {
   toggleVisibleHostBrowserSelectionsState,
 } from './host-browser-controller.js';
 import {
+  buildChoiceOverlayView,
   buildConfirmOverlayView,
   buildPromptOverlayView,
   buildScrollableOverlayView,
+  cycleChoiceIndex,
   resolvePromptValue,
   toggleConfirmButton,
 } from './dialog-overlay.js';
@@ -78,6 +80,7 @@ import type {
 } from './overlay-shell.js';
 import {
   buildOverlayFrame,
+  getChoiceOverlayLayout,
   getConfirmOverlayLayout,
   getPromptOverlayLayout,
   getScrollableOverlayLayout,
@@ -158,13 +161,13 @@ const SPINNER_FRAMES = ['|', '/', '-', '\\'];
 // Legacy icon table retained while terminal-app extraction is still in progress.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const ICONS = {
-  checkboxOff: '□',
-  checkboxOn: '■',
-  drive: '◉',
-  file: '▪',
-  folder: '▸',
-  parent: '↰',
-  volume: '◈',
+  checkboxOff: '[ ]',
+  checkboxOn: '[x]',
+  drive: '=',
+  file: '-',
+  folder: '>',
+  parent: '<',
+  volume: '*',
 } as const;
 
 export class TerminalApp {
@@ -1399,6 +1402,136 @@ export class TerminalApp {
     });
   }
 
+  private async promptChoice(options: {
+    title: string;
+    description: string;
+    choices: string[];
+    initialIndex: number;
+    footer: string;
+  }): Promise<string | null> {
+    return new Promise<string | null>((resolve) => {
+      let selectedIndex =
+        options.choices.length === 0
+          ? 0
+          : Math.min(Math.max(0, options.initialIndex), options.choices.length - 1);
+      const layout = getChoiceOverlayLayout();
+
+      this.openOverlayFrame(
+        buildOverlayFrame({
+          borderTone: 'accentWarm',
+          height: 9,
+          mode: 'choice',
+          title: options.title,
+          width: '68%',
+        }),
+      );
+
+      this.createOverlayBox(layout.descriptionBox, {
+        content: options.description,
+        style: {
+          bg: THEME.panelOverlayAlt,
+          fg: THEME.text,
+        },
+      });
+
+      const choiceRow = this.createOverlayBox(layout.choiceRow, {
+        align: 'center',
+        keys: true,
+        mouse: false,
+        style: {
+          bg: THEME.panelOverlayAlt,
+          fg: THEME.text,
+        },
+      });
+      this.createOverlayFooter(layout.footerBox, options.footer);
+
+      const close = (value: string | null): void => {
+        this.closeOverlay();
+        resolve(value);
+      };
+
+      const applyChoiceView = (): void => {
+        const view = buildChoiceOverlayView(options, selectedIndex);
+
+        selectedIndex = view.selectedIndex;
+        this.applyOverlayFrame(
+          buildOverlayFrame({
+            borderTone: view.borderTone,
+            height: view.height,
+            mode: view.mode,
+            title: view.title,
+            width: view.width,
+          }),
+        );
+        choiceRow.setContent(view.choicesContent);
+      };
+
+      const moveSelection = (direction: number): void => {
+        const nextIndex = cycleChoiceIndex(selectedIndex, options.choices.length, direction);
+        if (nextIndex === selectedIndex) {
+          return;
+        }
+
+        selectedIndex = nextIndex;
+        applyChoiceView();
+        this.screen.render();
+      };
+
+      choiceRow.key(['left', 'up', 'S-tab'], () => {
+        moveSelection(-1);
+      });
+      choiceRow.key(['right', 'down', 'tab'], () => {
+        moveSelection(1);
+      });
+      choiceRow.key(['home'], () => {
+        if (selectedIndex === 0) {
+          return;
+        }
+
+        selectedIndex = 0;
+        applyChoiceView();
+        this.screen.render();
+      });
+      choiceRow.key(['end'], () => {
+        const lastIndex = Math.max(0, options.choices.length - 1);
+        if (selectedIndex === lastIndex) {
+          return;
+        }
+
+        selectedIndex = lastIndex;
+        applyChoiceView();
+        this.screen.render();
+      });
+      choiceRow.key(['enter'], () => {
+        close(options.choices[selectedIndex] ?? null);
+      });
+      choiceRow.key(['escape', 'q'], () => {
+        close(null);
+      });
+
+      options.choices.forEach((choice, index) => {
+        const hotkey = choice[0]?.toLowerCase();
+        if (!hotkey) {
+          return;
+        }
+
+        choiceRow.key([hotkey], () => {
+          if (selectedIndex === index) {
+            return;
+          }
+
+          selectedIndex = index;
+          applyChoiceView();
+          this.screen.render();
+        });
+      });
+
+      applyChoiceView();
+      choiceRow.focus();
+      this.screen.render();
+    });
+  }
+
   private closeOverlay(): void {
     if (this.destroyed) {
       return;
@@ -1727,6 +1860,7 @@ export class TerminalApp {
       openPreviewOverlay: (preview) => this.openPreviewOverlay(preview),
       openVolume: (volumeId, targetPath, selectionIndex) =>
         this.openVolume(volumeId, targetPath, selectionIndex),
+      promptChoice: (options) => this.promptChoice(options),
       promptValue: (options) => this.promptValue(options),
       render: () => this.render(),
       runTask: (label, operation, detail) => this.runTask(label, operation, detail),

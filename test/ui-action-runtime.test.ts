@@ -115,6 +115,7 @@ interface ActionRuntimeHarnessOptions {
   currentVolumeId?: string | null;
   exportDestination?: string | null;
   importSelection?: string[] | null;
+  promptChoices?: (string | null)[];
   promptValues?: (string | null)[];
   selectedEntry?: DirectoryListingItem | null;
   selectedEntryIndex?: number;
@@ -231,6 +232,7 @@ const createActionRuntimeHarness = (
   const selectedVolumeAssignments: number[] = [];
 
   const promptValues = [...(options.promptValues ?? [])];
+  const promptChoices = [...(options.promptChoices ?? [])];
   const confirmations = [...(options.confirmations ?? [])];
   let importSelection = options.importSelection ?? null;
   let exportDestination = options.exportDestination ?? null;
@@ -340,6 +342,7 @@ const createActionRuntimeHarness = (
       promptDescriptions.push(prompt.description);
       return Promise.resolve(promptValues.shift() ?? null);
     },
+    promptChoice: () => Promise.resolve(promptChoices.shift() ?? null),
     render: () => {
       renderCalls += 1;
     },
@@ -418,9 +421,32 @@ describe('ui action runtime', () => {
     expect(harness.renderCalls).toBe(1);
   });
 
+  it('parses quota values with a selected binary unit before creating the volume', async () => {
+    const harness = createActionRuntimeHarness({
+      promptValues: ['Archive', '1.5', 'Binary quota workspace'],
+      promptChoices: ['GB'],
+    });
+
+    await runCreateVolumeWizard(harness.runtime);
+
+    expect(harness.createVolumeInputs).toEqual([
+      {
+        name: 'Archive',
+        quotaBytes: 1610612736,
+        description: 'Binary quota workspace',
+      },
+    ]);
+    expect(harness.notifications).toContainEqual({
+      tone: 'success',
+      message: 'Volume "Roadmap" created.',
+      detail: undefined,
+    });
+  });
+
   it('rejects invalid create-volume quota input before running the task', async () => {
     const harness = createActionRuntimeHarness({
       promptValues: ['Roadmap', 'oops'],
+      promptChoices: ['TB'],
     });
 
     await runCreateVolumeWizard(harness.runtime);
@@ -430,7 +456,7 @@ describe('ui action runtime', () => {
     expect(harness.notifications).toEqual([
       {
         tone: 'error',
-        message: 'Quota bytes must be a valid integer.',
+        message: 'Quota value must be a valid number.',
         detail: undefined,
       },
     ]);

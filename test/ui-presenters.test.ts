@@ -21,6 +21,18 @@ import {
 } from '../src/ui/presenters.js';
 
 describe('ui presenters', () => {
+  it('uses ascii-safe terminal icons for portable rendering', () => {
+    expect(TERMINAL_ICONS).toEqual({
+      checkboxOff: '[ ]',
+      checkboxOn: '[x]',
+      drive: '=',
+      file: '-',
+      folder: '>',
+      parent: '<',
+      volume: '*',
+    });
+  });
+
   it('normalizes and truncates single-line text', () => {
     expect(fitSingleLine('  hello   world  ', 40)).toBe('hello world');
     expect(fitSingleLine('alpha beta gamma delta', 10)).toBe('alpha b...');

@@ -7,7 +7,11 @@ import type {
   ImportProgress,
   VolumeManifest,
 } from '../domain/types.js';
-import type { ConfirmOverlayOptions, PromptOverlayOptions } from './dialog-overlay.js';
+import type {
+  ChoiceOverlayOptions,
+  ConfirmOverlayOptions,
+  PromptOverlayOptions,
+} from './dialog-overlay.js';
 import type { ToastTone } from './runtime-state.js';
 import {
   getCreateFolderAction,
@@ -81,6 +85,7 @@ export interface ActionRuntime {
     selectionIndex?: number,
   ) => Promise<void>;
   promptValue: (options: PromptOverlayOptions) => Promise<string | null>;
+  promptChoice: (options: ChoiceOverlayOptions) => Promise<string | null>;
   render: () => void;
   runTask: <T>(
     label: string,
@@ -122,15 +127,25 @@ export const runCreateVolumeWizard = async (runtime: ActionRuntime): Promise<voi
     return;
   }
 
-  const quotaInput = await runtime.promptValue(prompts.quota);
-  if (quotaInput === null) {
+  const quotaValue = await runtime.promptValue(prompts.quotaValue);
+  if (quotaValue === null) {
     return;
   }
 
-  const parsedQuota = parseVolumeQuotaInput(quotaInput);
-  if (parsedQuota.error) {
-    runtime.notify('error', parsedQuota.error);
-    return;
+  let quotaBytes: number | undefined;
+  if (quotaValue.trim().length > 0) {
+    const quotaUnit = await runtime.promptChoice(prompts.quotaUnit);
+    if (quotaUnit === null) {
+      return;
+    }
+
+    const parsedQuota = parseVolumeQuotaInput(quotaValue, quotaUnit);
+    if (parsedQuota.error) {
+      runtime.notify('error', parsedQuota.error);
+      return;
+    }
+
+    quotaBytes = parsedQuota.quotaBytes;
   }
 
   const description = await runtime.promptValue(prompts.description);
@@ -141,7 +156,7 @@ export const runCreateVolumeWizard = async (runtime: ActionRuntime): Promise<voi
   const createdVolume = await runtime.runTask('Creating volume', () =>
     runtime.volumeService.createVolume({
       name,
-      quotaBytes: parsedQuota.quotaBytes,
+      quotaBytes,
       description,
     }),
   );
