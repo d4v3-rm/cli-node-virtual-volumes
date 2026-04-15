@@ -14,6 +14,13 @@ import { formatBytes, formatDateTime, truncate } from '../utils/formatters.js';
 import { getParentVirtualPath } from '../utils/virtual-paths.js';
 import type { HostBrowserEntry, HostBrowserSnapshot } from './host-browser.js';
 import {
+  buildConfirmOverlayView,
+  buildPromptOverlayView,
+  buildScrollableOverlayView,
+  resolvePromptValue,
+  toggleConfirmButton,
+} from './dialog-overlay.js';
+import {
   buildHostExportOverlayView,
   buildHostImportOverlayView,
   getExportDestinationPath,
@@ -45,8 +52,6 @@ import {
   fitSingleLine as fitSingleLineText,
   formatEntryRow as formatExplorerEntryRow,
   formatExportProgress as formatExportProgressText,
-  formatHostBrowserRow as formatHostBrowserRowText,
-  formatHostNavigationRow as formatHostNavigationRowText,
   formatImportProgress as formatImportProgressText,
   formatVolumeRow as formatVolumeListRow,
 } from './presenters.js';
@@ -2211,16 +2216,16 @@ export class TerminalApp {
     footer: string;
   }): Promise<void> {
     await new Promise<void>((resolve) => {
-      this.overlayMode = options.title.startsWith('Preview') ? 'preview' : 'help';
+      const view = buildScrollableOverlayView(options);
+
+      this.overlayMode = view.mode;
       this.overlayBackdrop.show();
-      this.overlayContainer.setLabel(` ${options.title} `);
-      this.overlayContainer.width = '78%';
-      this.overlayContainer.height = '72%';
+      this.overlayContainer.setLabel(` ${view.title} `);
+      this.overlayContainer.width = view.width;
+      this.overlayContainer.height = view.height;
       this.setElementColors(this.overlayContainer, {
         bg: THEME.panelOverlay,
-        borderFg: options.title.startsWith('Preview')
-          ? THEME.accentSecondary
-          : THEME.info,
+        borderFg: view.borderTone === 'accentSecondary' ? THEME.accentSecondary : THEME.info,
       });
       this.overlayContainer.show();
       this.clearChildren(this.overlayContainer);
@@ -2237,7 +2242,7 @@ export class TerminalApp {
         vi: true,
         mouse: true,
         tags: false,
-        content: options.content,
+        content: view.content,
         style: {
           bg: THEME.panelOverlayAlt,
           fg: THEME.text,
@@ -2245,7 +2250,7 @@ export class TerminalApp {
         scrollbar: {
           ch: ' ',
           style: {
-            bg: options.title.startsWith('Preview') ? THEME.accentSecondary : THEME.info,
+            bg: view.borderTone === 'accentSecondary' ? THEME.accentSecondary : THEME.info,
           },
         },
       });
@@ -2256,7 +2261,7 @@ export class TerminalApp {
         right: 1,
         bottom: 0,
         height: 1,
-        content: options.footer,
+        content: view.footer,
         style: {
           bg: THEME.panelOverlayAlt,
           fg: THEME.muted,
@@ -2284,17 +2289,21 @@ export class TerminalApp {
   }): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       let selectedButton: 'confirm' | 'cancel' = 'confirm';
+      const applyConfirmView = (): void => {
+        const view = buildConfirmOverlayView(options, selectedButton);
+
+        this.overlayContainer.setLabel(` ${view.title} `);
+        this.overlayContainer.width = view.width;
+        this.overlayContainer.height = view.height;
+        this.setElementColors(this.overlayContainer, {
+          bg: THEME.panelOverlay,
+          borderFg: view.borderTone === 'danger' ? THEME.danger : THEME.warning,
+        });
+        buttonRow.setContent(view.buttonContent);
+      };
 
       this.overlayMode = 'confirm';
       this.overlayBackdrop.show();
-      this.overlayContainer.setLabel(` ${options.title} `);
-      this.overlayContainer.width = '64%';
-      this.overlayContainer.height = 11;
-      const isDangerAction = /delete/i.test(options.title) || /delete/i.test(options.confirmLabel);
-      this.setElementColors(this.overlayContainer, {
-        bg: THEME.panelOverlay,
-        borderFg: isDangerAction ? THEME.danger : THEME.warning,
-      });
       this.overlayContainer.show();
       this.clearChildren(this.overlayContainer);
 
@@ -2325,27 +2334,14 @@ export class TerminalApp {
         },
       });
 
-      const renderButtons = (): void => {
-        const confirmText =
-          selectedButton === 'confirm'
-            ? `[ ${options.confirmLabel} ]`
-            : `  ${options.confirmLabel}  `;
-        const cancelText =
-          selectedButton === 'cancel' ? '[ Cancel ]' : '  Cancel  ';
-
-        buttonRow.setContent(
-          `${confirmText}    ${cancelText}\nLeft/Right switch. Enter confirms. Y/N and Esc also work.`,
-        );
-      };
-
       const close = (value: boolean): void => {
         this.closeOverlay();
         resolve(value);
       };
 
       buttonRow.key(['left', 'right', 'tab', 'S-tab'], () => {
-        selectedButton = selectedButton === 'confirm' ? 'cancel' : 'confirm';
-        renderButtons();
+        selectedButton = toggleConfirmButton(selectedButton);
+        applyConfirmView();
         this.screen.render();
       });
 
@@ -2353,7 +2349,7 @@ export class TerminalApp {
       buttonRow.key(['n', 'escape'], () => close(false));
       buttonRow.key(['enter'], () => close(selectedButton === 'confirm'));
 
-      renderButtons();
+      applyConfirmView();
       buttonRow.focus();
       this.screen.render();
     });
@@ -2367,12 +2363,13 @@ export class TerminalApp {
   }): Promise<string | null> {
     return new Promise<string | null>((resolve) => {
       let settled = false;
+      const view = buildPromptOverlayView(options);
 
-      this.overlayMode = 'input';
+      this.overlayMode = view.mode;
       this.overlayBackdrop.show();
-      this.overlayContainer.setLabel(` ${options.title} `);
-      this.overlayContainer.width = '68%';
-      this.overlayContainer.height = 11;
+      this.overlayContainer.setLabel(` ${view.title} `);
+      this.overlayContainer.width = view.width;
+      this.overlayContainer.height = view.height;
       this.setElementColors(this.overlayContainer, {
         bg: THEME.panelOverlay,
         borderFg: THEME.accentWarm,
@@ -2386,7 +2383,7 @@ export class TerminalApp {
         left: 2,
         right: 2,
         height: 2,
-        content: options.description,
+        content: view.description,
         style: {
           bg: THEME.panelOverlayAlt,
           fg: THEME.text,
@@ -2423,14 +2420,14 @@ export class TerminalApp {
         right: 2,
         bottom: 0,
         height: 1,
-        content: options.footer,
+        content: view.footer,
         style: {
           bg: THEME.panelOverlayAlt,
           fg: THEME.muted,
         },
       });
 
-      input.setValue(options.initialValue);
+      input.setValue(view.initialValue);
 
       const finish = (value: string | null): void => {
         if (settled) {
@@ -2453,7 +2450,7 @@ export class TerminalApp {
           return;
         }
 
-        finish(value ?? input.getValue());
+        finish(resolvePromptValue(value, input.getValue()));
       });
     });
   }
@@ -2731,21 +2728,6 @@ export class TerminalApp {
 
   private formatEntryRow(entry: DirectoryListingItem, availableWidth: number): string {
     return formatExplorerEntryRow(entry, availableWidth);
-  }
-
-  private formatHostBrowserRow(
-    entry: HostBrowserEntry,
-    isSelected: boolean,
-    availableWidth: number,
-  ): string {
-    return formatHostBrowserRowText(entry, isSelected, availableWidth);
-  }
-
-  private formatHostNavigationRow(
-    entry: HostBrowserEntry,
-    availableWidth: number,
-  ): string {
-    return formatHostNavigationRowText(entry, availableWidth);
   }
 
   private shutdown(): void {
