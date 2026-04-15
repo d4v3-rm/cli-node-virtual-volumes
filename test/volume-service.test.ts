@@ -6,6 +6,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createRuntime } from '../src/bootstrap/create-runtime.js';
+import type { VolumeBackupManifest } from '../src/domain/types.js';
 import { BlobStore } from '../src/storage/blob-store.js';
 import {
   getVolumeDatabasePath,
@@ -575,6 +576,9 @@ describe('VolumeService', () => {
     await runtime.volumeService.writeTextFile(volume.id, '/docs/plan.txt', 'snapshot state');
 
     const backupResult = await runtime.volumeService.backupVolume(volume.id, backupPath);
+    const backupManifest = JSON.parse(
+      await fs.readFile(backupResult.manifestPath, 'utf8'),
+    ) as VolumeBackupManifest;
 
     await runtime.volumeService.writeTextFile(volume.id, '/docs/plan.txt', 'live change');
     await runtime.volumeService.writeTextFile(volume.id, '/later.txt', 'created after backup');
@@ -589,20 +593,120 @@ describe('VolumeService', () => {
       volumeId: volume.id,
       volumeName: 'Recovery Drill',
       backupPath: path.resolve(backupPath),
+      manifestPath: `${path.resolve(backupPath)}.manifest.json`,
       revision: 3,
+      schemaVersion: 3,
     });
+    expect(backupResult.checksumSha256).toHaveLength(64);
     expect(backupResult.bytesWritten).toBeGreaterThan(0);
+    expect(backupManifest).toMatchObject({
+      formatVersion: 1,
+      volumeId: volume.id,
+      volumeName: 'Recovery Drill',
+      revision: 3,
+      schemaVersion: 3,
+      bytesWritten: backupResult.bytesWritten,
+      checksumSha256: backupResult.checksumSha256,
+    });
     expect(restoreResult).toMatchObject({
       volumeId: volume.id,
       volumeName: 'Recovery Drill',
       backupPath: path.resolve(backupPath),
+      manifestPath: `${path.resolve(backupPath)}.manifest.json`,
       revision: 3,
+      schemaVersion: 3,
+      checksumSha256: backupResult.checksumSha256,
+      validatedWithManifest: true,
     });
     expect(restoreResult.bytesRestored).toBeGreaterThan(0);
     expect(rootSnapshot.entries.map((entry) => entry.name)).toEqual(['docs']);
     expect(docsSnapshot.entries.map((entry) => entry.name)).toEqual(['plan.txt']);
     expect(preview.content).toContain('snapshot state');
     await expect(runtime.volumeService.previewFile(volume.id, '/later.txt')).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+  });
+
+  it('restores legacy backups even when the backup manifest sidecar is missing', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Legacy Recovery' });
+    const backupRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-legacy-backup-'));
+    sandboxes.push(backupRoot);
+    const backupPath = path.join(backupRoot, 'legacy-recovery.sqlite');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/report.txt', 'legacy snapshot');
+
+    const backupResult = await runtime.volumeService.backupVolume(volume.id, backupPath);
+    await fs.rm(backupResult.manifestPath, { force: true });
+    await runtime.volumeService.deleteVolume(volume.id);
+
+    const restoreResult = await runtime.volumeService.restoreVolumeBackup(backupPath);
+    const preview = await runtime.volumeService.previewFile(volume.id, '/report.txt');
+
+    expect(restoreResult).toMatchObject({
+      volumeId: volume.id,
+      volumeName: 'Legacy Recovery',
+      manifestPath: null,
+      validatedWithManifest: false,
+      schemaVersion: 3,
+    });
+    expect(restoreResult.checksumSha256).toBe(backupResult.checksumSha256);
+    expect(preview.content).toContain('legacy snapshot');
+  });
+
+  it('rejects backups that target the live managed database path', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Backup Safety' });
+    const liveDatabasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/safe.txt', 'must survive');
+
+    await expect(runtime.volumeService.backupVolume(volume.id, liveDatabasePath)).rejects.toMatchObject({
+      code: 'INVALID_OPERATION',
+      details: {
+        volumeId: volume.id,
+        destinationPath: path.resolve(liveDatabasePath),
+      },
+    });
+
+    await expect(runtime.volumeService.previewFile(volume.id, '/safe.txt')).resolves.toMatchObject({
+      kind: 'text',
+      content: 'must survive',
+    });
+  });
+
+  it('rejects restore when the backup manifest checksum does not match the artifact', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Tamper Detection' });
+    const backupRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-tamper-backup-'));
+    sandboxes.push(backupRoot);
+    const backupPath = path.join(backupRoot, 'tamper-detection.sqlite');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/report.txt', 'tamper detection');
+
+    const backupResult = await runtime.volumeService.backupVolume(volume.id, backupPath);
+    const backupManifest = JSON.parse(
+      await fs.readFile(backupResult.manifestPath, 'utf8'),
+    ) as VolumeBackupManifest;
+    backupManifest.checksumSha256 = '0'.repeat(64);
+    await fs.writeFile(
+      backupResult.manifestPath,
+      JSON.stringify(backupManifest, null, 2),
+      'utf8',
+    );
+
+    await runtime.volumeService.deleteVolume(volume.id);
+
+    await expect(runtime.volumeService.restoreVolumeBackup(backupPath)).rejects.toMatchObject({
+      code: 'INVALID_OPERATION',
+      details: {
+        backupPath: path.resolve(backupPath),
+        manifestPath: backupResult.manifestPath,
+        mismatches: ['checksumSha256'],
+      },
+    });
+
+    await expect(runtime.volumeService.getExplorerSnapshot(volume.id, '/')).rejects.toMatchObject({
       code: 'NOT_FOUND',
     });
   });
