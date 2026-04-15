@@ -259,8 +259,68 @@ try {
   );
   assertArtifactEnvelope(repairArtifact, 'doctor --fix', packageJson.version);
 
+  const currentLogPath = path.join(
+    runtimePaths.logDir,
+    `cli-node-virtual-volumes-${new Date().toISOString().slice(0, 10)}.log`,
+  );
+  await fs.mkdir(path.dirname(currentLogPath), { recursive: true });
+  await fs.writeFile(currentLogPath, 'ops smoke log\n', { flag: 'a' });
+
+  const supportBundlePath = path.join(sandboxRoot, 'support-bundle');
+  const supportBundleRun = runCli(
+    [
+      'support-bundle',
+      supportBundlePath,
+      volume.id,
+      '--backup-path',
+      backupPath,
+      '--json',
+    ],
+    runtimePaths,
+  );
+  const supportBundleResult = JSON.parse(supportBundleRun.stdout);
+  const supportBundleManifest = await readJson(
+    path.join(supportBundlePath, 'manifest.json'),
+  );
+
+  assert(
+    supportBundleResult.bundlePath === path.resolve(supportBundlePath),
+    'Support bundle stdout should point to the generated bundle path.',
+  );
+  assert(
+    supportBundleManifest.doctorReportPath ===
+      path.join(path.resolve(supportBundlePath), 'doctor-report.json'),
+    'Support bundle manifest should include the doctor report path.',
+  );
+  assert(
+    supportBundleManifest.backupInspectionReportPath ===
+      path.join(path.resolve(supportBundlePath), 'backup-inspection.json'),
+    'Support bundle manifest should include the backup inspection path.',
+  );
+  assert(
+    supportBundleManifest.logSnapshotPath ===
+      path.join(
+        path.resolve(supportBundlePath),
+        'logs',
+        path.basename(currentLogPath),
+      ),
+    'Support bundle manifest should include the copied log snapshot.',
+  );
+  assert(
+    await pathExists(supportBundleManifest.doctorReportPath),
+    'Support bundle doctor report was not created.',
+  );
+  assert(
+    await pathExists(supportBundleManifest.backupInspectionReportPath),
+    'Support bundle backup inspection report was not created.',
+  );
+  assert(
+    await pathExists(supportBundleManifest.logSnapshotPath),
+    'Support bundle log snapshot was not created.',
+  );
+
   process.stdout.write(
-    `[ops-smoke] verified backup, inspect, restore, and doctor flows for ${volume.id}\n`,
+    `[ops-smoke] verified backup, inspect, restore, doctor, and support bundle flows for ${volume.id}\n`,
   );
 } catch (error) {
   const message = error instanceof Error ? error.message : 'Unknown smoke failure.';

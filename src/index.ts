@@ -8,6 +8,8 @@ import {
 } from './cli/backup.js';
 import { formatDoctorReport, formatRepairReport } from './cli/doctor.js';
 import { renderCliResult, writeCliJsonArtifact } from './cli/output.js';
+import { formatSupportBundleResult } from './cli/support-bundle.js';
+import { createSupportBundle } from './ops/support-bundle.js';
 import { TerminalApp } from './ui/terminal-app.js';
 
 const main = async (): Promise<void> => {
@@ -183,6 +185,38 @@ const main = async (): Promise<void> => {
           process.exitCode = 1;
         }
       }
+      },
+    );
+
+  program
+    .command('support-bundle')
+    .description(
+      'Create a diagnostic bundle with doctor output, runtime metadata, and optional backup inspection.',
+    )
+    .argument('<destinationPath>', 'Write the support bundle directory to this path')
+    .argument('[volumeId]', 'Limit the doctor report to a specific volume id')
+    .option('--backup-path <path>', 'Inspect this backup and include the report')
+    .option('--json', 'Output the bundle summary as JSON')
+    .option('--force', 'Overwrite an existing destination directory')
+    .action(
+      async (
+        destinationPath: string,
+        volumeId: string | undefined,
+        options: { backupPath?: string; json?: boolean; force?: boolean },
+      ) => {
+        const runtime = await createRuntime(getRuntimeOverrides());
+        const result = await createSupportBundle(runtime, {
+          destinationPath,
+          volumeId,
+          backupPath: options.backupPath,
+          overwrite: options.force,
+        });
+
+        console.log(
+          renderCliResult(result, formatSupportBundleResult, {
+            json: options.json,
+          }),
+        );
       },
     );
 
