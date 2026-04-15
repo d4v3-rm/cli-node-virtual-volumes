@@ -122,6 +122,7 @@ try {
   const dataDir = path.join(runtimeRoot, 'data');
   const logDir = path.join(runtimeRoot, 'logs');
   const doctorArtifactPath = path.join(runtimeRoot, 'doctor-report.json');
+  const supportBundlePath = path.join(runtimeRoot, 'support-bundle');
 
   await fs.mkdir(consumerRoot, { recursive: true });
 
@@ -216,8 +217,54 @@ try {
     'Installed CLI artifact should reference the smoke-test volume.',
   );
 
+  const supportBundleRun = runCommand(
+    process.execPath,
+    [
+      installedCliPath,
+      '--data-dir',
+      dataDir,
+      '--log-dir',
+      logDir,
+      '--log-level',
+      'silent',
+      'support-bundle',
+      supportBundlePath,
+      volumeId,
+      '--json',
+    ],
+    { cwd: consumerRoot },
+  );
+  const supportBundlePayload = JSON.parse(supportBundleRun.stdout);
+  const supportBundleManifest = await readJson(
+    path.join(supportBundlePath, 'manifest.json'),
+  );
+  const checksumManifest = await readJson(supportBundleManifest.checksumsPath);
+
+  assert(
+    supportBundlePayload.bundlePath === path.resolve(supportBundlePath),
+    'Installed CLI support-bundle command should point to the generated bundle path.',
+  );
+  assert(
+    supportBundleManifest.doctorReportPath ===
+      path.join(path.resolve(supportBundlePath), 'doctor-report.json'),
+    'Installed CLI support bundle should include a doctor report path.',
+  );
+  assert(
+    supportBundleManifest.checksumsPath ===
+      path.join(path.resolve(supportBundlePath), 'checksums.json'),
+    'Installed CLI support bundle should include a checksum manifest path.',
+  );
+  assert(
+    supportBundleManifest.backupManifestCopyPath === null,
+    'Installed CLI support bundle should not include a backup manifest copy without a backup path.',
+  );
+  assert(
+    Array.isArray(checksumManifest.files) && checksumManifest.files.length >= 2,
+    'Installed CLI support bundle should include checksum records.',
+  );
+
   process.stdout.write(
-    `[package-smoke] installed ${path.basename(tarballPath)} and verified package import + CLI flows\n`,
+    `[package-smoke] installed ${path.basename(tarballPath)} and verified package import + CLI doctor + support bundle flows\n`,
   );
 } catch (error) {
   const message =

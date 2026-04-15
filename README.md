@@ -241,7 +241,7 @@ The CLI exposes a full recovery workflow:
 | `virtual-volumes restore <backupPath>` | Restore a volume from backup |
 | `virtual-volumes restore <backupPath> --force` | Replace an existing volume with rollback protection |
 | `virtual-volumes doctor [volumeId]` | Run consistency checks after restore |
-| `virtual-volumes support-bundle <destinationPath> [volumeId]` | Export doctor data, runtime metadata, and log snapshot for support |
+| `virtual-volumes support-bundle <destinationPath> [volumeId]` | Export doctor data, checksum inventory, runtime metadata, and log snapshot for support |
 
 Recommended flow:
 
@@ -269,6 +269,15 @@ Each standard backup produces:
 - `schemaVersion` compatibility
 
 For the full operational procedure, drills, and audit checklist, see [docs/BACKUP-RESTORE-RUNBOOK.md](./docs/BACKUP-RESTORE-RUNBOOK.md).
+
+Each support bundle includes:
+
+- `manifest.json` with runtime/config metadata
+- `checksums.json` with SHA-256 inventory for the generated files
+- `doctor-report.json`
+- optional `backup-inspection.json`
+- optional `backup-artifact.manifest.json` when `--backup-path` points to a manifest-backed backup
+- optional current log snapshot
 
 ## Node.js API
 

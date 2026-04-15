@@ -298,6 +298,16 @@ try {
     'Support bundle manifest should include the backup inspection path.',
   );
   assert(
+    supportBundleManifest.backupManifestCopyPath ===
+      path.join(path.resolve(supportBundlePath), 'backup-artifact.manifest.json'),
+    'Support bundle manifest should include the copied backup manifest path.',
+  );
+  assert(
+    supportBundleManifest.checksumsPath ===
+      path.join(path.resolve(supportBundlePath), 'checksums.json'),
+    'Support bundle manifest should include the checksum inventory path.',
+  );
+  assert(
     supportBundleManifest.logSnapshotPath ===
       path.join(
         path.resolve(supportBundlePath),
@@ -315,8 +325,21 @@ try {
     'Support bundle backup inspection report was not created.',
   );
   assert(
+    await pathExists(supportBundleManifest.backupManifestCopyPath),
+    'Support bundle backup manifest copy was not created.',
+  );
+  assert(
+    await pathExists(supportBundleManifest.checksumsPath),
+    'Support bundle checksum inventory was not created.',
+  );
+  assert(
     await pathExists(supportBundleManifest.logSnapshotPath),
     'Support bundle log snapshot was not created.',
+  );
+  const checksumManifest = await readJson(supportBundleManifest.checksumsPath);
+  assert(
+    Array.isArray(checksumManifest.files) && checksumManifest.files.length >= 5,
+    'Support bundle checksum inventory should include the generated bundle files.',
   );
 
   process.stdout.write(

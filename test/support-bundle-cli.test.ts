@@ -19,9 +19,12 @@ describe('support bundle cli formatter', () => {
       issueCount: 0,
       bundlePath: 'C:\\reports\\support-bundle',
       manifestPath: 'C:\\reports\\support-bundle\\manifest.json',
+      checksumsPath: 'C:\\reports\\support-bundle\\checksums.json',
       doctorReportPath: 'C:\\reports\\support-bundle\\doctor-report.json',
       backupInspectionReportPath:
         'C:\\reports\\support-bundle\\backup-inspection.json',
+      backupManifestCopyPath:
+        'C:\\reports\\support-bundle\\backup-artifact.manifest.json',
       logSnapshotPath: 'C:\\reports\\support-bundle\\logs\\app.log',
       config: {
         dataDir: 'C:\\data',
@@ -45,12 +48,14 @@ describe('support bundle cli formatter', () => {
         'Support bundle: CREATED',
         'Bundle path: C:\\reports\\support-bundle',
         'Manifest: C:\\reports\\support-bundle\\manifest.json',
+        'Checksums: C:\\reports\\support-bundle\\checksums.json',
         'Scope: volume-1',
         'Volumes checked: 1',
         'Issues detected: 0',
-        'Doctor report: C:\\reports\\support-bundle\\doctor-report.json',
         'Backup path: C:\\backups\\finance.sqlite',
+        'Doctor report: C:\\reports\\support-bundle\\doctor-report.json',
         'Backup inspection: C:\\reports\\support-bundle\\backup-inspection.json',
+        'Backup manifest copy: C:\\reports\\support-bundle\\backup-artifact.manifest.json',
         'Log snapshot: C:\\reports\\support-bundle\\logs\\app.log',
         `CLI version: ${APP_VERSION}`,
         'Supported schema: 3',
@@ -72,8 +77,10 @@ describe('support bundle cli formatter', () => {
       issueCount: 0,
       bundlePath: '/tmp/support-bundle',
       manifestPath: '/tmp/support-bundle/manifest.json',
+      checksumsPath: '/tmp/support-bundle/checksums.json',
       doctorReportPath: '/tmp/support-bundle/doctor-report.json',
       backupInspectionReportPath: null,
+      backupManifestCopyPath: null,
       logSnapshotPath: null,
       config: {
         dataDir: '/tmp/data',
@@ -95,6 +102,9 @@ describe('support bundle cli formatter', () => {
     expect(formatSupportBundleResult(result)).toContain('Scope: all volumes');
     expect(formatSupportBundleResult(result)).toContain(
       'Backup inspection: not included',
+    );
+    expect(formatSupportBundleResult(result)).toContain(
+      'Backup manifest copy: not included',
     );
     expect(formatSupportBundleResult(result)).toContain('Log snapshot: not included');
   });
