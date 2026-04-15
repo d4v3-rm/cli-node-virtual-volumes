@@ -3,13 +3,17 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { open } from 'sqlite';
+import sqlite3 from 'sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createRuntime } from '../src/bootstrap/create-runtime.js';
+import { APP_VERSION } from '../src/config/app-metadata.js';
 import type { VolumeBackupManifest } from '../src/domain/types.js';
 import { BlobStore } from '../src/storage/blob-store.js';
 import {
   getVolumeDatabasePath,
+  SUPPORTED_VOLUME_SCHEMA_VERSION,
   withVolumeDatabase,
 } from '../src/storage/sqlite-volume.js';
 import { VolumeRepository } from '../src/storage/volume-repository.js';
@@ -596,6 +600,7 @@ describe('VolumeService', () => {
       manifestPath: `${path.resolve(backupPath)}.manifest.json`,
       revision: 3,
       schemaVersion: 3,
+      createdWithVersion: APP_VERSION,
     });
     expect(backupResult.checksumSha256).toHaveLength(64);
     expect(backupResult.bytesWritten).toBeGreaterThan(0);
@@ -605,6 +610,7 @@ describe('VolumeService', () => {
       volumeName: 'Recovery Drill',
       revision: 3,
       schemaVersion: 3,
+      createdWithVersion: APP_VERSION,
       bytesWritten: backupResult.bytesWritten,
       checksumSha256: backupResult.checksumSha256,
     });
@@ -615,6 +621,7 @@ describe('VolumeService', () => {
       manifestPath: `${path.resolve(backupPath)}.manifest.json`,
       revision: 3,
       schemaVersion: 3,
+      createdWithVersion: APP_VERSION,
       checksumSha256: backupResult.checksumSha256,
       validatedWithManifest: true,
     });
@@ -648,6 +655,7 @@ describe('VolumeService', () => {
       backupPath: path.resolve(backupPath),
       manifestPath: backupResult.manifestPath,
       formatVersion: 1,
+      createdWithVersion: APP_VERSION,
       checksumSha256: backupResult.checksumSha256,
       bytesWritten: backupResult.bytesWritten,
       createdAt: backupResult.createdAt,
@@ -676,6 +684,7 @@ describe('VolumeService', () => {
       volumeId: volume.id,
       volumeName: 'Legacy Recovery',
       manifestPath: null,
+      createdWithVersion: null,
       validatedWithManifest: false,
       schemaVersion: 3,
     });
@@ -703,6 +712,7 @@ describe('VolumeService', () => {
       backupPath: path.resolve(backupPath),
       manifestPath: null,
       formatVersion: null,
+      createdWithVersion: null,
       checksumSha256: backupResult.checksumSha256,
       validatedWithManifest: false,
       schemaVersion: 3,
@@ -765,6 +775,100 @@ describe('VolumeService', () => {
     await expect(runtime.volumeService.getExplorerSnapshot(volume.id, '/')).rejects.toMatchObject({
       code: 'NOT_FOUND',
     });
+  });
+
+  it('rejects inspection and restore when the backup was created by a newer CLI major version', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Version Guard' });
+    const backupRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-version-guard-'));
+    sandboxes.push(backupRoot);
+    const backupPath = path.join(backupRoot, 'version-guard.sqlite');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/report.txt', 'version guard');
+
+    const backupResult = await runtime.volumeService.backupVolume(volume.id, backupPath);
+    const backupManifest = JSON.parse(
+      await fs.readFile(backupResult.manifestPath, 'utf8'),
+    ) as VolumeBackupManifest;
+    backupManifest.createdWithVersion = '2.0.0';
+    await fs.writeFile(
+      backupResult.manifestPath,
+      JSON.stringify(backupManifest, null, 2),
+      'utf8',
+    );
+
+    await expect(runtime.volumeService.inspectVolumeBackup(backupPath)).rejects.toMatchObject({
+      code: 'INVALID_OPERATION',
+      details: {
+        backupPath: path.resolve(backupPath),
+        manifestPath: backupResult.manifestPath,
+        backupCreatedWithVersion: '2.0.0',
+        currentRuntimeVersion: APP_VERSION,
+      },
+    });
+
+    await runtime.volumeService.deleteVolume(volume.id);
+
+    await expect(runtime.volumeService.restoreVolumeBackup(backupPath)).rejects.toMatchObject({
+      code: 'INVALID_OPERATION',
+      details: {
+        backupPath: path.resolve(backupPath),
+        manifestPath: backupResult.manifestPath,
+        backupCreatedWithVersion: '2.0.0',
+        currentRuntimeVersion: APP_VERSION,
+      },
+    });
+  });
+
+  it('rejects inspection and restore when the backup sqlite schema is newer than the runtime supports', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Schema Guard' });
+    const backupRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-schema-guard-'));
+    sandboxes.push(backupRoot);
+    const backupPath = path.join(backupRoot, 'schema-guard.sqlite');
+    const futureSchemaVersion = SUPPORTED_VOLUME_SCHEMA_VERSION + 1;
+
+    await runtime.volumeService.writeTextFile(volume.id, '/report.txt', 'schema guard');
+
+    const backupResult = await runtime.volumeService.backupVolume(volume.id, backupPath);
+    const rawDatabase = await open({
+      filename: backupPath,
+      driver: sqlite3.Database,
+    });
+
+    try {
+      await rawDatabase.run(
+        `UPDATE schema_metadata
+            SET value = ?
+          WHERE key = 'schema_version'`,
+        String(futureSchemaVersion),
+      );
+    } finally {
+      await rawDatabase.close();
+    }
+
+    await expect(runtime.volumeService.inspectVolumeBackup(backupPath)).rejects.toMatchObject({
+      code: 'INVALID_OPERATION',
+      details: {
+        currentSchemaVersion: futureSchemaVersion,
+        supportedSchemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
+      },
+    });
+
+    await runtime.volumeService.deleteVolume(volume.id);
+
+    await expect(runtime.volumeService.restoreVolumeBackup(backupPath)).rejects.toMatchObject({
+      code: 'INVALID_OPERATION',
+      details: {
+        currentSchemaVersion: futureSchemaVersion,
+        supportedSchemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
+      },
+    });
+
+    await expect(runtime.volumeService.getExplorerSnapshot(volume.id, '/')).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    await expect(fs.access(backupResult.backupPath)).resolves.toBeUndefined();
   });
 
   it('requires overwrite to restore over an existing volume and rolls live changes back to the backup state', async () => {
