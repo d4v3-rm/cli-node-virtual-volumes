@@ -280,6 +280,7 @@ export interface SupportBundleConfigSnapshot {
   hostDenyPaths: string[];
   logDir: string;
   logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
+  logRetentionDays: number | null;
   logToStdout: boolean;
   defaultQuotaBytes: number;
   previewBytes: number;
