@@ -10,7 +10,6 @@ import type {
   ImportProgress,
   VolumeManifest,
 } from '../domain/types.js';
-import { getParentVirtualPath } from '../utils/virtual-paths.js';
 import {
   buildCreateFolderPrompt,
   buildCreateFolderSuccessMessage,
@@ -59,12 +58,6 @@ import {
   getParentHostPath,
   listHostBrowserSnapshot,
 } from './host-browser.js';
-import {
-  VISIBLE_ENTRY_ROWS,
-  VISIBLE_VOLUME_ROWS,
-  clampIndex,
-  getPageOffset,
-} from './navigation.js';
 import { buildStatusPanel, getStatusContextLine } from './status-panel.js';
 import {
   fitSingleLine as fitSingleLineText,
@@ -81,6 +74,23 @@ import {
   buildPrimaryPanelView,
   buildShortcutsPanelContent,
 } from './shell-panels.js';
+import {
+  buildExplorerOpenRequest,
+  canHandleShellNavigation,
+  clampExplorerSelection,
+  clampVolumeSelection,
+  getGoBackNavigationAction,
+  getOpenSelectedEntryAction,
+  getRefreshExplorerRequest,
+  getSelectedExplorerEntry,
+  getSelectedVolume,
+  jumpDashboardSelection,
+  jumpExplorerSelection,
+  moveDashboardSelection,
+  moveExplorerSelection,
+  pageDashboardSelection,
+  pageExplorerSelection,
+} from './shell-navigation.js';
 
 type ScreenMode = 'dashboard' | 'explorer';
 type ToastTone = 'success' | 'error' | 'info';
@@ -656,15 +666,13 @@ export class TerminalApp {
   }
 
   private canHandleNavigation(): boolean {
-    if (this.busyLabel || this.overlayMode) {
-      return false;
-    }
-
-    if (this.mode === 'dashboard') {
-      return this.volumes.length > 0;
-    }
-
-    return (this.currentSnapshot?.totalEntries ?? 0) > 0;
+    return canHandleShellNavigation({
+      busy: this.busyLabel !== null,
+      currentSnapshot: this.currentSnapshot,
+      mode: this.mode,
+      overlayOpen: this.overlayMode !== null,
+      volumesLength: this.volumes.length,
+    });
   }
 
   private render(): void {
@@ -839,91 +847,76 @@ export class TerminalApp {
 
   private async moveSelection(direction: -1 | 1): Promise<void> {
     if (this.mode === 'dashboard') {
-      this.selectedVolumeIndex = clampIndex(
-        this.selectedVolumeIndex + direction,
+      this.selectedVolumeIndex = moveDashboardSelection(
+        this.selectedVolumeIndex,
         this.volumes.length,
+        direction,
       );
       this.render();
       return;
     }
 
-    if (!this.currentSnapshot || !this.currentVolumeId) {
-      return;
-    }
-
-    const nextIndex = clampIndex(
-      this.selectedEntryIndex + direction,
-      this.currentSnapshot.totalEntries,
+    const selectionChange = moveExplorerSelection(
+      this.currentVolumeId,
+      this.currentSnapshot,
+      this.selectedEntryIndex,
+      direction,
     );
 
-    if (nextIndex === this.selectedEntryIndex) {
-      return;
+    switch (selectionChange.kind) {
+      case 'local':
+        this.selectedEntryIndex = selectionChange.selectedEntryIndex;
+        this.render();
+        return;
+      case 'open':
+        await this.openVolume(
+          selectionChange.request.volumeId,
+          selectionChange.request.targetPath,
+          selectionChange.request.selectionIndex,
+        );
+        return;
+      default:
+        return;
     }
-
-    const windowStart = this.currentSnapshot.windowOffset;
-    const windowEnd = windowStart + this.currentSnapshot.entries.length;
-
-    if (nextIndex < windowStart || nextIndex >= windowEnd) {
-      await this.openVolume(
-        this.currentVolumeId,
-        this.currentSnapshot.currentPath,
-        nextIndex,
-      );
-      return;
-    }
-
-    this.selectedEntryIndex = nextIndex;
-    this.render();
   }
 
   private async moveByPage(direction: -1 | 1): Promise<void> {
     if (this.mode === 'dashboard') {
-      this.selectedVolumeIndex = clampIndex(
-        this.selectedVolumeIndex + VISIBLE_VOLUME_ROWS * direction,
+      this.selectedVolumeIndex = pageDashboardSelection(
+        this.selectedVolumeIndex,
         this.volumes.length,
+        direction,
       );
       this.render();
       return;
     }
 
-    if (!this.currentSnapshot || !this.currentVolumeId) {
+    const request = pageExplorerSelection(
+      this.currentVolumeId,
+      this.currentSnapshot,
+      this.selectedEntryIndex,
+      direction,
+    );
+    if (!request) {
       return;
     }
 
-    const nextIndex = clampIndex(
-      this.selectedEntryIndex + VISIBLE_ENTRY_ROWS * direction,
-      this.currentSnapshot.totalEntries,
-    );
-
-    await this.openVolume(
-      this.currentVolumeId,
-      this.currentSnapshot.currentPath,
-      nextIndex,
-    );
+    await this.openVolume(request.volumeId, request.targetPath, request.selectionIndex);
   }
 
   private async jumpSelection(target: 'start' | 'end'): Promise<void> {
     if (this.mode === 'dashboard') {
-      this.selectedVolumeIndex =
-        target === 'start' ? 0 : clampIndex(Number.MAX_SAFE_INTEGER, this.volumes.length);
+      this.selectedVolumeIndex = jumpDashboardSelection(this.volumes.length, target);
       this.render();
       return;
     }
 
-    if (!this.currentSnapshot || !this.currentVolumeId) {
+    const request = jumpExplorerSelection(this.currentVolumeId, this.currentSnapshot, target);
+    if (!request) {
       return;
     }
 
-    const nextIndex =
-      target === 'start'
-        ? 0
-        : clampIndex(Number.MAX_SAFE_INTEGER, this.currentSnapshot.totalEntries);
-
-    await this.openVolume(
-      this.currentVolumeId,
-      this.currentSnapshot.currentPath,
-      nextIndex,
-    );
+    await this.openVolume(request.volumeId, request.targetPath, request.selectionIndex);
   }
 
   private async loadVolumes(): Promise<void> {
@@ -936,7 +929,7 @@ export class TerminalApp {
     }
 
     this.volumes = volumes;
-    this.selectedVolumeIndex = clampIndex(this.selectedVolumeIndex, this.volumes.length);
+    this.selectedVolumeIndex = clampVolumeSelection(this.selectedVolumeIndex, this.volumes.length);
     this.focusShell();
     this.render();
   }
@@ -946,10 +939,11 @@ export class TerminalApp {
     targetPath = '/',
     selectionIndex = 0,
   ): Promise<void> {
+    const request = buildExplorerOpenRequest(volumeId, targetPath, selectionIndex);
     const snapshot = await this.runTask('Opening volume', () =>
-      this.runtime.volumeService.getExplorerSnapshot(volumeId, targetPath, {
-        offset: getPageOffset(selectionIndex, VISIBLE_ENTRY_ROWS),
-        limit: VISIBLE_ENTRY_ROWS,
+      this.runtime.volumeService.getExplorerSnapshot(request.volumeId, request.targetPath, {
+        offset: request.offset,
+        limit: request.limit,
       }),
     );
 
@@ -958,9 +952,9 @@ export class TerminalApp {
     }
 
     this.mode = 'explorer';
-    this.currentVolumeId = volumeId;
+    this.currentVolumeId = request.volumeId;
     this.currentSnapshot = snapshot;
-    this.selectedEntryIndex = clampIndex(selectionIndex, snapshot.totalEntries);
+    this.selectedEntryIndex = clampExplorerSelection(request.selectionIndex, snapshot);
     this.focusShell();
     this.render();
   }
@@ -971,19 +965,20 @@ export class TerminalApp {
       return;
     }
 
-    if (!this.currentVolumeId || !this.currentSnapshot) {
+    const request = getRefreshExplorerRequest(
+      this.currentVolumeId,
+      this.currentSnapshot,
+      this.selectedEntryIndex,
+    );
+    if (!request) {
       return;
     }
 
-    await this.openVolume(
-      this.currentVolumeId,
-      this.currentSnapshot.currentPath,
-      this.selectedEntryIndex,
-    );
+    await this.openVolume(request.volumeId, request.targetPath, request.selectionIndex);
   }
 
   private async openSelectedVolume(): Promise<void> {
-    const selectedVolume = this.volumes[this.selectedVolumeIndex] ?? null;
+    const selectedVolume = getSelectedVolume(this.volumes, this.selectedVolumeIndex);
     if (!selectedVolume) {
       this.notify('info', 'Create a volume first.');
       return;
@@ -993,39 +988,44 @@ export class TerminalApp {
   }
 
   private async openSelectedEntry(): Promise<void> {
-    const selectedEntry = this.getSelectedEntry();
-    if (!selectedEntry || !this.currentVolumeId) {
-      this.notify('info', 'Select an entry first.');
-      return;
+    const action = getOpenSelectedEntryAction(this.currentVolumeId, this.getSelectedEntry());
+    switch (action.kind) {
+      case 'notify':
+        this.notify('info', action.message);
+        return;
+      case 'open':
+        await this.openVolume(
+          action.request.volumeId,
+          action.request.targetPath,
+          action.request.selectionIndex,
+        );
+        return;
+      default:
+        await this.previewSelectedEntry();
     }
-
-    if (selectedEntry.kind === 'directory') {
-      await this.openVolume(this.currentVolumeId, selectedEntry.path);
-      return;
-    }
-
-    await this.previewSelectedEntry();
   }
 
   private async goBack(): Promise<void> {
-    if (this.mode !== 'explorer') {
-      return;
-    }
+    const action = getGoBackNavigationAction({
+      currentSnapshot: this.currentSnapshot,
+      currentVolumeId: this.currentVolumeId,
+      mode: this.mode,
+    });
 
-    if (!this.currentVolumeId || !this.currentSnapshot) {
-      await this.goToDashboard();
-      return;
+    switch (action.kind) {
+      case 'dashboard':
+        await this.goToDashboard();
+        return;
+      case 'open':
+        await this.openVolume(
+          action.request.volumeId,
+          action.request.targetPath,
+          action.request.selectionIndex,
+        );
+        return;
+      default:
+        return;
     }
-
-    if (this.currentSnapshot.currentPath === '/') {
-      await this.goToDashboard();
-      return;
-    }
-
-    await this.openVolume(
-      this.currentVolumeId,
-      getParentVirtualPath(this.currentSnapshot.currentPath),
-    );
   }
 
   private async goToDashboard(): Promise<void> {
@@ -1078,7 +1078,7 @@ export class TerminalApp {
     this.notify('success', buildCreateVolumeSuccessMessage(createdVolume.name));
     await this.loadVolumes();
     const volumeIndex = this.volumes.findIndex((volume) => volume.id === createdVolume.id);
-    this.selectedVolumeIndex = clampIndex(volumeIndex, this.volumes.length);
+    this.selectedVolumeIndex = clampVolumeSelection(volumeIndex, this.volumes.length);
     this.render();
   }
 
@@ -2226,12 +2226,7 @@ export class TerminalApp {
   }
 
   private getSelectedEntry(): DirectoryListingItem | null {
-    if (!this.currentSnapshot) {
-      return null;
-    }
-
-    const relativeIndex = this.selectedEntryIndex - this.currentSnapshot.windowOffset;
-    return relativeIndex >= 0 ? this.currentSnapshot.entries[relativeIndex] ?? null : null;
+    return getSelectedExplorerEntry(this.currentSnapshot, this.selectedEntryIndex);
   }
 
   private shutdown(): void {
