@@ -615,6 +615,60 @@ describe('VolumeService', () => {
     ).toBe(true);
   });
 
+  it('repairs orphan blobs and manifest counter mismatches safely', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Repair' });
+    const blobStore = new BlobStore(
+      getVolumeDatabasePath(runtime.config.dataDir, volume.id),
+      runtime.logger.child({ scope: 'repair-blob-store' }),
+    );
+
+    await runtime.volumeService.writeTextFile(volume.id, '/tracked.txt', 'tracked content');
+    const orphanBlob = await blobStore.putBuffer(Buffer.from('orphan blob', 'utf8'));
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, volume.id), async (database) => {
+      await database.run(
+        `UPDATE manifest
+            SET logical_used_bytes = 0,
+                entry_count = 999`,
+      );
+    });
+
+    const repairReport = await runtime.volumeService.runRepair(volume.id);
+    const repairedVolume = repairReport.volumes[0];
+
+    expect(repairReport.healthy).toBe(true);
+    expect(repairReport.actionsApplied).toBeGreaterThanOrEqual(2);
+    expect(repairedVolume?.actions.some((action) => action.code === 'DELETE_ORPHAN_BLOB')).toBe(
+      true,
+    );
+    expect(repairedVolume?.actions.some((action) => action.code === 'REBUILD_MANIFEST')).toBe(
+      true,
+    );
+    expect(repairedVolume?.issueCountBefore).toBeGreaterThanOrEqual(2);
+    expect(repairedVolume?.issueCountAfter).toBe(0);
+
+    const finalDoctorReport = await runtime.volumeService.runDoctor(volume.id);
+    expect(finalDoctorReport.healthy).toBe(true);
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, volume.id), async (database) => {
+      const orphanBlobRow = await database.get<{ content_ref: string }>(
+        'SELECT content_ref FROM blobs WHERE content_ref = ?',
+        orphanBlob.contentRef,
+      );
+      const manifestRow = await database.get<{
+        logical_used_bytes: number;
+        entry_count: number;
+      }>(
+        'SELECT logical_used_bytes, entry_count FROM manifest LIMIT 1',
+      );
+
+      expect(orphanBlobRow).toBeUndefined();
+      expect(manifestRow?.logical_used_bytes).toBe(Buffer.byteLength('tracked content', 'utf8'));
+      expect(manifestRow?.entry_count).toBe(2);
+    });
+  });
+
   it('enforces sibling uniqueness at the SQLite level', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Unique Siblings' });

@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 
 import { createRuntime } from './bootstrap/create-runtime.js';
-import { formatDoctorReport } from './cli/doctor.js';
+import { formatDoctorReport, formatRepairReport } from './cli/doctor.js';
 import { TerminalApp } from './ui/terminal-app.js';
 
 const main = async (): Promise<void> => {
@@ -50,20 +50,40 @@ const main = async (): Promise<void> => {
     .description('Run storage diagnostics across all volumes or a specific volume.')
     .argument('[volumeId]', 'Diagnose a specific volume by id')
     .option('--json', 'Output the report as JSON')
-    .action(async (volumeId: string | undefined, options: { json?: boolean }) => {
+    .option('--fix', 'Apply safe automatic repairs for supported issues')
+    .action(
+      async (
+        volumeId: string | undefined,
+        options: { json?: boolean; fix?: boolean },
+      ) => {
       const runtime = await createRuntime(getRuntimeOverrides());
-      const report = await runtime.volumeService.runDoctor(volumeId);
+      if (options.fix) {
+        const report = await runtime.volumeService.runRepair(volumeId);
 
-      if (options.json) {
-        console.log(JSON.stringify(report, null, 2));
+        if (options.json) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(formatRepairReport(report));
+        }
+
+        if (!report.healthy) {
+          process.exitCode = 1;
+        }
       } else {
-        console.log(formatDoctorReport(report));
-      }
+        const report = await runtime.volumeService.runDoctor(volumeId);
 
-      if (!report.healthy) {
-        process.exitCode = 1;
+        if (options.json) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(formatDoctorReport(report));
+        }
+
+        if (!report.healthy) {
+          process.exitCode = 1;
+        }
       }
-    });
+      },
+    );
 
   await program.parseAsync(process.argv);
 };

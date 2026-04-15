@@ -17,6 +17,9 @@ export type {
   StorageDoctorIssue,
   StorageDoctorReport,
   StorageDoctorVolumeReport,
+  StorageRepairAction,
+  StorageRepairReport,
+  StorageRepairVolumeReport,
   VolumeManifest,
 } from './domain/types.js';
 export { formatBytes, formatDateTime } from './utils/formatters.js';

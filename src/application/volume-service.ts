@@ -22,6 +22,7 @@ import type {
   ImportSummary,
   MoveEntryInput,
   StorageDoctorReport,
+  StorageRepairReport,
   VolumeEntry,
   VolumeManifest,
   VolumeRecord,
@@ -85,6 +86,10 @@ export class VolumeService {
 
   public async runDoctor(volumeId?: string): Promise<StorageDoctorReport> {
     return this.repository.runDoctor(volumeId);
+  }
+
+  public async runRepair(volumeId?: string): Promise<StorageRepairReport> {
+    return this.repository.runRepair(volumeId);
   }
 
   public async getExplorerSnapshot(

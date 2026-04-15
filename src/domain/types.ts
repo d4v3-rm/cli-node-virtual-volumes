@@ -169,3 +169,30 @@ export interface StorageDoctorReport {
   issueCount: number;
   volumes: StorageDoctorVolumeReport[];
 }
+
+export interface StorageRepairAction {
+  code: 'DELETE_ORPHAN_BLOB' | 'REBUILD_MANIFEST';
+  message: string;
+  contentRef?: string;
+}
+
+export interface StorageRepairVolumeReport {
+  volumeId: string;
+  volumeName: string;
+  revision: number;
+  healthy: boolean;
+  repaired: boolean;
+  issueCountBefore: number;
+  issueCountAfter: number;
+  actions: StorageRepairAction[];
+  remainingIssues: StorageDoctorIssue[];
+}
+
+export interface StorageRepairReport {
+  generatedAt: string;
+  healthy: boolean;
+  checkedVolumes: number;
+  repairedVolumes: number;
+  actionsApplied: number;
+  volumes: StorageRepairVolumeReport[];
+}
