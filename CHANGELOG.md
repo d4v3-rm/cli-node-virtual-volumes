@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.1.0 - 2026-04-15
+
+- refactor: extract action runtime flows (`740c19f`)
+- refactor: centralize shell keyboard metadata (`37cfc90`)
+- refactor: extract shell hotkey bindings (`79bc625`)
+- refactor: extract shell widget specs (`897e970`)
+- refactor: centralize task runtime state (`85f82c7`)
+- refactor: extract host browser controller (`8a04727`)
+- refactor: extract action flow guards (`47cf4e6`)
+- refactor: centralize overlay shell runtime (`f350e4f`)
+- test: add shell navigation helper coverage (`43b5631`)
+- refactor: extract shell navigation controller (`3aeba0d`)
+- refactor: unify host browser overlay runtime (`f1a12ac`)
+- refactor: extract shell panel presenters (`b98e447`)
+- refactor: extract action flow presenters (`cd3a667`)
+- refactor: extract dialog overlay presenters (`ccebb32`)
+- refactor: extract host browser overlay helpers (`f30268f`)
+- test: cover doctor and status flows (`6d4e3f8`)
+- test: extract terminal render helpers (`757a7c1`)
+- ci: add enterprise delivery baseline (`b66db3d`)
+- feat: add safe storage repair mode (`0b52b15`)
+- feat: enforce relational constraints in sqlite (`ff756ba`)
+- refactor: use shared transactional volume mutations (`a5f83d3`)
+- feat: add revisioning and doctor diagnostics (`fb24c88`)
+
 ## 1.0.0 - 2026-04-14
 
 - fix: add emnapi runtime dependencies to lockfile sync (`d04ae3c`)
