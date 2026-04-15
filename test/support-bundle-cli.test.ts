@@ -6,8 +6,11 @@ import type {
   SupportBundleResult,
 } from '../src/domain/types.js';
 import {
+  evaluateSupportBundleSharingRequirement,
+  formatSupportBundleSharingRequirementStatus,
   formatSupportBundleInspectionResult,
   formatSupportBundleResult,
+  parseSupportBundleSharingRecommendation,
 } from '../src/cli/support-bundle.js';
 import { formatDateTime } from '../src/utils/formatters.js';
 
@@ -281,5 +284,91 @@ describe('support bundle cli formatter', () => {
     expect(formatSupportBundleInspectionResult(result)).toContain(
       '- [CHECKSUM_MISMATCH] Support bundle checksum does not match inventory for manifest.json.',
     );
+  });
+
+  it('parses valid support bundle sharing policies', () => {
+    expect(parseSupportBundleSharingRecommendation('internal-only')).toBe(
+      'internal-only',
+    );
+    expect(parseSupportBundleSharingRecommendation('external-shareable')).toBe(
+      'external-shareable',
+    );
+    expect(() => parseSupportBundleSharingRecommendation('public')).toThrow(
+      'Unsupported support bundle sharing policy "public".',
+    );
+  });
+
+  it('accepts bundles that are shareable to a broader audience than required', () => {
+    const status = evaluateSupportBundleSharingRequirement(
+      {
+        contentProfile: {
+          redacted: true,
+          includesAppLogSnapshot: false,
+          includesAuditLogSnapshot: false,
+          includesBackupInspection: true,
+          includesBackupManifestCopy: false,
+          sensitivity: 'sanitized',
+          sharingRecommendation: 'external-shareable',
+          sharingNotes: [],
+        },
+      },
+      'internal-only',
+    );
+
+    expect(status).toEqual({
+      required: 'internal-only',
+      satisfied: true,
+      message: null,
+    });
+    expect(formatSupportBundleSharingRequirementStatus(status)).toBe(
+      ['Required sharing: internal-only', 'Policy gate: PASSED'].join('\n'),
+    );
+  });
+
+  it('fails the sharing policy gate when the bundle is not shareable enough', () => {
+    const status = evaluateSupportBundleSharingRequirement(
+      {
+        contentProfile: {
+          redacted: false,
+          includesAppLogSnapshot: true,
+          includesAuditLogSnapshot: true,
+          includesBackupInspection: true,
+          includesBackupManifestCopy: true,
+          sensitivity: 'restricted',
+          sharingRecommendation: 'internal-only',
+          sharingNotes: [],
+        },
+      },
+      'external-shareable',
+    );
+
+    expect(status).toEqual({
+      required: 'external-shareable',
+      satisfied: false,
+      message:
+        'Support bundle is recommended for internal-only sharing, but external-shareable was required.',
+    });
+    expect(formatSupportBundleSharingRequirementStatus(status)).toContain(
+      'Policy gate: FAILED',
+    );
+    expect(formatSupportBundleSharingRequirementStatus(status)).toContain(
+      'Policy note: Support bundle is recommended for internal-only sharing, but external-shareable was required.',
+    );
+  });
+
+  it('fails the sharing policy gate when the bundle profile is unknown', () => {
+    const status = evaluateSupportBundleSharingRequirement(
+      {
+        contentProfile: null,
+      },
+      'internal-only',
+    );
+
+    expect(status).toEqual({
+      required: 'internal-only',
+      satisfied: false,
+      message:
+        'Support bundle sharing guidance is unknown, so the required sharing policy cannot be verified.',
+    });
   });
 });

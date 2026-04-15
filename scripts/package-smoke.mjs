@@ -316,6 +316,8 @@ try {
       installedCliPath,
       'inspect-support-bundle',
       supportBundlePath,
+      '--require-sharing',
+      'internal-only',
       '--json',
       '--output',
       supportBundleInspectionArtifactPath,
@@ -330,6 +332,10 @@ try {
   assert(
     supportBundleInspection.healthy === true,
     'Installed CLI inspect-support-bundle command should report a healthy bundle.',
+  );
+  assert(
+    supportBundleInspection.contentProfile?.sharingRecommendation === 'internal-only',
+    'Installed CLI inspect-support-bundle should expose the expected sharing recommendation.',
   );
   assert(
     supportBundleInspectionArtifact.command === 'inspect-support-bundle',

@@ -10,6 +10,9 @@ import {
 import { formatDoctorReport, formatRepairReport } from './cli/doctor.js';
 import { renderCliResult, writeCliJsonArtifact } from './cli/output.js';
 import {
+  evaluateSupportBundleSharingRequirement,
+  formatSupportBundleSharingRequirementStatus,
+  parseSupportBundleSharingRecommendation,
   formatSupportBundleInspectionResult,
   formatSupportBundleResult,
 } from './cli/support-bundle.js';
@@ -321,16 +324,28 @@ const main = async (): Promise<void> => {
       'Inspect a support bundle and verify its manifest, inventory, and checksums.',
     )
     .argument('<bundlePath>', 'Inspect a support bundle directory')
+    .option(
+      '--require-sharing <policy>',
+      'Require the bundle to be suitable for this sharing audience (internal-only or external-shareable)',
+      parseSupportBundleSharingRecommendation,
+    )
     .option('--json', 'Output the inspection result as JSON')
     .option('--output <path>', 'Write the structured JSON result to this file')
     .action(
       async (
         bundlePath: string,
-        options: { json?: boolean; output?: string },
+        options: {
+          json?: boolean;
+          output?: string;
+          requireSharing?: 'external-shareable' | 'internal-only';
+        },
       ) => {
         const correlationId = createCorrelationId();
         const redactSensitiveDetails = loadAppConfig(getRuntimeOverrides()).redactSensitiveDetails;
         const result = await inspectSupportBundle(bundlePath);
+        const sharingRequirement = options.requireSharing
+          ? evaluateSupportBundleSharingRequirement(result, options.requireSharing)
+          : null;
         const artifactPath = options.output
           ? await writeCliJsonArtifact(
               'inspect-support-bundle',
@@ -343,14 +358,26 @@ const main = async (): Promise<void> => {
           : null;
 
         console.log(
-          renderCliResult(result, formatSupportBundleInspectionResult, {
-            artifactPath,
-            correlationId,
-            json: options.json,
-          }),
+          renderCliResult(
+            result,
+            (inspectionResult) => {
+              const renderedInspection = formatSupportBundleInspectionResult(inspectionResult);
+
+              return sharingRequirement
+                ? `${renderedInspection}\n${formatSupportBundleSharingRequirementStatus(
+                    sharingRequirement,
+                  )}`
+                : renderedInspection;
+            },
+            {
+              artifactPath,
+              correlationId,
+              json: options.json,
+            },
+          ),
         );
 
-        if (!result.healthy) {
+        if (!result.healthy || (sharingRequirement && !sharingRequirement.satisfied)) {
           process.exitCode = 1;
         }
       },
