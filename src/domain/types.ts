@@ -168,6 +168,7 @@ export interface CreateSupportBundleInput {
   destinationPath: string;
   volumeId?: string;
   backupPath?: string;
+  includeLogs?: boolean;
   overwrite?: boolean;
 }
 
