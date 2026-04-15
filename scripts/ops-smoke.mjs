@@ -325,6 +325,15 @@ try {
     'Support bundle manifest should include the checksum inventory path.',
   );
   assert(
+    supportBundleManifest.auditLogSnapshotPath ===
+      path.join(
+        path.resolve(supportBundlePath),
+        'audit',
+        `cli-node-virtual-volumes-audit-${new Date().toISOString().slice(0, 10)}.log`,
+      ),
+    'Support bundle manifest should include the copied audit log snapshot.',
+  );
+  assert(
     supportBundleManifest.logSnapshotPath ===
       path.join(
         path.resolve(supportBundlePath),
@@ -350,12 +359,16 @@ try {
     'Support bundle checksum inventory was not created.',
   );
   assert(
+    await pathExists(supportBundleManifest.auditLogSnapshotPath),
+    'Support bundle audit log snapshot was not created.',
+  );
+  assert(
     await pathExists(supportBundleManifest.logSnapshotPath),
     'Support bundle log snapshot was not created.',
   );
   const checksumManifest = await readJson(supportBundleManifest.checksumsPath);
   assert(
-    Array.isArray(checksumManifest.files) && checksumManifest.files.length >= 5,
+    Array.isArray(checksumManifest.files) && checksumManifest.files.length >= 6,
     'Support bundle checksum inventory should include the generated bundle files.',
   );
 
@@ -388,7 +401,7 @@ try {
     packageJson.version,
   );
   assert(
-    supportBundleInspectionArtifact.payload.verifiedFiles >= 5,
+    supportBundleInspectionArtifact.payload.verifiedFiles >= 6,
     'Support bundle inspection artifact should report verified bundle files.',
   );
 

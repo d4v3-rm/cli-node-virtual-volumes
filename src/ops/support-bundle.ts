@@ -16,12 +16,13 @@ import type {
   SupportBundleResult,
 } from '../domain/types.js';
 import type { AppRuntime } from '../bootstrap/create-runtime.js';
-import { resolveAppLogFilePath } from '../logging/logger.js';
+import { resolveAppLogFilePath, resolveAuditLogFilePath } from '../logging/logger.js';
 import { writeJsonAtomic, pathExists } from '../utils/fs.js';
 import { SUPPORTED_VOLUME_SCHEMA_VERSION } from '../storage/sqlite-volume.js';
 
 const SUPPORT_BUNDLE_VERSION = 1 as const;
 const SUPPORT_BUNDLE_FILE_ROLES: SupportBundleFileRole[] = [
+  'audit-log-snapshot',
   'backup-inspection',
   'backup-manifest',
   'doctor-report',
@@ -110,7 +111,10 @@ const isSupportBundleResult = (value: unknown): value is SupportBundleResult => 
     isStringOrNull(value.backupInspectionReportPath) &&
     isStringOrNull(value.backupManifestCopyPath) &&
     typeof value.checksumsPath === 'string' &&
+    isStringOrNull(value.auditLogSnapshotPath) &&
     isStringOrNull(value.logSnapshotPath) &&
+    typeof value.config.auditLogDir === 'string' &&
+    typeof value.config.auditLogLevel === 'string' &&
     typeof value.config.dataDir === 'string' &&
     Array.isArray(value.config.hostAllowPaths) &&
     value.config.hostAllowPaths.every((entry) => typeof entry === 'string') &&
@@ -183,6 +187,13 @@ const getExpectedBundleFiles = (
     files.push({
       path: manifest.logSnapshotPath,
       role: 'log-snapshot',
+    });
+  }
+
+  if (manifest.auditLogSnapshotPath) {
+    files.push({
+      path: manifest.auditLogSnapshotPath,
+      role: 'audit-log-snapshot',
     });
   }
 
@@ -263,8 +274,12 @@ export const createSupportBundle = async (
     const checksumsPath = path.join(destinationPath, 'checksums.json');
 
     const currentLogPath = resolveAppLogFilePath(runtime.config);
+    const currentAuditLogPath = resolveAuditLogFilePath(runtime.config);
     const logSnapshotPath = (await pathExists(currentLogPath))
       ? path.join(destinationPath, 'logs', path.basename(currentLogPath))
+      : null;
+    const auditLogSnapshotPath = (await pathExists(currentAuditLogPath))
+      ? path.join(destinationPath, 'audit', path.basename(currentAuditLogPath))
       : null;
 
     await writeJsonAtomic(
@@ -296,6 +311,16 @@ export const createSupportBundle = async (
       await fs.copyFile(currentLogPath, temporaryLogSnapshotPath);
     }
 
+    if (auditLogSnapshotPath) {
+      const temporaryAuditLogSnapshotPath = path.join(
+        temporaryBundlePath,
+        'audit',
+        path.basename(currentAuditLogPath),
+      );
+      await fs.mkdir(path.dirname(temporaryAuditLogSnapshotPath), { recursive: true });
+      await fs.copyFile(currentAuditLogPath, temporaryAuditLogSnapshotPath);
+    }
+
     const result: SupportBundleResult = {
       bundleVersion: SUPPORT_BUNDLE_VERSION,
       cliVersion: APP_VERSION,
@@ -312,8 +337,11 @@ export const createSupportBundle = async (
       backupInspectionReportPath,
       backupManifestCopyPath,
       checksumsPath,
+      auditLogSnapshotPath,
       logSnapshotPath,
       config: {
+        auditLogDir: runtime.config.auditLogDir,
+        auditLogLevel: runtime.config.auditLogLevel,
         dataDir: runtime.config.dataDir,
         hostAllowPaths: [...runtime.config.hostAllowPaths],
         hostDenyPaths: [...runtime.config.hostDenyPaths],
@@ -383,6 +411,18 @@ export const createSupportBundle = async (
           path.join(temporaryBundlePath, 'logs', path.basename(currentLogPath)),
           'log-snapshot',
           currentLogPath,
+        ),
+      );
+    }
+
+    if (auditLogSnapshotPath) {
+      files.push(
+        await buildBundleFileRecord(
+          destinationPath,
+          temporaryBundlePath,
+          path.join(temporaryBundlePath, 'audit', path.basename(currentAuditLogPath)),
+          'audit-log-snapshot',
+          currentAuditLogPath,
         ),
       );
     }

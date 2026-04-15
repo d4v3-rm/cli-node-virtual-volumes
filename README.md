@@ -153,6 +153,8 @@ Main variables:
 | Variable | Description |
 | --- | --- |
 | `VOLUME_DATA_DIR` | Persistent root for virtual volumes |
+| `VOLUME_AUDIT_LOG_DIR` | Optional directory for structured audit logs |
+| `VOLUME_AUDIT_LOG_LEVEL` | Audit logger level, separate from the application logger |
 | `VOLUME_HOST_ALLOW_PATHS` | Optional host path allowlist for import/export, separated by the OS path delimiter |
 | `VOLUME_HOST_DENY_PATHS` | Optional host path denylist for import/export, separated by the OS path delimiter |
 | `VOLUME_LOG_DIR` | Runtime log directory |
@@ -164,6 +166,8 @@ Main variables:
 Operational notes:
 
 - If `VOLUME_DATA_DIR` is not set, the runtime uses the current working directory.
+- If `VOLUME_AUDIT_LOG_DIR` is not set, audit logs default to `VOLUME_LOG_DIR/audit`.
+- Audit logs are written separately from application logs and capture structured success/failure events for core write, import, export, delete, backup, restore, and diagnostics operations.
 - `VOLUME_HOST_ALLOW_PATHS` and `VOLUME_HOST_DENY_PATHS` accept absolute or relative paths, resolved at startup.
 - Path lists use `;` on Windows and `:` on Linux/macOS.
 - If an allowlist is configured, import and export are blocked outside those roots. Denylist roots always win.
@@ -284,6 +288,7 @@ Each support bundle includes:
 - `doctor-report.json`
 - optional `backup-inspection.json`
 - optional `backup-artifact.manifest.json` when `--backup-path` points to a manifest-backed backup
+- optional current audit log snapshot
 - optional current log snapshot
 
 `inspect-support-bundle` validates:

@@ -5,7 +5,7 @@ import { nanoid } from 'nanoid';
 import type { Logger } from 'pino';
 
 import type { AppConfig } from '../config/env.js';
-import { VolumeError } from '../domain/errors.js';
+import { isVolumeError, VolumeError } from '../domain/errors.js';
 import type {
   CreateVolumeInput,
   DirectoryEntry,
@@ -60,11 +60,36 @@ interface ExportTraversalContext {
   onProgress?: ExportVolumeEntryInput['onProgress'];
 }
 
+type AuditEventType =
+  | 'volume.create'
+  | 'volume.delete'
+  | 'volume.backup'
+  | 'volume.restore'
+  | 'volume.backup.inspect'
+  | 'storage.doctor'
+  | 'storage.repair'
+  | 'entry.directory.create'
+  | 'entry.file.write'
+  | 'entry.move'
+  | 'entry.delete'
+  | 'host.import'
+  | 'host.export';
+
+type AuditResourceType = 'backup' | 'entry' | 'host-transfer' | 'storage' | 'volume';
+
+interface AuditOperationOptions {
+  eventType: AuditEventType;
+  resourceType: AuditResourceType;
+  volumeId?: string;
+  details?: Record<string, unknown>;
+}
+
 export class VolumeService {
   public constructor(
     private readonly repository: VolumeRepository,
     private readonly config: ServiceConfig,
     private readonly logger: Logger,
+    private readonly auditLogger: Logger,
   ) {}
 
   public async listVolumes(): Promise<VolumeManifest[]> {
@@ -72,22 +97,48 @@ export class VolumeService {
   }
 
   public async createVolume(input: CreateVolumeInput): Promise<VolumeManifest> {
-    const name = input.name.trim();
-    if (name.length === 0) {
-      throw new VolumeError('INVALID_NAME', 'Volume name cannot be empty.');
-    }
+    return this.runAuditedOperation(
+      {
+        eventType: 'volume.create',
+        resourceType: 'volume',
+        details: {
+          requestedName: input.name.trim(),
+          quotaBytes: input.quotaBytes ?? this.config.defaultQuotaBytes,
+        },
+      },
+      async () => {
+        const name = input.name.trim();
+        if (name.length === 0) {
+          throw new VolumeError('INVALID_NAME', 'Volume name cannot be empty.');
+        }
 
-    const record = await this.repository.createVolume({
-      name,
-      description: input.description?.trim() ?? '',
-      quotaBytes: input.quotaBytes ?? this.config.defaultQuotaBytes,
-    });
+        const record = await this.repository.createVolume({
+          name,
+          description: input.description?.trim() ?? '',
+          quotaBytes: input.quotaBytes ?? this.config.defaultQuotaBytes,
+        });
 
-    return record.manifest;
+        return record.manifest;
+      },
+      (manifest) => ({
+        volumeId: manifest.id,
+        volumeName: manifest.name,
+        revision: manifest.revision,
+      }),
+    );
   }
 
   public async deleteVolume(volumeId: string): Promise<void> {
-    await this.repository.deleteVolume(volumeId);
+    await this.runAuditedOperation(
+      {
+        eventType: 'volume.delete',
+        resourceType: 'volume',
+        volumeId,
+      },
+      async () => {
+        await this.repository.deleteVolume(volumeId);
+      },
+    );
   }
 
   public async backupVolume(
@@ -95,28 +146,98 @@ export class VolumeService {
     destinationPath: string,
     options: { overwrite?: boolean } = {},
   ): Promise<VolumeBackupResult> {
-    return this.repository.backupVolume(volumeId, destinationPath, options);
+    return this.runAuditedOperation(
+      {
+        eventType: 'volume.backup',
+        resourceType: 'backup',
+        volumeId,
+        details: {
+          destinationPath: path.resolve(destinationPath),
+          overwrite: options.overwrite === true,
+        },
+      },
+      () => this.repository.backupVolume(volumeId, destinationPath, options),
+      (result) => ({
+        backupPath: result.backupPath,
+        revision: result.revision,
+        validatedWithManifest: true,
+      }),
+    );
   }
 
   public async restoreVolumeBackup(
     backupPath: string,
     options: RestoreVolumeBackupOptions = {},
   ): Promise<VolumeRestoreResult> {
-    return this.repository.restoreVolumeBackup(backupPath, options);
+    return this.runAuditedOperation(
+      {
+        eventType: 'volume.restore',
+        resourceType: 'backup',
+        details: {
+          backupPath: path.resolve(backupPath),
+          overwrite: options.overwrite === true,
+        },
+      },
+      () => this.repository.restoreVolumeBackup(backupPath, options),
+      (result) => ({
+        volumeId: result.volumeId,
+        volumeName: result.volumeName,
+        revision: result.revision,
+        validatedWithManifest: result.validatedWithManifest,
+      }),
+    );
   }
 
   public async inspectVolumeBackup(
     backupPath: string,
   ): Promise<VolumeBackupInspectionResult> {
-    return this.repository.inspectVolumeBackup(backupPath);
+    return this.runAuditedOperation(
+      {
+        eventType: 'volume.backup.inspect',
+        resourceType: 'backup',
+        details: {
+          backupPath: path.resolve(backupPath),
+        },
+      },
+      () => this.repository.inspectVolumeBackup(backupPath),
+      (result) => ({
+        volumeId: result.volumeId,
+        revision: result.revision,
+        validatedWithManifest: result.validatedWithManifest,
+      }),
+    );
   }
 
   public async runDoctor(volumeId?: string): Promise<StorageDoctorReport> {
-    return this.repository.runDoctor(volumeId);
+    return this.runAuditedOperation(
+      {
+        eventType: 'storage.doctor',
+        resourceType: 'storage',
+        volumeId,
+      },
+      () => this.repository.runDoctor(volumeId),
+      (report) => ({
+        checkedVolumes: report.checkedVolumes,
+        issueCount: report.issueCount,
+        healthy: report.healthy,
+      }),
+    );
   }
 
   public async runRepair(volumeId?: string): Promise<StorageRepairReport> {
-    return this.repository.runRepair(volumeId);
+    return this.runAuditedOperation(
+      {
+        eventType: 'storage.repair',
+        resourceType: 'storage',
+        volumeId,
+      },
+      () => this.repository.runRepair(volumeId),
+      (report) => ({
+        checkedVolumes: report.checkedVolumes,
+        actionsApplied: report.actionsApplied,
+        healthy: report.healthy,
+      }),
+    );
   }
 
   public async getExplorerSnapshot(
@@ -165,269 +286,364 @@ export class VolumeService {
     parentPath: string,
     directoryName: string,
   ): Promise<DirectoryEntry> {
-    const name = assertValidEntryName(directoryName);
-    const createdDirectory = await this.repository.mutateVolume(
-      volumeId,
-      (record) => {
-        const parentDirectory = this.requireDirectoryByPath(record.state, parentPath);
-
-        if (this.findChildByName(record.state, parentDirectory.id, name)) {
-          throw new VolumeError(
-            'ALREADY_EXISTS',
-            `An entry named "${name}" already exists in ${parentPath}.`,
-          );
-        }
-
-        return this.createDirectoryEntry(record.state, parentDirectory.id, name);
+    return this.runAuditedOperation(
+      {
+        eventType: 'entry.directory.create',
+        resourceType: 'entry',
+        volumeId,
+        details: {
+          parentPath,
+          directoryName: directoryName.trim(),
+        },
       },
-    );
-    this.logger.info(
-      { volumeId, parentPath, directoryName: name },
-      'Directory created.',
-    );
+      async () => {
+        const name = assertValidEntryName(directoryName);
+        const createdDirectory = await this.repository.mutateVolume(
+          volumeId,
+          (record) => {
+            const parentDirectory = this.requireDirectoryByPath(record.state, parentPath);
 
-    return createdDirectory;
+            if (this.findChildByName(record.state, parentDirectory.id, name)) {
+              throw new VolumeError(
+                'ALREADY_EXISTS',
+                `An entry named "${name}" already exists in ${parentPath}.`,
+              );
+            }
+
+            return this.createDirectoryEntry(record.state, parentDirectory.id, name);
+          },
+        );
+        this.logger.info(
+          { volumeId, parentPath, directoryName: name },
+          'Directory created.',
+        );
+
+        return createdDirectory;
+      },
+      (entry) => ({
+        entryId: entry.id,
+        entryName: entry.name,
+      }),
+    );
   }
 
   public async importHostPaths(
     volumeId: string,
     input: ImportHostPathsInput,
   ): Promise<ImportSummary> {
-    if (input.hostPaths.length === 0) {
-      throw new VolumeError('INVALID_OPERATION', 'No host paths were provided.');
-    }
-
-    const summary = await this.repository.mutateVolume(
-      volumeId,
-      async (record, database) => {
-        const destinationDirectory = this.requireDirectoryByPath(
-          record.state,
-          input.destinationPath,
-        );
-        const blobStore = new BlobStore(
-          this.repository.getVolumeDatabasePath(volumeId),
-          this.logger.child({ scope: 'blob-store', volumeId }),
-        );
-        const nextSummary: ImportSummary = {
-          filesImported: 0,
-          directoriesImported: 0,
-          bytesImported: 0,
-          conflictsResolved: 0,
-          integrityChecksPassed: 0,
-        };
-        const traversalContext: ImportTraversalContext = {
-          processedNodes: 0,
-          onProgress: input.onProgress,
-        };
-
-        for (const rawHostPath of input.hostPaths) {
-          const absoluteHostPath = path.resolve(rawHostPath);
-          this.assertHostPathAllowed(absoluteHostPath, 'import');
-          await this.importHostPath(
-            database,
-            record,
-            blobStore,
-            absoluteHostPath,
-            destinationDirectory.id,
-            nextSummary,
-            traversalContext,
-          );
+    return this.runAuditedOperation(
+      {
+        eventType: 'host.import',
+        resourceType: 'host-transfer',
+        volumeId,
+        details: {
+          destinationPath: input.destinationPath,
+          hostPathCount: input.hostPaths.length,
+          hostPathsPreview: input.hostPaths
+            .slice(0, 10)
+            .map((hostPath) => path.resolve(hostPath)),
+        },
+      },
+      async () => {
+        if (input.hostPaths.length === 0) {
+          throw new VolumeError('INVALID_OPERATION', 'No host paths were provided.');
         }
 
-        return nextSummary;
-      },
-    );
-    this.logger.info(
-      { volumeId, destinationPath: input.destinationPath, summary },
-      'Host paths imported.',
-    );
+        const summary = await this.repository.mutateVolume(
+          volumeId,
+          async (record, database) => {
+            const destinationDirectory = this.requireDirectoryByPath(
+              record.state,
+              input.destinationPath,
+            );
+            const blobStore = new BlobStore(
+              this.repository.getVolumeDatabasePath(volumeId),
+              this.logger.child({ scope: 'blob-store', volumeId }),
+            );
+            const nextSummary: ImportSummary = {
+              filesImported: 0,
+              directoriesImported: 0,
+              bytesImported: 0,
+              conflictsResolved: 0,
+              integrityChecksPassed: 0,
+            };
+            const traversalContext: ImportTraversalContext = {
+              processedNodes: 0,
+              onProgress: input.onProgress,
+            };
 
-    return summary;
+            for (const rawHostPath of input.hostPaths) {
+              const absoluteHostPath = path.resolve(rawHostPath);
+              this.assertHostPathAllowed(absoluteHostPath, 'import');
+              await this.importHostPath(
+                database,
+                record,
+                blobStore,
+                absoluteHostPath,
+                destinationDirectory.id,
+                nextSummary,
+                traversalContext,
+              );
+            }
+
+            return nextSummary;
+          },
+        );
+        this.logger.info(
+          { volumeId, destinationPath: input.destinationPath, summary },
+          'Host paths imported.',
+        );
+
+        return summary;
+      },
+      (summary) => ({
+        filesImported: summary.filesImported,
+        directoriesImported: summary.directoriesImported,
+        bytesImported: summary.bytesImported,
+        conflictsResolved: summary.conflictsResolved,
+        integrityChecksPassed: summary.integrityChecksPassed,
+      }),
+    );
   }
 
   public async exportEntryToHost(
     volumeId: string,
     input: ExportVolumeEntryInput,
   ): Promise<ExportSummary> {
-    const record = await this.repository.loadVolume(volumeId);
-    const normalizedSourcePath = normalizeVirtualPath(input.sourcePath);
-    const destinationHostDirectory = path.resolve(input.destinationHostDirectory);
+    return this.runAuditedOperation(
+      {
+        eventType: 'host.export',
+        resourceType: 'host-transfer',
+        volumeId,
+        details: {
+          sourcePath: input.sourcePath,
+          destinationHostDirectory: path.resolve(input.destinationHostDirectory),
+        },
+      },
+      async () => {
+        const record = await this.repository.loadVolume(volumeId);
+        const normalizedSourcePath = normalizeVirtualPath(input.sourcePath);
+        const destinationHostDirectory = path.resolve(input.destinationHostDirectory);
 
-    this.assertHostPathAllowed(destinationHostDirectory, 'export');
-    const destinationStats = await fs.stat(destinationHostDirectory).catch(() => null);
+        this.assertHostPathAllowed(destinationHostDirectory, 'export');
+        const destinationStats = await fs.stat(destinationHostDirectory).catch(() => null);
 
-    if (destinationStats && !destinationStats.isDirectory()) {
-      throw new VolumeError(
-        'INVALID_OPERATION',
-        `The host destination must be a directory: ${destinationHostDirectory}`,
-      );
-    }
+        if (destinationStats && !destinationStats.isDirectory()) {
+          throw new VolumeError(
+            'INVALID_OPERATION',
+            `The host destination must be a directory: ${destinationHostDirectory}`,
+          );
+        }
 
-    await fs.mkdir(destinationHostDirectory, { recursive: true });
+        await fs.mkdir(destinationHostDirectory, { recursive: true });
 
-    const blobStore = new BlobStore(
-      this.repository.getVolumeDatabasePath(volumeId),
-      this.logger.child({ scope: 'blob-store', volumeId }),
-    );
-    const summary: ExportSummary = {
-      filesExported: 0,
-      directoriesExported: 0,
-      bytesExported: 0,
-      conflictsResolved: 0,
-      integrityChecksPassed: 0,
-    };
-    const traversalContext: ExportTraversalContext = {
-      processedNodes: 0,
-      onProgress: input.onProgress,
-    };
-
-    if (normalizedSourcePath === '/') {
-      const rootDirectory = this.requireDirectoryById(record.state, record.state.rootId);
-      const childEntries = rootDirectory.childIds
-        .map((childId) => record.state.entries[childId])
-        .filter((entry): entry is VolumeEntry => entry !== undefined)
-        .sort((left, right) => this.sortEntries(left, right));
-
-      for (const childEntry of childEntries) {
-        await this.exportEntry(
-          record.state,
-          blobStore,
-          childEntry,
-          destinationHostDirectory,
-          summary,
-          traversalContext,
+        const blobStore = new BlobStore(
+          this.repository.getVolumeDatabasePath(volumeId),
+          this.logger.child({ scope: 'blob-store', volumeId }),
         );
-      }
-    } else {
-      const sourceEntry = this.requireEntryByPath(record.state, normalizedSourcePath);
-      await this.exportEntry(
-        record.state,
-        blobStore,
-        sourceEntry,
-        destinationHostDirectory,
-        summary,
-        traversalContext,
-      );
-    }
+        const summary: ExportSummary = {
+          filesExported: 0,
+          directoriesExported: 0,
+          bytesExported: 0,
+          conflictsResolved: 0,
+          integrityChecksPassed: 0,
+        };
+        const traversalContext: ExportTraversalContext = {
+          processedNodes: 0,
+          onProgress: input.onProgress,
+        };
 
-    this.logger.info(
-      { volumeId, sourcePath: normalizedSourcePath, destinationHostDirectory, summary },
-      'Virtual entry exported to host.',
+        if (normalizedSourcePath === '/') {
+          const rootDirectory = this.requireDirectoryById(record.state, record.state.rootId);
+          const childEntries = rootDirectory.childIds
+            .map((childId) => record.state.entries[childId])
+            .filter((entry): entry is VolumeEntry => entry !== undefined)
+            .sort((left, right) => this.sortEntries(left, right));
+
+          for (const childEntry of childEntries) {
+            await this.exportEntry(
+              record.state,
+              blobStore,
+              childEntry,
+              destinationHostDirectory,
+              summary,
+              traversalContext,
+            );
+          }
+        } else {
+          const sourceEntry = this.requireEntryByPath(record.state, normalizedSourcePath);
+          await this.exportEntry(
+            record.state,
+            blobStore,
+            sourceEntry,
+            destinationHostDirectory,
+            summary,
+            traversalContext,
+          );
+        }
+
+        this.logger.info(
+          { volumeId, sourcePath: normalizedSourcePath, destinationHostDirectory, summary },
+          'Virtual entry exported to host.',
+        );
+
+        return summary;
+      },
+      (summary) => ({
+        filesExported: summary.filesExported,
+        directoriesExported: summary.directoriesExported,
+        bytesExported: summary.bytesExported,
+        conflictsResolved: summary.conflictsResolved,
+        integrityChecksPassed: summary.integrityChecksPassed,
+      }),
     );
-
-    return summary;
   }
 
   public async moveEntry(
     volumeId: string,
     input: MoveEntryInput,
   ): Promise<string> {
-    const sourcePath = normalizeVirtualPath(input.sourcePath);
-
-    if (sourcePath === '/') {
-      throw new VolumeError('INVALID_OPERATION', 'The root directory cannot be moved.');
-    }
-    const updatedPath = await this.repository.mutateVolume(
-      volumeId,
-      (record) => {
-        const sourceEntry = this.requireEntryByPath(record.state, sourcePath);
-        const sourceParent = this.requireDirectoryById(record.state, sourceEntry.parentId);
-        const destinationDirectory = this.requireDirectoryByPath(
-          record.state,
-          input.destinationDirectoryPath,
-        );
-
-        if (
-          sourceEntry.kind === 'directory' &&
-          this.isAncestor(record.state, sourceEntry.id, destinationDirectory.id)
-        ) {
-          throw new VolumeError(
-            'INVALID_OPERATION',
-            'A directory cannot be moved into one of its descendants.',
-          );
-        }
-
-        const candidateName = input.newName?.trim();
-        const nextName =
-          candidateName && candidateName.length > 0
-            ? assertValidEntryName(candidateName)
-            : sourceEntry.name;
-
-        const conflictingEntry = this.findChildByName(
-          record.state,
-          destinationDirectory.id,
-          nextName,
-        );
-
-        if (conflictingEntry && conflictingEntry.id !== sourceEntry.id) {
-          throw new VolumeError(
-            'ALREADY_EXISTS',
-            `An entry named "${nextName}" already exists in ${input.destinationDirectoryPath}.`,
-          );
-        }
-
-        const now = new Date().toISOString();
-        sourceParent.childIds = sourceParent.childIds.filter(
-          (childId) => childId !== sourceEntry.id,
-        );
-        destinationDirectory.childIds.push(sourceEntry.id);
-        sourceParent.updatedAt = now;
-        destinationDirectory.updatedAt = now;
-        sourceEntry.parentId = destinationDirectory.id;
-        sourceEntry.name = nextName;
-        sourceEntry.updatedAt = now;
-
-        return this.getPathForEntry(record.state, sourceEntry.id);
+    return this.runAuditedOperation(
+      {
+        eventType: 'entry.move',
+        resourceType: 'entry',
+        volumeId,
+        details: {
+          sourcePath: input.sourcePath,
+          destinationDirectoryPath: input.destinationDirectoryPath,
+          newName:
+            input.newName?.trim() && input.newName.trim().length > 0
+              ? input.newName.trim()
+              : null,
+        },
       },
-    );
-    this.logger.info({ volumeId, sourcePath, updatedPath }, 'Entry moved.');
+      async () => {
+        const sourcePath = normalizeVirtualPath(input.sourcePath);
 
-    return updatedPath;
+        if (sourcePath === '/') {
+          throw new VolumeError('INVALID_OPERATION', 'The root directory cannot be moved.');
+        }
+        const updatedPath = await this.repository.mutateVolume(
+          volumeId,
+          (record) => {
+            const sourceEntry = this.requireEntryByPath(record.state, sourcePath);
+            const sourceParent = this.requireDirectoryById(record.state, sourceEntry.parentId);
+            const destinationDirectory = this.requireDirectoryByPath(
+              record.state,
+              input.destinationDirectoryPath,
+            );
+
+            if (
+              sourceEntry.kind === 'directory' &&
+              this.isAncestor(record.state, sourceEntry.id, destinationDirectory.id)
+            ) {
+              throw new VolumeError(
+                'INVALID_OPERATION',
+                'A directory cannot be moved into one of its descendants.',
+              );
+            }
+
+            const candidateName = input.newName?.trim();
+            const nextName =
+              candidateName && candidateName.length > 0
+                ? assertValidEntryName(candidateName)
+                : sourceEntry.name;
+
+            const conflictingEntry = this.findChildByName(
+              record.state,
+              destinationDirectory.id,
+              nextName,
+            );
+
+            if (conflictingEntry && conflictingEntry.id !== sourceEntry.id) {
+              throw new VolumeError(
+                'ALREADY_EXISTS',
+                `An entry named "${nextName}" already exists in ${input.destinationDirectoryPath}.`,
+              );
+            }
+
+            const now = new Date().toISOString();
+            sourceParent.childIds = sourceParent.childIds.filter(
+              (childId) => childId !== sourceEntry.id,
+            );
+            destinationDirectory.childIds.push(sourceEntry.id);
+            sourceParent.updatedAt = now;
+            destinationDirectory.updatedAt = now;
+            sourceEntry.parentId = destinationDirectory.id;
+            sourceEntry.name = nextName;
+            sourceEntry.updatedAt = now;
+
+            return this.getPathForEntry(record.state, sourceEntry.id);
+          },
+        );
+        this.logger.info({ volumeId, sourcePath, updatedPath }, 'Entry moved.');
+
+        return updatedPath;
+      },
+      (updatedPath) => ({
+        updatedPath,
+      }),
+    );
   }
 
   public async deleteEntry(volumeId: string, targetPath: string): Promise<number> {
-    const normalizedPath = normalizeVirtualPath(targetPath);
-
-    if (normalizedPath === '/') {
-      throw new VolumeError('INVALID_OPERATION', 'The root directory cannot be deleted.');
-    }
-    const deletedEntries = await this.repository.mutateVolume(
-      volumeId,
-      async (record, database) => {
-        const targetEntry = this.requireEntryByPath(record.state, normalizedPath);
-        const parentDirectory = this.requireDirectoryById(record.state, targetEntry.parentId);
-        const idsToDelete = this.collectDescendantIds(record.state, targetEntry.id);
-        const contentRefsToDelete = this.collectContentRefs(record.state, idsToDelete);
-        const blobStore = new BlobStore(
-          this.repository.getVolumeDatabasePath(volumeId),
-          this.logger.child({ scope: 'blob-store', volumeId }),
-        );
-
-        parentDirectory.childIds = parentDirectory.childIds.filter(
-          (childId) => childId !== targetEntry.id,
-        );
-        parentDirectory.updatedAt = new Date().toISOString();
-
-        for (const entryId of idsToDelete) {
-          delete record.state.entries[entryId];
-        }
-
-        await this.deleteOrphanedBlobsInDatabase(
-          database,
-          blobStore,
-          record.state,
-          contentRefsToDelete,
-        );
-
-        return idsToDelete.length;
+    return this.runAuditedOperation(
+      {
+        eventType: 'entry.delete',
+        resourceType: 'entry',
+        volumeId,
+        details: {
+          targetPath,
+        },
       },
-    );
-    this.logger.info(
-      { volumeId, targetPath: normalizedPath, deletedEntries },
-      'Entry deleted.',
-    );
+      async () => {
+        const normalizedPath = normalizeVirtualPath(targetPath);
 
-    return deletedEntries;
+        if (normalizedPath === '/') {
+          throw new VolumeError('INVALID_OPERATION', 'The root directory cannot be deleted.');
+        }
+        const deletedEntries = await this.repository.mutateVolume(
+          volumeId,
+          async (record, database) => {
+            const targetEntry = this.requireEntryByPath(record.state, normalizedPath);
+            const parentDirectory = this.requireDirectoryById(record.state, targetEntry.parentId);
+            const idsToDelete = this.collectDescendantIds(record.state, targetEntry.id);
+            const contentRefsToDelete = this.collectContentRefs(record.state, idsToDelete);
+            const blobStore = new BlobStore(
+              this.repository.getVolumeDatabasePath(volumeId),
+              this.logger.child({ scope: 'blob-store', volumeId }),
+            );
+
+            parentDirectory.childIds = parentDirectory.childIds.filter(
+              (childId) => childId !== targetEntry.id,
+            );
+            parentDirectory.updatedAt = new Date().toISOString();
+
+            for (const entryId of idsToDelete) {
+              delete record.state.entries[entryId];
+            }
+
+            await this.deleteOrphanedBlobsInDatabase(
+              database,
+              blobStore,
+              record.state,
+              contentRefsToDelete,
+            );
+
+            return idsToDelete.length;
+          },
+        );
+        this.logger.info(
+          { volumeId, targetPath: normalizedPath, deletedEntries },
+          'Entry deleted.',
+        );
+
+        return deletedEntries;
+      },
+      (deletedEntries) => ({
+        deletedEntries,
+      }),
+    );
   }
 
   public async previewFile(volumeId: string, filePath: string): Promise<FilePreview> {
@@ -471,70 +687,83 @@ export class VolumeService {
     filePath: string,
     content: string,
   ): Promise<void> {
-    const normalizedPath = normalizeVirtualPath(filePath);
-    const fileName = assertValidEntryName(getBaseName(normalizedPath));
-    await this.repository.mutateVolume(volumeId, async (record, database) => {
-      const parentDirectory = this.requireDirectoryByPath(
-        record.state,
-        path.posix.dirname(normalizedPath),
-      );
-      const existing = this.findChildByName(record.state, parentDirectory.id, fileName);
-      const blobStore = new BlobStore(
-        this.repository.getVolumeDatabasePath(volumeId),
-        this.logger.child({ scope: 'blob-store', volumeId }),
-      );
-
-      const descriptor = await blobStore.putBufferInDatabase(
-        database,
-        Buffer.from(content, 'utf8'),
-      );
-      const now = new Date().toISOString();
-      const staleContentRefs: string[] = [];
-
-      if (existing?.kind === 'file') {
-        const projectedUsage =
-          record.manifest.logicalUsedBytes - existing.size + descriptor.size;
-        this.ensureWithinQuota(record, projectedUsage);
-
-        if (existing.contentRef !== descriptor.contentRef) {
-          staleContentRefs.push(existing.contentRef);
-        }
-
-        existing.contentRef = descriptor.contentRef;
-        existing.size = descriptor.size;
-        existing.updatedAt = now;
-        existing.importedFromHostPath = null;
-      } else {
-        if (existing) {
-          throw new VolumeError(
-            'ALREADY_EXISTS',
-            `A directory named "${fileName}" already exists in ${parentDirectory.name}.`,
+    await this.runAuditedOperation(
+      {
+        eventType: 'entry.file.write',
+        resourceType: 'entry',
+        volumeId,
+        details: {
+          filePath,
+          bytesWritten: Buffer.byteLength(content, 'utf8'),
+        },
+      },
+      async () => {
+        const normalizedPath = normalizeVirtualPath(filePath);
+        const fileName = assertValidEntryName(getBaseName(normalizedPath));
+        await this.repository.mutateVolume(volumeId, async (record, database) => {
+          const parentDirectory = this.requireDirectoryByPath(
+            record.state,
+            path.posix.dirname(normalizedPath),
           );
-        }
+          const existing = this.findChildByName(record.state, parentDirectory.id, fileName);
+          const blobStore = new BlobStore(
+            this.repository.getVolumeDatabasePath(volumeId),
+            this.logger.child({ scope: 'blob-store', volumeId }),
+          );
 
-        this.ensureWithinQuota(
-          record,
-          record.manifest.logicalUsedBytes + descriptor.size,
-        );
+          const descriptor = await blobStore.putBufferInDatabase(
+            database,
+            Buffer.from(content, 'utf8'),
+          );
+          const now = new Date().toISOString();
+          const staleContentRefs: string[] = [];
 
-        this.createFileEntry(
-          record.state,
-          parentDirectory.id,
-          fileName,
-          descriptor.contentRef,
-          descriptor.size,
-          null,
-        );
-      }
+          if (existing?.kind === 'file') {
+            const projectedUsage =
+              record.manifest.logicalUsedBytes - existing.size + descriptor.size;
+            this.ensureWithinQuota(record, projectedUsage);
 
-      await this.deleteOrphanedBlobsInDatabase(
-        database,
-        blobStore,
-        record.state,
-        staleContentRefs,
-      );
-    });
-    this.logger.info({ volumeId, filePath: normalizedPath }, 'Text file written.');
+            if (existing.contentRef !== descriptor.contentRef) {
+              staleContentRefs.push(existing.contentRef);
+            }
+
+            existing.contentRef = descriptor.contentRef;
+            existing.size = descriptor.size;
+            existing.updatedAt = now;
+            existing.importedFromHostPath = null;
+          } else {
+            if (existing) {
+              throw new VolumeError(
+                'ALREADY_EXISTS',
+                `A directory named "${fileName}" already exists in ${parentDirectory.name}.`,
+              );
+            }
+
+            this.ensureWithinQuota(
+              record,
+              record.manifest.logicalUsedBytes + descriptor.size,
+            );
+
+            this.createFileEntry(
+              record.state,
+              parentDirectory.id,
+              fileName,
+              descriptor.contentRef,
+              descriptor.size,
+              null,
+            );
+          }
+
+          await this.deleteOrphanedBlobsInDatabase(
+            database,
+            blobStore,
+            record.state,
+            staleContentRefs,
+          );
+        });
+        this.logger.info({ volumeId, filePath: normalizedPath }, 'Text file written.');
+      },
+    );
   }
 
   private async importHostPath(
@@ -1212,6 +1441,116 @@ export class VolumeService {
     }
 
     return suspiciousBytes / buffer.byteLength < 0.2;
+  }
+
+  private async runAuditedOperation<T>(
+    options: AuditOperationOptions,
+    operation: () => Promise<T>,
+    getSuccessDetails?: (result: T) => Record<string, unknown> | undefined,
+  ): Promise<T> {
+    const operationId = `audit_${nanoid(10)}`;
+    const startedAt = Date.now();
+    const startedAtIso = new Date(startedAt).toISOString();
+
+    try {
+      const result = await operation();
+      const completedAt = Date.now();
+      this.auditLogger.info(
+        {
+          category: 'audit',
+          operationId,
+          eventType: options.eventType,
+          resourceType: options.resourceType,
+          outcome: 'success',
+          volumeId: options.volumeId,
+          startedAt: startedAtIso,
+          completedAt: new Date(completedAt).toISOString(),
+          durationMs: completedAt - startedAt,
+          details: {
+            ...(options.details ?? {}),
+            ...(getSuccessDetails?.(result) ?? {}),
+          },
+        },
+        'Audit event recorded.',
+      );
+
+      return result;
+    } catch (error) {
+      const completedAt = Date.now();
+      const auditError = this.serializeAuditError(error);
+
+      if (auditError.severity === 'error') {
+        this.auditLogger.error(
+          {
+            category: 'audit',
+            operationId,
+            eventType: options.eventType,
+            resourceType: options.resourceType,
+            outcome: 'failure',
+            volumeId: options.volumeId,
+            startedAt: startedAtIso,
+            completedAt: new Date(completedAt).toISOString(),
+            durationMs: completedAt - startedAt,
+            details: options.details ?? {},
+            error: auditError.payload,
+          },
+          'Audit event recorded.',
+        );
+      } else {
+        this.auditLogger.warn(
+          {
+            category: 'audit',
+            operationId,
+            eventType: options.eventType,
+            resourceType: options.resourceType,
+            outcome: 'failure',
+            volumeId: options.volumeId,
+            startedAt: startedAtIso,
+            completedAt: new Date(completedAt).toISOString(),
+            durationMs: completedAt - startedAt,
+            details: options.details ?? {},
+            error: auditError.payload,
+          },
+          'Audit event recorded.',
+        );
+      }
+
+      throw error;
+    }
+  }
+
+  private serializeAuditError(error: unknown): {
+    payload: Record<string, unknown>;
+    severity: 'error' | 'warn';
+  } {
+    if (isVolumeError(error)) {
+      return {
+        severity: 'warn',
+        payload: {
+          code: error.code,
+          message: error.message,
+          details: error.details ?? null,
+        },
+      };
+    }
+
+    if (error instanceof Error) {
+      return {
+        severity: 'error',
+        payload: {
+          code: 'UNEXPECTED_ERROR',
+          message: error.message,
+        },
+      };
+    }
+
+    return {
+      severity: 'error',
+      payload: {
+        code: 'UNKNOWN_ERROR',
+        message: 'Unknown runtime failure.',
+      },
+    };
   }
 
   private assertHostPathAllowed(

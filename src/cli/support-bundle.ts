@@ -18,6 +18,7 @@ export const formatSupportBundleResult = (
     `Doctor report: ${result.doctorReportPath}`,
     `Backup inspection: ${result.backupInspectionReportPath ?? 'not included'}`,
     `Backup manifest copy: ${result.backupManifestCopyPath ?? 'not included'}`,
+    `Audit log snapshot: ${result.auditLogSnapshotPath ?? 'not included'}`,
     `Log snapshot: ${result.logSnapshotPath ?? 'not included'}`,
     `CLI version: ${result.cliVersion}`,
     `Supported schema: ${result.supportedVolumeSchemaVersion}`,
