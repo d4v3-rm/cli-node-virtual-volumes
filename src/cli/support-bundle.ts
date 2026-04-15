@@ -13,6 +13,8 @@ export const formatSupportBundleResult = (
     `Manifest: ${result.manifestPath}`,
     `Checksums: ${result.checksumsPath}`,
     `Correlation ID: ${result.correlationId}`,
+    `Sensitivity: ${result.contentProfile.sensitivity}`,
+    `Sharing: ${result.contentProfile.sharingRecommendation}`,
     `Scope: ${result.volumeId ?? 'all volumes'}`,
     `Volumes checked: ${result.checkedVolumes}`,
     `Issues detected: ${result.issueCount}`,
@@ -27,7 +29,14 @@ export const formatSupportBundleResult = (
   ];
 
   if (result.backupPath) {
-    lines.splice(8, 0, `Backup path: ${result.backupPath}`);
+    lines.splice(10, 0, `Backup path: ${result.backupPath}`);
+  }
+
+  if (result.contentProfile.sharingNotes.length > 0) {
+    lines.push('Sharing notes:');
+    lines.push(
+      ...result.contentProfile.sharingNotes.map((note) => `- ${note}`),
+    );
   }
 
   return lines.join('\n');
@@ -44,6 +53,8 @@ export const formatSupportBundleInspectionResult = (
     `Bundle version: ${result.bundleVersion ?? 'unknown'}`,
     `Created with: ${result.bundleCliVersion ?? 'unknown'}`,
     `Bundle correlation ID: ${result.bundleCorrelationId ?? 'unknown'}`,
+    `Sensitivity: ${result.contentProfile?.sensitivity ?? 'unknown'}`,
+    `Sharing: ${result.contentProfile?.sharingRecommendation ?? 'unknown'}`,
     `Bundle created at: ${
       result.bundleCreatedAt ? formatDateTime(result.bundleCreatedAt) : 'unknown'
     }`,
@@ -57,6 +68,13 @@ export const formatSupportBundleInspectionResult = (
     lines.push('Findings:');
     lines.push(
       ...result.issues.map((issue) => `- [${issue.code}] ${issue.message}`),
+    );
+  }
+
+  if (result.contentProfile?.sharingNotes.length) {
+    lines.push('Sharing notes:');
+    lines.push(
+      ...result.contentProfile.sharingNotes.map((note) => `- ${note}`),
     );
   }
 

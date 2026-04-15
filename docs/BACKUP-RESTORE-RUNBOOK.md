@@ -143,6 +143,7 @@ Per escalation o handoff verso supporto tecnico:
 4. Esegui `virtual-volumes inspect-support-bundle <destinationPath>` per verificare integrita' e checksum del bundle.
 5. Condividi la cartella generata, che include `manifest.json`, `checksums.json`, `doctor-report.json`, eventuale `backup-inspection.json`, eventuale copia del manifest del backup e, se non esclusi, tail snapshot del log corrente.
 6. Se usi `VOLUME_REDACT_SENSITIVE_DETAILS=true`, anche i report JSON interni del bundle vengono redatti prima della condivisione.
+7. Controlla il `contentProfile` del bundle o l'output di `inspect-support-bundle` per capire se l'artifact e' `external-shareable` oppure `internal-only`.
 
 ## Restore drill periodico
 

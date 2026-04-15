@@ -312,6 +312,23 @@ export interface SupportBundleChecksumManifest {
   files: SupportBundleFileRecord[];
 }
 
+export type SupportBundleSensitivity = 'sanitized' | 'restricted';
+
+export type SupportBundleSharingRecommendation =
+  | 'external-shareable'
+  | 'internal-only';
+
+export interface SupportBundleContentProfile {
+  redacted: boolean;
+  includesAppLogSnapshot: boolean;
+  includesAuditLogSnapshot: boolean;
+  includesBackupInspection: boolean;
+  includesBackupManifestCopy: boolean;
+  sensitivity: SupportBundleSensitivity;
+  sharingRecommendation: SupportBundleSharingRecommendation;
+  sharingNotes: string[];
+}
+
 export interface SupportBundleInspectionIssue {
   code:
     | 'CHECKSUM_MISMATCH'
@@ -343,6 +360,7 @@ export interface SupportBundleInspectionResult {
   issueCount: number;
   expectedFiles: number;
   verifiedFiles: number;
+  contentProfile: SupportBundleContentProfile | null;
   issues: SupportBundleInspectionIssue[];
 }
 
@@ -365,6 +383,7 @@ export interface SupportBundleResult {
   checksumsPath: string;
   auditLogSnapshotPath: string | null;
   logSnapshotPath: string | null;
+  contentProfile: SupportBundleContentProfile;
   config: SupportBundleConfigSnapshot;
   environment: SupportBundleEnvironmentSnapshot;
 }

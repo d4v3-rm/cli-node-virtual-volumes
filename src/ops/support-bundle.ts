@@ -9,6 +9,7 @@ import { VolumeError } from '../domain/errors.js';
 import type {
   CreateSupportBundleInput,
   SupportBundleChecksumManifest,
+  SupportBundleContentProfile,
   SupportBundleFileRecord,
   SupportBundleFileRole,
   SupportBundleInspectionIssue,
@@ -96,7 +97,31 @@ const isSupportBundleChecksumManifest = (
   );
 };
 
-const isSupportBundleResult = (value: unknown): value is SupportBundleResult => {
+const isSupportBundleContentProfile = (
+  value: unknown,
+): value is SupportBundleContentProfile => {
+  if (!isRecord(value) || !Array.isArray(value.sharingNotes)) {
+    return false;
+  }
+
+  return (
+    typeof value.redacted === 'boolean' &&
+    typeof value.includesAppLogSnapshot === 'boolean' &&
+    typeof value.includesAuditLogSnapshot === 'boolean' &&
+    typeof value.includesBackupInspection === 'boolean' &&
+    typeof value.includesBackupManifestCopy === 'boolean' &&
+    (value.sensitivity === 'sanitized' || value.sensitivity === 'restricted') &&
+    (value.sharingRecommendation === 'external-shareable' ||
+      value.sharingRecommendation === 'internal-only') &&
+    value.sharingNotes.every((entry) => typeof entry === 'string')
+  );
+};
+
+const isSupportBundleResultLike = (
+  value: unknown,
+): value is Omit<SupportBundleResult, 'contentProfile'> & {
+  contentProfile?: SupportBundleContentProfile;
+} => {
   if (!isRecord(value) || !isRecord(value.config) || !isRecord(value.environment)) {
     return false;
   }
@@ -141,6 +166,76 @@ const isSupportBundleResult = (value: unknown): value is SupportBundleResult => 
     typeof value.environment.hostname === 'string' &&
     typeof value.environment.cwd === 'string'
   );
+};
+
+const buildContentProfile = (options: {
+  redacted: boolean;
+  includesAppLogSnapshot: boolean;
+  includesAuditLogSnapshot: boolean;
+  includesBackupInspection: boolean;
+  includesBackupManifestCopy: boolean;
+}): SupportBundleContentProfile => {
+  const sharingNotes: string[] = [];
+
+  if (!options.redacted) {
+    sharingNotes.push('Runtime metadata and embedded reports are not redacted.');
+  }
+
+  if (options.includesAppLogSnapshot || options.includesAuditLogSnapshot) {
+    sharingNotes.push(
+      'Log snapshots are included and may contain sensitive operational context.',
+    );
+  }
+
+  if (options.includesBackupManifestCopy) {
+    sharingNotes.push(
+      'A backup manifest copy is included for artifact correlation and recovery review.',
+    );
+  }
+
+  if (sharingNotes.length === 0) {
+    sharingNotes.push(
+      'Bundle metadata is redacted and log snapshots are excluded, which is suitable for broader sharing.',
+    );
+  }
+
+  const sensitivity =
+    options.redacted &&
+    !options.includesAppLogSnapshot &&
+    !options.includesAuditLogSnapshot
+      ? 'sanitized'
+      : 'restricted';
+
+  return {
+    redacted: options.redacted,
+    includesAppLogSnapshot: options.includesAppLogSnapshot,
+    includesAuditLogSnapshot: options.includesAuditLogSnapshot,
+    includesBackupInspection: options.includesBackupInspection,
+    includesBackupManifestCopy: options.includesBackupManifestCopy,
+    sensitivity,
+    sharingRecommendation:
+      sensitivity === 'sanitized' ? 'external-shareable' : 'internal-only',
+    sharingNotes,
+  };
+};
+
+const coerceSupportBundleResult = (value: unknown): SupportBundleResult | null => {
+  if (!isSupportBundleResultLike(value)) {
+    return null;
+  }
+
+  return {
+    ...value,
+    contentProfile: isSupportBundleContentProfile(value.contentProfile)
+      ? value.contentProfile
+      : buildContentProfile({
+          redacted: value.config.redactSensitiveDetails,
+          includesAppLogSnapshot: value.logSnapshotPath !== null,
+          includesAuditLogSnapshot: value.auditLogSnapshotPath !== null,
+          includesBackupInspection: value.backupInspectionReportPath !== null,
+          includesBackupManifestCopy: value.backupManifestCopyPath !== null,
+        }),
+  };
 };
 
 const readJsonFileSafe = async (filePath: string): Promise<unknown> =>
@@ -439,6 +534,13 @@ export const createSupportBundle = async (
       checksumsPath,
       auditLogSnapshotPath,
       logSnapshotPath,
+      contentProfile: buildContentProfile({
+        redacted: runtime.config.redactSensitiveDetails,
+        includesAppLogSnapshot: logSnapshotPath !== null,
+        includesAuditLogSnapshot: auditLogSnapshotPath !== null,
+        includesBackupInspection: backupInspectionReportPath !== null,
+        includesBackupManifestCopy: backupManifestCopyPath !== null,
+      }),
       config: {
         auditLogDir: runtime.config.redactSensitiveDetails
           ? redactFilesystemPath(runtime.config.auditLogDir)
@@ -618,8 +720,9 @@ export const inspectSupportBundle = async (
   } else {
     try {
       const manifestCandidate = await readJsonFileSafe(manifestPath);
-      if (isSupportBundleResult(manifestCandidate)) {
-        manifest = manifestCandidate;
+      const normalizedManifest = coerceSupportBundleResult(manifestCandidate);
+      if (normalizedManifest) {
+        manifest = normalizedManifest;
       } else {
         addInspectionIssue(issues, {
           code: 'INVALID_BUNDLE_MANIFEST',
@@ -817,6 +920,7 @@ export const inspectSupportBundle = async (
     issueCount: issues.length,
     expectedFiles: checksumManifest?.files.length ?? 0,
     verifiedFiles,
+    contentProfile: manifest?.contentProfile ?? null,
     issues,
   };
 };
