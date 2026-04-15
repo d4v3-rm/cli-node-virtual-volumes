@@ -153,6 +153,8 @@ Main variables:
 | Variable | Description |
 | --- | --- |
 | `VOLUME_DATA_DIR` | Persistent root for virtual volumes |
+| `VOLUME_HOST_ALLOW_PATHS` | Optional host path allowlist for import/export, separated by the OS path delimiter |
+| `VOLUME_HOST_DENY_PATHS` | Optional host path denylist for import/export, separated by the OS path delimiter |
 | `VOLUME_LOG_DIR` | Runtime log directory |
 | `VOLUME_DEFAULT_QUOTA_BYTES` | Default quota for new volumes |
 | `VOLUME_LOG_LEVEL` | `fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent` |
@@ -162,6 +164,9 @@ Main variables:
 Operational notes:
 
 - If `VOLUME_DATA_DIR` is not set, the runtime uses the current working directory.
+- `VOLUME_HOST_ALLOW_PATHS` and `VOLUME_HOST_DENY_PATHS` accept absolute or relative paths, resolved at startup.
+- Path lists use `;` on Windows and `:` on Linux/macOS.
+- If an allowlist is configured, import and export are blocked outside those roots. Denylist roots always win.
 - Volumes are persisted under `VOLUME_DATA_DIR/volumes`.
 - Large file contents stay inside the same SQLite database as chunked blobs.
 - File logging is recommended while using the fullscreen TUI.

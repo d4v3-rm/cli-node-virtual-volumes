@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createRuntime } from '../src/bootstrap/create-runtime.js';
 import { APP_VERSION } from '../src/config/app-metadata.js';
+import type { RuntimeOverrides } from '../src/config/env.js';
 import type { VolumeBackupManifest } from '../src/domain/types.js';
 import { BlobStore } from '../src/storage/blob-store.js';
 import {
@@ -20,7 +21,7 @@ import { VolumeRepository } from '../src/storage/volume-repository.js';
 
 const sandboxes: string[] = [];
 
-const createIsolatedRuntime = async () => {
+const createIsolatedRuntime = async (overrides: RuntimeOverrides = {}) => {
   const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cli-node-virtual-volumes-'));
   sandboxes.push(sandboxRoot);
 
@@ -29,6 +30,7 @@ const createIsolatedRuntime = async () => {
     logDir: path.join(sandboxRoot, 'logs'),
     logLevel: 'silent',
     logToStdout: false,
+    ...overrides,
   });
 };
 
@@ -582,6 +584,60 @@ describe('VolumeService', () => {
 
     expect(snapshot.entries).toHaveLength(0);
     await expect(countPersistedBlobs(runtime.config.dataDir, volume.id)).resolves.toBe(0);
+  });
+
+  it('enforces configured host path allowlist and denylist for import and export', async () => {
+    const hostRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-host-policy-'));
+    sandboxes.push(hostRoot);
+
+    const allowedRoot = path.join(hostRoot, 'allowed');
+    const deniedRoot = path.join(hostRoot, 'denied');
+    const outsideRoot = path.join(hostRoot, 'outside');
+    const allowedImportPath = path.join(allowedRoot, 'inside.txt');
+    const deniedImportPath = path.join(deniedRoot, 'blocked.txt');
+    const exportOutsideRoot = path.join(outsideRoot, 'exports');
+    await fs.mkdir(allowedRoot, { recursive: true });
+    await fs.mkdir(deniedRoot, { recursive: true });
+    await fs.writeFile(allowedImportPath, 'allowed import');
+    await fs.writeFile(deniedImportPath, 'denied import');
+
+    const runtime = await createIsolatedRuntime({
+      hostAllowPaths: [allowedRoot],
+      hostDenyPaths: [deniedRoot],
+    });
+    const volume = await runtime.volumeService.createVolume({ name: 'Host Policy' });
+
+    const importSummary = await runtime.volumeService.importHostPaths(volume.id, {
+      destinationPath: '/',
+      hostPaths: [allowedImportPath],
+    });
+
+    expect(importSummary).toMatchObject({
+      filesImported: 1,
+      directoriesImported: 0,
+    });
+
+    await expect(
+      runtime.volumeService.importHostPaths(volume.id, {
+        destinationPath: '/',
+        hostPaths: [deniedImportPath],
+      }),
+    ).rejects.toMatchObject({
+      code: 'INVALID_OPERATION',
+      message: `Import path is blocked by configured host denylist: ${path.resolve(deniedImportPath)}`,
+    });
+
+    await runtime.volumeService.writeTextFile(volume.id, '/export.txt', 'policy export');
+
+    await expect(
+      runtime.volumeService.exportEntryToHost(volume.id, {
+        sourcePath: '/export.txt',
+        destinationHostDirectory: exportOutsideRoot,
+      }),
+    ).rejects.toMatchObject({
+      code: 'INVALID_OPERATION',
+      message: `Export path is outside the configured host allowlist: ${path.resolve(exportOutsideRoot)}`,
+    });
   });
 
   it('exports virtual files and directories to the host and resolves name conflicts', async () => {

@@ -40,8 +40,36 @@ const booleanStringToValue = (value: unknown): unknown => {
   return value;
 };
 
+const pathListStringToValue = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return [];
+  }
+
+  return trimmed
+    .split(path.delimiter)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+};
+
 const envSchema = z.object({
   VOLUME_DATA_DIR: z.preprocess(emptyStringToUndefined, z.string().optional()),
+  VOLUME_HOST_ALLOW_PATHS: z.preprocess(
+    pathListStringToValue,
+    z.array(z.string()).default([]),
+  ),
+  VOLUME_HOST_DENY_PATHS: z.preprocess(
+    pathListStringToValue,
+    z.array(z.string()).default([]),
+  ),
   VOLUME_LOG_DIR: z.preprocess(emptyStringToUndefined, z.string().optional()),
   VOLUME_DEFAULT_QUOTA_BYTES: z.preprocess(
     emptyStringToUndefined,
@@ -63,6 +91,8 @@ const envSchema = z.object({
 
 export interface RuntimeOverrides {
   dataDir?: string;
+  hostAllowPaths?: string[];
+  hostDenyPaths?: string[];
   logDir?: string;
   logLevel?: AppConfig['logLevel'];
   logToStdout?: boolean;
@@ -70,6 +100,8 @@ export interface RuntimeOverrides {
 
 export interface AppConfig {
   dataDir: string;
+  hostAllowPaths: string[];
+  hostDenyPaths: string[];
   logDir: string;
   defaultQuotaBytes: number;
   logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
@@ -90,6 +122,10 @@ export const loadAppConfig = (
   const parsed = envSchema.parse({
     ...inputEnvironment,
     VOLUME_DATA_DIR: overrides.dataDir ?? inputEnvironment.VOLUME_DATA_DIR,
+    VOLUME_HOST_ALLOW_PATHS:
+      overrides.hostAllowPaths ?? inputEnvironment.VOLUME_HOST_ALLOW_PATHS,
+    VOLUME_HOST_DENY_PATHS:
+      overrides.hostDenyPaths ?? inputEnvironment.VOLUME_HOST_DENY_PATHS,
     VOLUME_LOG_DIR: overrides.logDir ?? inputEnvironment.VOLUME_LOG_DIR,
     VOLUME_LOG_LEVEL: overrides.logLevel ?? inputEnvironment.VOLUME_LOG_LEVEL,
     VOLUME_LOG_TO_STDOUT:
@@ -97,10 +133,18 @@ export const loadAppConfig = (
   });
 
   const dataDir = path.resolve(parsed.VOLUME_DATA_DIR ?? getDefaultDataDir());
+  const hostAllowPaths = Array.from(
+    new Set(parsed.VOLUME_HOST_ALLOW_PATHS.map((entry) => path.resolve(entry))),
+  );
+  const hostDenyPaths = Array.from(
+    new Set(parsed.VOLUME_HOST_DENY_PATHS.map((entry) => path.resolve(entry))),
+  );
   const logDir = path.resolve(parsed.VOLUME_LOG_DIR ?? path.join(dataDir, 'logs'));
 
   return {
     dataDir,
+    hostAllowPaths,
+    hostDenyPaths,
     logDir,
     defaultQuotaBytes: parsed.VOLUME_DEFAULT_QUOTA_BYTES,
     logLevel: parsed.VOLUME_LOG_LEVEL,
