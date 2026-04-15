@@ -185,6 +185,38 @@ describe('support bundle', () => {
     expect(logRecord?.checksumSha256).toMatch(/^[0-9a-f]{64}$/u);
   });
 
+  it('captures only the configured tail of app and audit logs in support bundles', async () => {
+    const runtime = await createIsolatedRuntime({
+      auditLogLevel: 'silent',
+      supportBundleLogTailLines: 2,
+    });
+    const bundlePath = path.join(runtime.config.dataDir, '..', 'tail-support-bundle');
+    const currentLogPath = resolveAppLogFilePath(runtime.config);
+    const currentAuditLogPath = resolveAuditLogFilePath(runtime.config);
+
+    await fs.mkdir(path.dirname(currentLogPath), { recursive: true });
+    await fs.mkdir(path.dirname(currentAuditLogPath), { recursive: true });
+    await fs.writeFile(
+      currentLogPath,
+      ['app-1', 'app-2', 'app-3', 'app-4'].join('\n').concat('\n'),
+      'utf8',
+    );
+    await fs.writeFile(
+      currentAuditLogPath,
+      ['audit-1', 'audit-2', 'audit-3'].join('\n').concat('\n'),
+      'utf8',
+    );
+
+    const result = await createSupportBundle(runtime, {
+      destinationPath: bundlePath,
+    });
+
+    expect(await fs.readFile(result.logSnapshotPath!, 'utf8')).toBe('app-3\napp-4\n');
+    expect(await fs.readFile(result.auditLogSnapshotPath!, 'utf8')).toBe(
+      'audit-2\naudit-3\n',
+    );
+  });
+
   it('rejects existing bundle destinations without overwrite', async () => {
     const runtime = await createIsolatedRuntime();
     const bundlePath = path.join(runtime.config.dataDir, '..', 'existing-support-bundle');

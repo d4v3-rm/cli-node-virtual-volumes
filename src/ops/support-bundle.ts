@@ -24,6 +24,7 @@ import {
 import { SUPPORTED_VOLUME_SCHEMA_VERSION } from '../storage/sqlite-volume.js';
 
 const SUPPORT_BUNDLE_VERSION = 1 as const;
+const LOG_TAIL_READ_CHUNK_BYTES = 64 * 1024;
 const SUPPORT_BUNDLE_FILE_ROLES: SupportBundleFileRole[] = [
   'audit-log-snapshot',
   'backup-inspection',
@@ -221,6 +222,69 @@ const computeFileSha256 = async (filePath: string): Promise<string> =>
     });
   });
 
+const readTailLines = async (
+  filePath: string,
+  maxLines: number,
+): Promise<string> => {
+  const handle = await fs.open(filePath, 'r');
+
+  try {
+    const stats = await handle.stat();
+    if (stats.size === 0) {
+      return '';
+    }
+
+    let position = stats.size;
+    let newlineCount = 0;
+    const chunks: Buffer[] = [];
+
+    while (position > 0 && newlineCount <= maxLines) {
+      const chunkSize = Math.min(LOG_TAIL_READ_CHUNK_BYTES, position);
+      position -= chunkSize;
+      const buffer = Buffer.alloc(chunkSize);
+      const { bytesRead } = await handle.read(buffer, 0, chunkSize, position);
+      const chunk = bytesRead === chunkSize ? buffer : buffer.subarray(0, bytesRead);
+
+      chunks.unshift(chunk);
+
+      for (const byte of chunk) {
+        if (byte === 0x0a) {
+          newlineCount += 1;
+        }
+      }
+    }
+
+    const rawContent = Buffer.concat(chunks).toString('utf8');
+    const hasTrailingNewline = /(?:\r?\n)$/u.test(rawContent);
+    const normalizedContent = rawContent.replace(/\r\n/g, '\n');
+    const lines = normalizedContent.split('\n');
+
+    if (hasTrailingNewline) {
+      lines.pop();
+    }
+
+    const tailLines = lines.slice(-maxLines);
+    if (tailLines.length === 0) {
+      return '';
+    }
+
+    return `${tailLines.join('\n')}${hasTrailingNewline ? '\n' : ''}`;
+  } finally {
+    await handle.close();
+  }
+};
+
+const writeTailSnapshot = async (
+  sourcePath: string,
+  destinationPath: string,
+  maxLines: number,
+): Promise<void> => {
+  const tailContent = await readTailLines(sourcePath, maxLines);
+
+  await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+  await fs.writeFile(destinationPath, tailContent, 'utf8');
+};
+
 const buildBundleFileRecord = async (
   bundlePath: string,
   bundleSourcePath: string,
@@ -318,8 +382,11 @@ export const createSupportBundle = async (
         'logs',
         path.basename(currentLogPath),
       );
-      await fs.mkdir(path.dirname(temporaryLogSnapshotPath), { recursive: true });
-      await fs.copyFile(currentLogPath, temporaryLogSnapshotPath);
+      await writeTailSnapshot(
+        currentLogPath,
+        temporaryLogSnapshotPath,
+        runtime.config.supportBundleLogTailLines,
+      );
     }
 
     if (auditLogSnapshotPath) {
@@ -328,8 +395,11 @@ export const createSupportBundle = async (
         'audit',
         path.basename(currentAuditLogPath),
       );
-      await fs.mkdir(path.dirname(temporaryAuditLogSnapshotPath), { recursive: true });
-      await fs.copyFile(currentAuditLogPath, temporaryAuditLogSnapshotPath);
+      await writeTailSnapshot(
+        currentAuditLogPath,
+        temporaryAuditLogSnapshotPath,
+        runtime.config.supportBundleLogTailLines,
+      );
     }
 
     const result: SupportBundleResult = {

@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 const DEFAULT_QUOTA_BYTES = 10 * 1024 ** 4;
 const DEFAULT_PREVIEW_BYTES = 4 * 1024;
+const DEFAULT_SUPPORT_BUNDLE_LOG_TAIL_LINES = 400;
 
 const emptyStringToUndefined = (value: unknown): unknown => {
   if (typeof value !== 'string') {
@@ -84,6 +85,10 @@ const envSchema = z.object({
     emptyStringToUndefined,
     z.coerce.number().int().positive().optional(),
   ),
+  VOLUME_SUPPORT_BUNDLE_LOG_TAIL_LINES: z.preprocess(
+    emptyStringToUndefined,
+    z.coerce.number().int().positive().default(DEFAULT_SUPPORT_BUNDLE_LOG_TAIL_LINES),
+  ),
   VOLUME_DEFAULT_QUOTA_BYTES: z.preprocess(
     emptyStringToUndefined,
     z.coerce.number().int().positive().default(DEFAULT_QUOTA_BYTES),
@@ -114,6 +119,7 @@ export interface RuntimeOverrides {
   logRetentionDays?: number | null;
   redactSensitiveDetails?: boolean;
   logToStdout?: boolean;
+  supportBundleLogTailLines?: number;
 }
 
 export interface AppConfig {
@@ -129,6 +135,7 @@ export interface AppConfig {
   redactSensitiveDetails: boolean;
   logToStdout: boolean;
   previewBytes: number;
+  supportBundleLogTailLines: number;
 }
 
 const getDefaultDataDir = (): string => {
@@ -159,6 +166,9 @@ export const loadAppConfig = (
       overrides.redactSensitiveDetails ?? inputEnvironment.VOLUME_REDACT_SENSITIVE_DETAILS,
     VOLUME_LOG_TO_STDOUT:
       overrides.logToStdout ?? inputEnvironment.VOLUME_LOG_TO_STDOUT,
+    VOLUME_SUPPORT_BUNDLE_LOG_TAIL_LINES:
+      overrides.supportBundleLogTailLines ??
+      inputEnvironment.VOLUME_SUPPORT_BUNDLE_LOG_TAIL_LINES,
   });
 
   const dataDir = path.resolve(parsed.VOLUME_DATA_DIR ?? getDefaultDataDir());
@@ -184,5 +194,6 @@ export const loadAppConfig = (
     redactSensitiveDetails: parsed.VOLUME_REDACT_SENSITIVE_DETAILS,
     logToStdout: parsed.VOLUME_LOG_TO_STDOUT,
     previewBytes: parsed.VOLUME_PREVIEW_BYTES,
+    supportBundleLogTailLines: parsed.VOLUME_SUPPORT_BUNDLE_LOG_TAIL_LINES,
   };
 };

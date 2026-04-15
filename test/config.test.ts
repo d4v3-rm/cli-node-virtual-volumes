@@ -31,6 +31,7 @@ describe('loadAppConfig', () => {
         VOLUME_HOST_DENY_PATHS: ['/allowed/blocked'].join(path.delimiter),
         VOLUME_LOG_RETENTION_DAYS: '14',
         VOLUME_REDACT_SENSITIVE_DETAILS: 'true',
+        VOLUME_SUPPORT_BUNDLE_LOG_TAIL_LINES: '250',
       },
     );
 
@@ -38,6 +39,7 @@ describe('loadAppConfig', () => {
     expect(fromEnvironment.auditLogLevel).toBe('warn');
     expect(fromEnvironment.logRetentionDays).toBe(14);
     expect(fromEnvironment.redactSensitiveDetails).toBe(true);
+    expect(fromEnvironment.supportBundleLogTailLines).toBe(250);
     expect(fromEnvironment.hostAllowPaths).toEqual([
       path.resolve('/allowed'),
       path.resolve('/shared'),
@@ -50,6 +52,7 @@ describe('loadAppConfig', () => {
         hostDenyPaths: ['..\\exports\\blocked'],
         logRetentionDays: 30,
         redactSensitiveDetails: true,
+        supportBundleLogTailLines: 80,
       },
       {},
     );
@@ -58,5 +61,6 @@ describe('loadAppConfig', () => {
     expect(fromOverrides.hostDenyPaths[0]).toMatch(/exports[\\/]blocked$/);
     expect(fromOverrides.logRetentionDays).toBe(30);
     expect(fromOverrides.redactSensitiveDetails).toBe(true);
+    expect(fromOverrides.supportBundleLogTailLines).toBe(80);
   });
 });

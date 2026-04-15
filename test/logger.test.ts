@@ -22,6 +22,7 @@ const createConfig = (rootPath: string, logRetentionDays: number | null): AppCon
   redactSensitiveDetails: false,
   logToStdout: false,
   previewBytes: 512,
+  supportBundleLogTailLines: 400,
 });
 
 afterEach(async () => {

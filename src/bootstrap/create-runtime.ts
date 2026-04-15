@@ -63,6 +63,7 @@ export const createRuntime = async (
         logDir: config.logDir,
         auditLogDir: config.auditLogDir,
         logRetentionDays: config.logRetentionDays,
+        supportBundleLogTailLines: config.supportBundleLogTailLines,
       },
       config.redactSensitiveDetails,
     ),
