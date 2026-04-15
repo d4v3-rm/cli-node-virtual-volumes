@@ -362,6 +362,10 @@ try {
     'Support bundle doctor report was not created.',
   );
   assert(
+    await pathExists(supportBundleManifest.handoffReportPath),
+    'Support bundle handoff report was not created.',
+  );
+  assert(
     await pathExists(supportBundleManifest.backupInspectionReportPath),
     'Support bundle backup inspection report was not created.',
   );
@@ -383,7 +387,7 @@ try {
   );
   const checksumManifest = await readJson(supportBundleManifest.checksumsPath);
   assert(
-    Array.isArray(checksumManifest.files) && checksumManifest.files.length >= 6,
+    Array.isArray(checksumManifest.files) && checksumManifest.files.length >= 7,
     'Support bundle checksum inventory should include the generated bundle files.',
   );
 

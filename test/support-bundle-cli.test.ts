@@ -31,6 +31,7 @@ describe('support bundle cli formatter', () => {
       manifestPath: 'C:\\reports\\support-bundle\\manifest.json',
       checksumsPath: 'C:\\reports\\support-bundle\\checksums.json',
       doctorReportPath: 'C:\\reports\\support-bundle\\doctor-report.json',
+      handoffReportPath: 'C:\\reports\\support-bundle\\handoff-report.md',
       backupInspectionReportPath:
         'C:\\reports\\support-bundle\\backup-inspection.json',
       backupManifestCopyPath:
@@ -95,6 +96,7 @@ describe('support bundle cli formatter', () => {
         'Backup path: C:\\backups\\finance.sqlite',
         'Issues detected: 0',
         'Doctor report: C:\\reports\\support-bundle\\doctor-report.json',
+        'Handoff report: C:\\reports\\support-bundle\\handoff-report.md',
         'Backup inspection: C:\\reports\\support-bundle\\backup-inspection.json',
         'Backup manifest copy: C:\\reports\\support-bundle\\backup-artifact.manifest.json',
         'Audit log snapshot: C:\\reports\\support-bundle\\audit\\audit.log',
@@ -130,6 +132,7 @@ describe('support bundle cli formatter', () => {
       manifestPath: '/tmp/support-bundle/manifest.json',
       checksumsPath: '/tmp/support-bundle/checksums.json',
       doctorReportPath: '/tmp/support-bundle/doctor-report.json',
+      handoffReportPath: '/tmp/support-bundle/handoff-report.md',
       backupInspectionReportPath: null,
       backupManifestCopyPath: null,
       auditLogSnapshotPath: null,
@@ -186,6 +189,9 @@ describe('support bundle cli formatter', () => {
       'Backup inspection: not included',
     );
     expect(formatSupportBundleResult(result)).toContain(
+      'Handoff report: /tmp/support-bundle/handoff-report.md',
+    );
+    expect(formatSupportBundleResult(result)).toContain(
       'Backup manifest copy: not included',
     );
     expect(formatSupportBundleResult(result)).toContain(
@@ -206,6 +212,7 @@ describe('support bundle cli formatter', () => {
       bundleCorrelationId: 'corr_bundle-inspect',
       bundleCreatedAt: '2026-04-15T21:20:00.000Z',
       volumeId: 'volume-1',
+      handoffReportPath: 'C:\\reports\\support-bundle\\handoff-report.md',
       issueCount: 0,
       expectedFiles: 5,
       verifiedFiles: 5,
@@ -243,6 +250,7 @@ describe('support bundle cli formatter', () => {
         'Retention: 30 days',
         `Bundle created at: ${formatDateTime(result.bundleCreatedAt!)}`,
         'Scope: volume-1',
+        'Handoff report: C:\\reports\\support-bundle\\handoff-report.md',
         'Verified files: 5/5',
         'Issues: 0',
         `Inspected at: ${formatDateTime(result.generatedAt)}`,
@@ -267,6 +275,7 @@ describe('support bundle cli formatter', () => {
       bundleCorrelationId: null,
       bundleCreatedAt: null,
       volumeId: null,
+      handoffReportPath: null,
       issueCount: 2,
       expectedFiles: 4,
       verifiedFiles: 3,
@@ -303,6 +312,9 @@ describe('support bundle cli formatter', () => {
     expect(formatSupportBundleInspectionResult(result)).toContain('Retention: unknown');
     expect(formatSupportBundleInspectionResult(result)).toContain(
       'Bundle created at: unknown',
+    );
+    expect(formatSupportBundleInspectionResult(result)).toContain(
+      'Handoff report: unknown',
     );
     expect(formatSupportBundleInspectionResult(result)).toContain(
       '- [MISSING_BUNDLE_FILE] Support bundle file is missing: doctor-report.json.',

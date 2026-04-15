@@ -298,6 +298,7 @@ Each support bundle includes:
 - `correlationId` inside the support bundle manifest for log lookup
 - `checksums.json` with SHA-256 inventory for the generated files
 - `doctor-report.json`
+- `handoff-report.md` with operator-friendly scope, risk, sharing, and retention guidance
 - optional `backup-inspection.json`
 - optional `backup-artifact.manifest.json` when `--backup-path` points to a manifest-backed backup
 - optional current audit log tail snapshot

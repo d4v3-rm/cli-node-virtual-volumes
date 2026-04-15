@@ -95,6 +95,7 @@ export const formatSupportBundleResult = (
     `Volumes checked: ${result.checkedVolumes}`,
     `Issues detected: ${result.issueCount}`,
     `Doctor report: ${result.doctorReportPath}`,
+    `Handoff report: ${result.handoffReportPath ?? 'not included'}`,
     `Backup inspection: ${result.backupInspectionReportPath ?? 'not included'}`,
     `Backup manifest copy: ${result.backupManifestCopyPath ?? 'not included'}`,
     `Audit log snapshot: ${result.auditLogSnapshotPath ?? 'not included'}`,
@@ -145,6 +146,7 @@ export const formatSupportBundleInspectionResult = (
       result.bundleCreatedAt ? formatDateTime(result.bundleCreatedAt) : 'unknown'
     }`,
     `Scope: ${result.volumeId ?? 'all volumes'}`,
+    `Handoff report: ${result.handoffReportPath ?? 'unknown'}`,
     `Verified files: ${result.verifiedFiles}/${result.expectedFiles}`,
     `Issues: ${result.issueCount}`,
     `Inspected at: ${formatDateTime(result.generatedAt)}`,
