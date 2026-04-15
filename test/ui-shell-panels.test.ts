@@ -112,9 +112,9 @@ describe('ui shell panels', () => {
     });
 
     expect(dashboardInspector).toContain('[ VOLUME ]');
-    expect(dashboardInspector).toContain('Name: Finance');
-    expect(dashboardInspector).toContain('Usage: [');
-    expect(dashboardInspector).toContain('Host policy: allow 1 / deny 1');
+    expect(dashboardInspector).toContain('Name     : Finance');
+    expect(dashboardInspector).toContain('Usage    : [');
+    expect(dashboardInspector).toContain('Host policy : allow 1 / deny 1');
 
     const explorerInspector = buildInspectorPanelContent({
       auditLogDir: '/logs/audit',
@@ -131,10 +131,22 @@ describe('ui shell panels', () => {
     });
 
     expect(explorerInspector).toContain('[ VOLUME ]');
-    expect(explorerInspector).toContain('Path: /reports');
+    expect(explorerInspector).toContain('Path     : /reports');
     expect(explorerInspector).toContain('[ SELECTION ]');
-    expect(explorerInspector).toContain('Name: report.txt');
-    expect(explorerInspector).toContain('Size: 2.0 KB');
+    expect(explorerInspector).toContain('Name    : report.txt');
+    expect(explorerInspector).toContain('Size    : 2.0 KB');
+
+    const inspectorLines = explorerInspector.split('\n');
+    const selectionStart = inspectorLines.indexOf('[ SELECTION ]') + 1;
+    const selectionEnd = inspectorLines.indexOf('', selectionStart);
+    const selectionLines = inspectorLines
+      .slice(selectionStart, selectionEnd === -1 ? undefined : selectionEnd)
+      .filter((line) => line.length > 0 && !line.startsWith('[ '));
+    const colonColumns = selectionLines
+      .filter((line) => line.includes(':'))
+      .map((line) => line.indexOf(':'));
+
+    expect(new Set(colonColumns).size).toBe(1);
   });
 
   it('builds inspector labels that reflect the active context', () => {
