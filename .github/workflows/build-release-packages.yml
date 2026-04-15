@@ -4,26 +4,32 @@ on:
   push:
     branches:
       - main
-      - 'release/**'
+      - "release/**"
+  workflow_dispatch:
 
-permissions:
-  contents: write
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
     env:
-      HUSKY: '0'
-      CI: 'true'
+      HUSKY: "0"
+      CI: "true"
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
@@ -49,6 +55,22 @@ jobs:
           cd dist/package
           sha256sum ./*.tgz > SHA256SUMS.txt
 
+      - name: Generate CycloneDX SBOM
+        shell: bash
+        run: |
+          npm sbom --sbom-format cyclonedx --sbom-type application > dist/package/sbom.cdx.json
+
+      - name: Generate package provenance attestation
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: dist/package/*.tgz
+
+      - name: Generate package SBOM attestation
+        uses: actions/attest-sbom@v3
+        with:
+          subject-path: dist/package/*.tgz
+          sbom-path: dist/package/sbom.cdx.json
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -56,23 +78,28 @@ jobs:
           path: |
             dist/package/*.tgz
             dist/package/SHA256SUMS.txt
+            dist/package/sbom.cdx.json
           if-no-files-found: error
 
   publish:
     runs-on: ubuntu-latest
     needs: build
+    permissions:
+      contents: write
+      attestations: write
+      id-token: write
     env:
-      HUSKY: '0'
-      CI: 'true'
+      HUSKY: "0"
+      CI: "true"
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
 
@@ -87,6 +114,11 @@ jobs:
           mkdir -p dist
           git archive --format=zip --output dist/source.zip HEAD
         shell: bash
+
+      - name: Generate source provenance attestation
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: dist/source.zip
 
       - name: Resolve version and release channel
         id: version
