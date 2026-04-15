@@ -1,5 +1,3 @@
-import path from 'node:path';
-
 import blessed from 'neo-blessed';
 import type { Widgets } from 'blessed';
 
@@ -15,6 +13,20 @@ import type {
 import { formatBytes, formatDateTime, truncate } from '../utils/formatters.js';
 import { getParentVirtualPath } from '../utils/virtual-paths.js';
 import type { HostBrowserEntry, HostBrowserSnapshot } from './host-browser.js';
+import {
+  buildHostExportOverlayView,
+  buildHostImportOverlayView,
+  getExportDestinationPath,
+  getHostOverlayDimensions,
+  getHostRowsSignature,
+  getHostVisibleEntries,
+  getPreferredHostSelectionIndex,
+  HOST_BROWSER_VISIBLE_ROWS,
+  jumpHostSelection,
+  moveHostSelection,
+  toggleHostSelection,
+  toggleVisibleHostSelections,
+} from './host-browser-overlay.js';
 import {
   getDefaultHostPath,
   getParentHostPath,
@@ -154,7 +166,8 @@ const THEME: ThemePalette = {
 };
 
 const SPINNER_FRAMES = ['|', '/', '-', '\\'];
-const HOST_BROWSER_VISIBLE_ROWS = 14;
+// Legacy icon table retained while terminal-app extraction is still in progress.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const ICONS = {
   checkboxOff: '□',
   checkboxOn: '■',
@@ -1331,20 +1344,10 @@ export class TerminalApp {
     return new Promise<string[] | null>((resolve) => {
       const viewportWidth = this.getViewportWidth();
       const viewportHeight = this.getViewportHeight();
-      const overlayWidth =
-        viewportWidth > 90
-          ? Math.min(viewportWidth - 4, 148)
-          : Math.max(40, viewportWidth - 2);
-      const overlayHeight =
-        viewportHeight > 26
-          ? Math.min(viewportHeight - 4, 34)
-          : Math.max(12, viewportHeight - 1);
-      const summaryWidth = Math.max(
-        22,
-        Math.min(
-          Math.min(38, Math.max(22, overlayWidth - 34)),
-          Math.floor((overlayWidth - 2) * 0.34),
-        ),
+      const { overlayWidth, overlayHeight, summaryWidth } = getHostOverlayDimensions(
+        viewportWidth,
+        viewportHeight,
+        'import',
       );
       let snapshot: HostBrowserSnapshot = {
         currentPath: initialHostPath,
@@ -1355,7 +1358,7 @@ export class TerminalApp {
       let loading = false;
       let settled = false;
       let renderedRowsSignature = '';
-      const selectedPaths = new Set<string>();
+      let selectedPaths = new Set<string>();
 
       this.overlayMode = 'hostBrowser';
       this.overlayBackdrop.show();
@@ -1485,31 +1488,6 @@ export class TerminalApp {
       const getCurrentEntry = (): HostBrowserEntry | null =>
         snapshot.entries[selectedIndex] ?? null;
 
-      const getVisibleEntries = () =>
-        getVisibleWindow(snapshot.entries, selectedIndex, HOST_BROWSER_VISIBLE_ROWS);
-
-      const getRowsSignature = (): string => {
-        if (loading) {
-          return 'loading';
-        }
-
-        if (snapshot.entries.length === 0) {
-          return `empty:${snapshot.currentPath ?? 'root'}`;
-        }
-
-        const window = getVisibleEntries();
-        const selectedKey = Array.from(selectedPaths)
-          .sort((left, right) => left.localeCompare(right))
-          .join('|');
-
-        return [
-          snapshot.currentPath ?? 'root',
-          window.start,
-          window.end,
-          selectedKey,
-        ].join('::');
-      };
-
       const close = (result: string[] | null): void => {
         if (settled) {
           return;
@@ -1520,112 +1498,36 @@ export class TerminalApp {
         resolve(result);
       };
 
-      const syncBrowserRows = (): void => {
-        const rowsSignature = getRowsSignature();
-        if (rowsSignature === renderedRowsSignature) {
-          return;
-        }
-
-        renderedRowsSignature = rowsSignature;
-
-        if (loading) {
-          browserList.setItems(['Loading host filesystem...']);
-          browserList.select(0);
-          return;
-        }
-
-        if (snapshot.entries.length === 0) {
-          browserList.setItems(['No files or folders here.']);
-          browserList.select(0);
-          return;
-        }
-
-        const visibleWindow = getVisibleEntries();
-        browserList.setItems(
-          visibleWindow.items.map((entry) =>
-            this.formatHostBrowserRow(
-              entry,
-              entry.absolutePath !== null && selectedPaths.has(entry.absolutePath),
-              this.getContentWidth(browserPane),
-            ),
-          ),
-        );
-      };
-
-      const syncBrowserSelection = (): void => {
-        if (loading || snapshot.entries.length === 0) {
-          browserList.select(0);
-          return;
-        }
-
-        const visibleWindow = getVisibleEntries();
-        browserList.select(
-          clampIndex(selectedIndex - visibleWindow.start, visibleWindow.items.length),
-        );
-      };
-
       const renderBrowser = (): void => {
-        const headerWidth = this.getContentWidth(this.overlayContainer) - 4;
-        const currentEntry = getCurrentEntry();
-        const visibleWindow = getVisibleEntries();
-        const selectedItemsPreview = Array.from(selectedPaths)
-          .slice(0, 8)
-          .map((hostPath) => `${ICONS.file} ${path.basename(hostPath) || hostPath}`)
-          .join('\n');
+        const contentWidth = this.getContentWidth(this.overlayContainer) - 4;
+        const rowsSignature = getHostRowsSignature({
+          loading,
+          selectedIndex,
+          selectedPaths,
+          snapshot,
+        });
+        const view = buildHostImportOverlayView({
+          browserContentWidth: this.getContentWidth(browserPane),
+          destinationPath,
+          headerWidth: contentWidth,
+          loading,
+          overlayContentWidth: contentWidth,
+          selectedIndex,
+          selectedPaths,
+          snapshot,
+        });
 
-        headerBox.setContent(
-          [
-            this.fitSingleLine(`Host ${snapshot.displayPath}`, headerWidth),
-            this.fitSingleLine(`Import destination ${destinationPath}`, headerWidth),
-          ].join('\n'),
-        );
+        headerBox.setContent(view.headerContent);
+        browserPane.setLabel(view.browserLabel);
 
-        browserPane.setLabel(
-          loading
-            ? ' Host Filesystem  loading '
-            : ` Host Filesystem  ${formatWindowSummary(
-                visibleWindow.start,
-                visibleWindow.end,
-                snapshot.entries.length,
-              )} `,
-        );
+        if (rowsSignature !== renderedRowsSignature) {
+          renderedRowsSignature = rowsSignature;
+          browserList.setItems(view.browserItems);
+        }
 
-        syncBrowserRows();
-        syncBrowserSelection();
-
-        summaryBox.setContent(
-          [
-            `Checked items: ${selectedPaths.size}`,
-            '',
-            currentEntry
-              ? `Current: ${currentEntry.name} (${selectedIndex + 1}/${snapshot.entries.length})`
-              : 'Current: none',
-            currentEntry ? `Type: ${currentEntry.kind}` : '',
-            currentEntry?.absolutePath
-              ? `Path: ${truncate(currentEntry.absolutePath, 220)}`
-              : '',
-            currentEntry?.selectable
-              ? `Checked: ${
-                  currentEntry.absolutePath !== null && selectedPaths.has(currentEntry.absolutePath)
-                    ? 'yes'
-                    : 'no'
-                }`
-              : 'Checked: not available',
-            '',
-            selectedItemsPreview.length > 0
-              ? `Selected\n${selectedItemsPreview}`
-              : 'Selected\nNone yet.',
-          ]
-            .filter((line) => line.length > 0)
-            .join('\n'),
-        );
-
-        footerBox.setContent(
-          this.fitSingleLine(
-            'Up/Down move   Right enter   Left back   Space check   Enter/I import   A toggle page   Esc cancel',
-            this.getContentWidth(this.overlayContainer) - 4,
-          ),
-        );
+        browserList.select(view.browserSelectionIndex);
+        summaryBox.setContent(view.summaryContent);
+        footerBox.setContent(view.footerContent);
 
         this.screen.render();
       };
@@ -1641,19 +1543,7 @@ export class TerminalApp {
           const nextSnapshot = await listHostBrowserSnapshot(targetPath);
           snapshot = nextSnapshot;
           renderedRowsSignature = '';
-
-          const preferredIndex =
-            preferredAbsolutePath === null
-              ? -1
-              : snapshot.entries.findIndex(
-                  (entry) => entry.absolutePath === preferredAbsolutePath,
-                );
-
-          if (preferredIndex >= 0) {
-            selectedIndex = preferredIndex;
-          } else {
-            selectedIndex = clampIndex(0, snapshot.entries.length);
-          }
+          selectedIndex = getPreferredHostSelectionIndex(snapshot, preferredAbsolutePath);
         } catch (error) {
           const message =
             error instanceof Error ? error.message : 'Unable to browse the host filesystem.';
@@ -1669,8 +1559,7 @@ export class TerminalApp {
           return;
         }
 
-        selectedIndex = clampIndex(selectedIndex + direction, snapshot.entries.length);
-        syncBrowserSelection();
+        selectedIndex = moveHostSelection(selectedIndex, snapshot.entries.length, direction);
         renderBrowser();
       };
 
@@ -1690,7 +1579,9 @@ export class TerminalApp {
         }
 
         if (currentEntry.selectable && currentEntry.absolutePath !== null) {
-          toggleCurrentSelection();
+          selectedPaths = toggleHostSelection(selectedPaths, currentEntry);
+          renderedRowsSignature = '';
+          renderBrowser();
         }
       };
 
@@ -1713,41 +1604,18 @@ export class TerminalApp {
           return;
         }
 
-        const currentEntry = getCurrentEntry();
-        if (!currentEntry?.selectable || currentEntry.absolutePath === null) {
-          return;
-        }
-
-        if (selectedPaths.has(currentEntry.absolutePath)) {
-          selectedPaths.delete(currentEntry.absolutePath);
-        } else {
-          selectedPaths.add(currentEntry.absolutePath);
-        }
-
+        selectedPaths = toggleHostSelection(selectedPaths, getCurrentEntry());
         renderedRowsSignature = '';
         renderBrowser();
       };
 
       const toggleVisibleSelections = (): void => {
-        const selectableEntries = getVisibleEntries().items.filter(
-          (entry) => entry.selectable && entry.absolutePath !== null,
-        );
-        if (selectableEntries.length === 0) {
+        const visibleEntries = getHostVisibleEntries(snapshot, selectedIndex).items;
+        if (visibleEntries.length === 0) {
           return;
         }
 
-        const shouldSelectAll = selectableEntries.some(
-          (entry) => !selectedPaths.has(entry.absolutePath!),
-        );
-
-        for (const entry of selectableEntries) {
-          if (shouldSelectAll) {
-            selectedPaths.add(entry.absolutePath!);
-          } else {
-            selectedPaths.delete(entry.absolutePath!);
-          }
-        }
-
+        selectedPaths = toggleVisibleHostSelections(selectedPaths, visibleEntries);
         renderedRowsSignature = '';
         renderBrowser();
       };
@@ -1794,8 +1662,7 @@ export class TerminalApp {
           return;
         }
 
-        selectedIndex = 0;
-        syncBrowserSelection();
+        selectedIndex = jumpHostSelection('start', snapshot.entries.length);
         renderBrowser();
       });
       browserList.key(['end'], () => {
@@ -1803,8 +1670,7 @@ export class TerminalApp {
           return;
         }
 
-        selectedIndex = snapshot.entries.length - 1;
-        syncBrowserSelection();
+        selectedIndex = jumpHostSelection('end', snapshot.entries.length);
         renderBrowser();
       });
       browserList.key(['escape', 'q'], () => {
@@ -1823,20 +1689,10 @@ export class TerminalApp {
     return new Promise<string | null>((resolve) => {
       const viewportWidth = this.getViewportWidth();
       const viewportHeight = this.getViewportHeight();
-      const overlayWidth =
-        viewportWidth > 90
-          ? Math.min(viewportWidth - 4, 148)
-          : Math.max(40, viewportWidth - 2);
-      const overlayHeight =
-        viewportHeight > 24
-          ? Math.min(viewportHeight - 4, 30)
-          : Math.max(12, viewportHeight - 1);
-      const summaryWidth = Math.max(
-        22,
-        Math.min(
-          Math.min(38, Math.max(22, overlayWidth - 34)),
-          Math.floor((overlayWidth - 2) * 0.34),
-        ),
+      const { overlayWidth, overlayHeight, summaryWidth } = getHostOverlayDimensions(
+        viewportWidth,
+        viewportHeight,
+        'export',
       );
       let snapshot: HostBrowserSnapshot = {
         currentPath: initialHostPath,
@@ -1976,22 +1832,6 @@ export class TerminalApp {
       const getCurrentEntry = (): HostBrowserEntry | null =>
         snapshot.entries[selectedIndex] ?? null;
 
-      const getVisibleEntries = () =>
-        getVisibleWindow(snapshot.entries, selectedIndex, HOST_BROWSER_VISIBLE_ROWS);
-
-      const getRowsSignature = (): string => {
-        if (loading) {
-          return 'loading';
-        }
-
-        if (snapshot.entries.length === 0) {
-          return `empty:${snapshot.currentPath ?? 'root'}`;
-        }
-
-        const window = getVisibleEntries();
-        return [snapshot.currentPath ?? 'root', window.start, window.end].join('::');
-      };
-
       const close = (result: string | null): void => {
         if (settled) {
           return;
@@ -2002,111 +1842,34 @@ export class TerminalApp {
         resolve(result);
       };
 
-      const syncBrowserRows = (): void => {
-        const rowsSignature = getRowsSignature();
-        if (rowsSignature === renderedRowsSignature) {
-          return;
-        }
-
-        renderedRowsSignature = rowsSignature;
-
-        if (loading) {
-          browserList.setItems(['Loading host filesystem...']);
-          browserList.select(0);
-          return;
-        }
-
-        if (snapshot.entries.length === 0) {
-          browserList.setItems(['No folders or files here.']);
-          browserList.select(0);
-          return;
-        }
-
-        const visibleWindow = getVisibleEntries();
-        browserList.setItems(
-          visibleWindow.items.map((entry) =>
-            this.formatHostNavigationRow(entry, this.getContentWidth(browserPane)),
-          ),
-        );
-      };
-
-      const syncBrowserSelection = (): void => {
-        if (loading || snapshot.entries.length === 0) {
-          browserList.select(0);
-          return;
-        }
-
-        const visibleWindow = getVisibleEntries();
-        browserList.select(
-          clampIndex(selectedIndex - visibleWindow.start, visibleWindow.items.length),
-        );
-      };
-
-      const getDestinationPath = (): string | null => {
-        if (snapshot.currentPath !== null) {
-          return snapshot.currentPath;
-        }
-
-        const currentEntry = getCurrentEntry();
-        if (currentEntry?.kind === 'drive' && currentEntry.absolutePath !== null) {
-          return currentEntry.absolutePath;
-        }
-
-        return null;
-      };
-
       const renderBrowser = (): void => {
-        const headerWidth = this.getContentWidth(this.overlayContainer) - 4;
-        const currentEntry = getCurrentEntry();
-        const visibleWindow = getVisibleEntries();
-        const destinationPath = getDestinationPath();
+        const contentWidth = this.getContentWidth(this.overlayContainer) - 4;
+        const rowsSignature = getHostRowsSignature({
+          loading,
+          selectedIndex,
+          snapshot,
+        });
+        const view = buildHostExportOverlayView({
+          browserContentWidth: this.getContentWidth(browserPane),
+          headerWidth: contentWidth,
+          loading,
+          overlayContentWidth: contentWidth,
+          selectedIndex,
+          snapshot,
+          sourcePath,
+        });
 
-        headerBox.setContent(
-          [
-            this.fitSingleLine(`Host ${snapshot.displayPath}`, headerWidth),
-            this.fitSingleLine(`Export source ${sourcePath}`, headerWidth),
-          ].join('\n'),
-        );
+        headerBox.setContent(view.headerContent);
+        browserPane.setLabel(view.browserLabel);
 
-        browserPane.setLabel(
-          loading
-            ? ' Host Destination  loading '
-            : ` Host Destination  ${formatWindowSummary(
-                visibleWindow.start,
-                visibleWindow.end,
-                snapshot.entries.length,
-              )} `,
-        );
+        if (rowsSignature !== renderedRowsSignature) {
+          renderedRowsSignature = rowsSignature;
+          browserList.setItems(view.browserItems);
+        }
 
-        syncBrowserRows();
-        syncBrowserSelection();
-
-        summaryBox.setContent(
-          [
-            destinationPath
-              ? `Destination: ${truncate(destinationPath, 220)}`
-              : 'Destination: select a drive or folder',
-            '',
-            `Source: ${truncate(sourcePath, 220)}`,
-            currentEntry ? `Highlighted: ${currentEntry.name}` : 'Highlighted: none',
-            currentEntry ? `Type: ${currentEntry.kind}` : '',
-            currentEntry?.absolutePath
-              ? `Path: ${truncate(currentEntry.absolutePath, 220)}`
-              : '',
-            '',
-            'Enter exports into the current folder.',
-            'Right navigates inside the highlighted directory or drive.',
-          ]
-            .filter((line) => line.length > 0)
-            .join('\n'),
-        );
-
-        footerBox.setContent(
-          this.fitSingleLine(
-            'Up/Down move   Right enter   Left back   Enter/E export here   Esc cancel',
-            this.getContentWidth(this.overlayContainer) - 4,
-          ),
-        );
+        browserList.select(view.browserSelectionIndex);
+        summaryBox.setContent(view.summaryContent);
+        footerBox.setContent(view.footerContent);
 
         this.screen.render();
       };
@@ -2122,19 +1885,7 @@ export class TerminalApp {
           const nextSnapshot = await listHostBrowserSnapshot(targetPath);
           snapshot = nextSnapshot;
           renderedRowsSignature = '';
-
-          const preferredIndex =
-            preferredAbsolutePath === null
-              ? -1
-              : snapshot.entries.findIndex(
-                  (entry) => entry.absolutePath === preferredAbsolutePath,
-                );
-
-          if (preferredIndex >= 0) {
-            selectedIndex = preferredIndex;
-          } else {
-            selectedIndex = clampIndex(0, snapshot.entries.length);
-          }
+          selectedIndex = getPreferredHostSelectionIndex(snapshot, preferredAbsolutePath);
         } catch (error) {
           const message =
             error instanceof Error ? error.message : 'Unable to browse the host filesystem.';
@@ -2150,8 +1901,7 @@ export class TerminalApp {
           return;
         }
 
-        selectedIndex = clampIndex(selectedIndex + direction, snapshot.entries.length);
-        syncBrowserSelection();
+        selectedIndex = moveHostSelection(selectedIndex, snapshot.entries.length, direction);
         renderBrowser();
       };
 
@@ -2183,7 +1933,7 @@ export class TerminalApp {
       };
 
       const confirmSelection = (): void => {
-        const destinationPath = getDestinationPath();
+        const destinationPath = getExportDestinationPath(snapshot, getCurrentEntry());
         if (destinationPath === null) {
           this.notify('info', 'Enter a drive or folder before exporting.');
           renderBrowser();
@@ -2219,8 +1969,7 @@ export class TerminalApp {
           return;
         }
 
-        selectedIndex = 0;
-        syncBrowserSelection();
+        selectedIndex = jumpHostSelection('start', snapshot.entries.length);
         renderBrowser();
       });
       browserList.key(['end'], () => {
@@ -2228,8 +1977,7 @@ export class TerminalApp {
           return;
         }
 
-        selectedIndex = snapshot.entries.length - 1;
-        syncBrowserSelection();
+        selectedIndex = jumpHostSelection('end', snapshot.entries.length);
         renderBrowser();
       });
       browserList.key(['escape', 'q'], () => {
