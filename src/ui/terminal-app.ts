@@ -33,6 +33,19 @@ import {
   createProgressBar,
   formatElapsedTime,
 } from './status.js';
+import {
+  fitSingleLine as fitSingleLineText,
+  formatEntryRow as formatExplorerEntryRow,
+  formatExportProgress as formatExportProgressText,
+  formatHostBrowserRow as formatHostBrowserRowText,
+  formatHostNavigationRow as formatHostNavigationRowText,
+  formatImportProgress as formatImportProgressText,
+  formatVolumeRow as formatVolumeListRow,
+} from './presenters.js';
+import {
+  getContentWidth as getLayoutContentWidth,
+  resolveElementOuterWidth as resolveLayoutOuterWidth,
+} from './layout.js';
 
 type ScreenMode = 'dashboard' | 'explorer';
 type ToastTone = 'success' | 'error' | 'info';
@@ -2933,27 +2946,11 @@ export class TerminalApp {
   }
 
   private formatImportProgress(progress: ImportProgress): string {
-    const currentTarget = path.basename(progress.currentHostPath) || progress.currentHostPath;
-    const phaseLabel =
-      progress.phase === 'directory'
-        ? 'dir'
-        : progress.phase === 'integrity'
-          ? 'verify'
-          : 'file';
-
-    return `Current ${phaseLabel}: ${currentTarget}  Imported ${progress.summary.filesImported} files / ${progress.summary.directoriesImported} dirs / ${formatBytes(progress.summary.bytesImported)} / Integrity ${progress.summary.integrityChecksPassed}`;
+    return formatImportProgressText(progress);
   }
 
   private formatExportProgress(progress: ExportProgress): string {
-    const currentTarget = path.basename(progress.currentVirtualPath) || progress.currentVirtualPath;
-    const phaseLabel =
-      progress.phase === 'directory'
-        ? 'dir'
-        : progress.phase === 'integrity'
-          ? 'verify'
-          : 'file';
-
-    return `Current ${phaseLabel}: ${currentTarget}  Exported ${progress.summary.filesExported} files / ${progress.summary.directoriesExported} dirs / ${formatBytes(progress.summary.bytesExported)} / Integrity ${progress.summary.integrityChecksPassed}`;
+    return formatExportProgressText(progress);
   }
 
   private focusShell(): void {
@@ -2971,103 +2968,21 @@ export class TerminalApp {
   }
 
   private fitSingleLine(value: string, width: number): string {
-    const normalized = value.replace(/\s+/g, ' ').trim();
-    return truncate(normalized, Math.max(1, width));
+    return fitSingleLineText(value, width);
   }
 
   private getContentWidth(element: Widgets.BoxElement): number {
-    return Math.max(20, this.getElementOuterWidth(element) - 4);
-  }
-
-  private getElementOuterWidth(
-    element: Widgets.BoxElement,
-  ): number {
-    return this.resolveElementOuterWidth(
+    return getLayoutContentWidth(
       element as unknown as LayoutElementSpec,
       this.getViewportWidth(),
     );
   }
 
-  private resolveElementOuterWidth(
-    element: LayoutElementSpec,
-    fallbackParentWidth: number,
-  ): number {
-    const parentWidth = this.resolveParentWidth(element.parent, fallbackParentWidth);
-    const width = element.position?.width;
-
-    if (width !== undefined && width !== null) {
-      return this.resolveLayoutValue(width, parentWidth, parentWidth);
-    }
-
-    const left = this.resolveLayoutValue(element.position?.left, parentWidth, 0);
-    const right = this.resolveLayoutValue(element.position?.right, parentWidth, 0);
-    return Math.max(0, parentWidth - left - right);
-  }
-
-  private resolveParentWidth(parent: unknown, fallbackWidth: number): number {
-    if (!parent || typeof parent !== 'object') {
-      return fallbackWidth;
-    }
-
-    const candidateParent = parent as LayoutElementSpec;
-
-    if (!candidateParent.position) {
-      return fallbackWidth;
-    }
-
-    return this.resolveElementOuterWidth(
-      candidateParent,
-      fallbackWidth,
+  private getElementOuterWidth(element: Widgets.BoxElement): number {
+    return resolveLayoutOuterWidth(
+      element as unknown as LayoutElementSpec,
+      this.getViewportWidth(),
     );
-  }
-
-  private resolveLayoutValue(
-    size: number | string | undefined,
-    parentWidth: number,
-    fallbackValue: number,
-  ): number {
-    if (typeof size === 'number') {
-      return size;
-    }
-
-    if (typeof size !== 'string') {
-      return fallbackValue;
-    }
-
-    const trimmed = size.trim();
-    if (trimmed.length === 0) {
-      return fallbackValue;
-    }
-
-    if (trimmed === 'half') {
-      return Math.floor(parentWidth * 0.5);
-    }
-
-    if (trimmed === 'center') {
-      return 0;
-    }
-
-    const expressionParts = trimmed.split(/(?=[+-])/);
-    const baseValue = expressionParts[0] ?? '';
-    const deltaValue =
-      expressionParts.length > 1
-        ? Number.parseInt(expressionParts.slice(1).join(''), 10)
-        : 0;
-    const delta = Number.isNaN(deltaValue) ? 0 : deltaValue;
-
-    if (baseValue.endsWith('%')) {
-      const percentage = Number.parseFloat(baseValue.slice(0, -1));
-      if (!Number.isNaN(percentage)) {
-        return Math.floor(parentWidth * (percentage / 100)) + delta;
-      }
-    }
-
-    const absolute = Number.parseInt(baseValue, 10);
-    if (!Number.isNaN(absolute)) {
-      return absolute + delta;
-    }
-
-    return fallbackValue;
   }
 
   private getViewportWidth(): number {
@@ -3168,28 +3083,11 @@ export class TerminalApp {
   }
 
   private formatVolumeRow(volume: VolumeManifest, availableWidth: number): string {
-    const icon = ICONS.volume;
-    const used = formatBytes(volume.logicalUsedBytes);
-    const quota = formatBytes(volume.quotaBytes);
-    const suffix = ` ${used} / ${quota}  `;
-    const nameWidth = Math.max(12, Math.floor((availableWidth - 3) * 0.28));
-    const descWidth = Math.max(12, availableWidth - suffix.length - nameWidth - 4);
-    const name = truncate(volume.name, nameWidth).padEnd(nameWidth, ' ');
-    const desc = truncate(volume.description || 'No description.', descWidth);
-
-    return `${icon} ${name} ${used} / ${quota}  ${desc}`;
+    return formatVolumeListRow(volume, availableWidth);
   }
 
   private formatEntryRow(entry: DirectoryListingItem, availableWidth: number): string {
-    const icon = this.getVirtualEntryIcon(entry.kind);
-    const size = entry.kind === 'file' ? formatBytes(entry.size) : 'directory';
-    const updated = formatDateTime(entry.updatedAt);
-    const suffix = `  ${truncate(size, 10)}  ${updated}`;
-    const nameWidth = Math.max(14, availableWidth - suffix.length - 4);
-    const name = truncate(entry.name, nameWidth).padEnd(nameWidth, ' ');
-    const paddedSize = truncate(size, 10).padStart(10, ' ');
-
-    return `${icon} ${name}  ${paddedSize}  ${updated}`;
+    return formatExplorerEntryRow(entry, availableWidth);
   }
 
   private formatHostBrowserRow(
@@ -3197,45 +3095,14 @@ export class TerminalApp {
     isSelected: boolean,
     availableWidth: number,
   ): string {
-    const checkbox = entry.selectable
-      ? isSelected
-        ? ICONS.checkboxOn
-        : ICONS.checkboxOff
-      : ' ';
-
-    return this.fitSingleLine(
-      `${checkbox} ${this.getHostEntryIcon(entry)} ${entry.name}`,
-      availableWidth,
-    );
+    return formatHostBrowserRowText(entry, isSelected, availableWidth);
   }
 
   private formatHostNavigationRow(
     entry: HostBrowserEntry,
     availableWidth: number,
   ): string {
-    return this.fitSingleLine(
-      `${this.getHostEntryIcon(entry)} ${entry.name}`,
-      availableWidth,
-    );
-  }
-
-  private getVirtualEntryIcon(kind: DirectoryListingItem['kind']): string {
-    return kind === 'directory' ? ICONS.folder : ICONS.file;
-  }
-
-  private getHostEntryIcon(entry: HostBrowserEntry): string {
-    switch (entry.kind) {
-      case 'drive':
-        return ICONS.drive;
-      case 'directory':
-        return ICONS.folder;
-      case 'file':
-        return ICONS.file;
-      case 'parent':
-        return ICONS.parent;
-      default:
-        return ICONS.file;
-    }
+    return formatHostNavigationRowText(entry, availableWidth);
   }
 
   private shutdown(): void {
