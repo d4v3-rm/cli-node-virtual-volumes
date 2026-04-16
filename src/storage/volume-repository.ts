@@ -2688,7 +2688,6 @@ export class VolumeRepository {
       nextRevision = 1;
     }
 
-    await database.exec('DELETE FROM manifest');
     await database.run(
       `INSERT INTO manifest (
          id,
@@ -2700,7 +2699,16 @@ export class VolumeRepository {
          revision,
          created_at,
          updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         name = excluded.name,
+         description = excluded.description,
+         quota_bytes = excluded.quota_bytes,
+         logical_used_bytes = excluded.logical_used_bytes,
+         entry_count = excluded.entry_count,
+         revision = excluded.revision,
+         created_at = excluded.created_at,
+         updated_at = excluded.updated_at`,
       record.manifest.id,
       record.manifest.name,
       record.manifest.description,
@@ -2711,8 +2719,7 @@ export class VolumeRepository {
       record.manifest.createdAt,
       record.manifest.updatedAt,
     );
-
-    await database.exec('DELETE FROM entries');
+    await database.run('DELETE FROM manifest WHERE id <> ?', record.manifest.id);
 
     for (const entry of Object.values(record.state.entries)) {
       if (entry.kind === 'directory') {
@@ -2727,7 +2734,16 @@ export class VolumeRepository {
              size,
              content_ref,
              imported_from_host_path
-           ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL)`,
+           ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
+           ON CONFLICT(id) DO UPDATE SET
+             kind = excluded.kind,
+             name = excluded.name,
+             parent_id = excluded.parent_id,
+             created_at = excluded.created_at,
+             updated_at = excluded.updated_at,
+             size = excluded.size,
+             content_ref = excluded.content_ref,
+             imported_from_host_path = excluded.imported_from_host_path`,
           entry.id,
           entry.kind,
           entry.name,
@@ -2749,7 +2765,16 @@ export class VolumeRepository {
            size,
            content_ref,
            imported_from_host_path
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           kind = excluded.kind,
+           name = excluded.name,
+           parent_id = excluded.parent_id,
+           created_at = excluded.created_at,
+           updated_at = excluded.updated_at,
+           size = excluded.size,
+           content_ref = excluded.content_ref,
+           imported_from_host_path = excluded.imported_from_host_path`,
         entry.id,
         entry.kind,
         entry.name,
@@ -2761,6 +2786,13 @@ export class VolumeRepository {
         entry.importedFromHostPath,
       );
     }
+
+    const persistedEntryIds = Object.keys(record.state.entries);
+    const staleEntryQuery = persistedEntryIds.length > 0
+      ? `DELETE FROM entries
+           WHERE id NOT IN (${persistedEntryIds.map(() => '?').join(', ')})`
+      : 'DELETE FROM entries';
+    await database.run(staleEntryQuery, ...persistedEntryIds);
 
     await this.syncBlobReferenceCounts(database);
 
