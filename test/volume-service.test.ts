@@ -2347,7 +2347,7 @@ describe('VolumeService', () => {
     });
   });
 
-  it('reports blob chunk-count drift and leaves unsafe repairs unapplied', async () => {
+  it('repairs safe blob chunk-count drift from the SQLite payload layout', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Blob Chunk Drift' });
     const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
@@ -2388,16 +2388,22 @@ describe('VolumeService', () => {
     const repairReport = await runtime.volumeService.runRepair(volume.id);
     const repairedVolume = repairReport.volumes[0];
 
-    expect(repairReport.healthy).toBe(false);
-    expect(repairedVolume?.repaired).toBe(false);
+    expect(repairReport.healthy).toBe(true);
+    expect(repairedVolume?.repaired).toBe(true);
+    expect(
+      repairedVolume?.actions.some(
+        (action) => action.code === 'SYNC_BLOB_LAYOUT_METADATA',
+      ),
+    ).toBe(true);
+    expect(repairedVolume?.issueCountAfter).toBe(0);
     expect(
       repairedVolume?.remainingIssues.some(
         (issue) => issue.code === 'BLOB_CHUNK_COUNT_MISMATCH',
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it('reports blob size drift and leaves unsafe repairs unapplied', async () => {
+  it('repairs safe blob size drift from the SQLite payload layout', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Blob Size Drift' });
     const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
@@ -2437,13 +2443,19 @@ describe('VolumeService', () => {
     const repairReport = await runtime.volumeService.runRepair(volume.id);
     const repairedVolume = repairReport.volumes[0];
 
-    expect(repairReport.healthy).toBe(false);
-    expect(repairedVolume?.repaired).toBe(false);
+    expect(repairReport.healthy).toBe(true);
+    expect(repairedVolume?.repaired).toBe(true);
+    expect(
+      repairedVolume?.actions.some(
+        (action) => action.code === 'SYNC_BLOB_LAYOUT_METADATA',
+      ),
+    ).toBe(true);
+    expect(repairedVolume?.issueCountAfter).toBe(0);
     expect(
       repairedVolume?.remainingIssues.some(
         (issue) => issue.code === 'BLOB_SIZE_MISMATCH',
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it('verifies blob payload hashes only when deep doctor verification is requested', async () => {
