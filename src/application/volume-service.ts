@@ -278,70 +278,81 @@ export class VolumeService {
             (left, right) =>
               (right.maintenance?.freeBytes ?? 0) - (left.maintenance?.freeBytes ?? 0),
           );
-        const eligibleVolumes = recommendedVolumes.filter((report) => {
-          const maintenance = report.maintenance;
-          if (!maintenance) {
-            return false;
-          }
-
-          if (
-            options.minFreeBytes !== undefined &&
-            maintenance.freeBytes < options.minFreeBytes
-          ) {
-            return false;
-          }
-
-          if (
-            options.minFreeRatio !== undefined &&
-            maintenance.freeRatio < options.minFreeRatio
-          ) {
-            return false;
-          }
-
-          return true;
-        });
-        const blockedVolumes = options.includeUnsafe
-          ? []
-          : eligibleVolumes.filter(
-              (report) => !this.isSafeForBatchCompaction(report.issues),
-            );
-        const safeEligibleVolumes = options.includeUnsafe
-          ? eligibleVolumes
-          : eligibleVolumes.filter((report) => this.isSafeForBatchCompaction(report.issues));
-        const plannedVolumes = options.limit
-          ? safeEligibleVolumes.slice(0, options.limit)
-          : safeEligibleVolumes;
         const volumes: VolumeCompactionBatchItem[] = [];
+        let eligibleVolumes = 0;
+        let blockedVolumes = 0;
+        let filteredVolumes = 0;
+        let deferredVolumes = 0;
+        let plannedVolumes = 0;
         let compactedVolumes = 0;
         let failedVolumes = 0;
         let totalReclaimedBytes = 0;
 
-        for (const report of blockedVolumes) {
+        for (const report of recommendedVolumes) {
           const maintenance = report.maintenance;
           if (!maintenance) {
             continue;
           }
 
-          volumes.push({
-            volumeId: report.volumeId,
-            volumeName: report.volumeName,
-            revision: report.revision,
-            issueCount: report.issueCount,
-            artifactBytes: maintenance.artifactBytes,
-            freeBytes: maintenance.freeBytes,
-            freeRatio: maintenance.freeRatio,
-            status: 'blocked',
-            blockingIssueCodes: report.issues
-              .filter((issue) => issue.code !== 'COMPACTION_RECOMMENDED')
-              .map((issue) => issue.code),
-          });
-        }
-
-        for (const report of plannedVolumes) {
-          const maintenance = report.maintenance;
-          if (!maintenance) {
+          const thresholdFilterReason = this.getCompactionThresholdFilterReason(
+            maintenance.freeBytes,
+            maintenance.freeRatio,
+            options,
+          );
+          if (thresholdFilterReason) {
+            filteredVolumes += 1;
+            volumes.push({
+              volumeId: report.volumeId,
+              volumeName: report.volumeName,
+              revision: report.revision,
+              issueCount: report.issueCount,
+              artifactBytes: maintenance.artifactBytes,
+              freeBytes: maintenance.freeBytes,
+              freeRatio: maintenance.freeRatio,
+              status: 'filtered',
+              reason: thresholdFilterReason,
+            });
             continue;
           }
+
+          eligibleVolumes += 1;
+
+          if (!options.includeUnsafe && !this.isSafeForBatchCompaction(report.issues)) {
+            blockedVolumes += 1;
+            volumes.push({
+              volumeId: report.volumeId,
+              volumeName: report.volumeName,
+              revision: report.revision,
+              issueCount: report.issueCount,
+              artifactBytes: maintenance.artifactBytes,
+              freeBytes: maintenance.freeBytes,
+              freeRatio: maintenance.freeRatio,
+              status: 'blocked',
+              blockingIssueCodes: report.issues
+                .filter((issue) => issue.code !== 'COMPACTION_RECOMMENDED')
+                .map((issue) => issue.code),
+              reason: 'Additional doctor findings must be cleared before batch compaction.',
+            });
+            continue;
+          }
+
+          if (options.limit !== undefined && plannedVolumes >= options.limit) {
+            deferredVolumes += 1;
+            volumes.push({
+              volumeId: report.volumeId,
+              volumeName: report.volumeName,
+              revision: report.revision,
+              issueCount: report.issueCount,
+              artifactBytes: maintenance.artifactBytes,
+              freeBytes: maintenance.freeBytes,
+              freeRatio: maintenance.freeRatio,
+              status: 'deferred',
+              reason: `Deferred by --limit ${options.limit}.`,
+            });
+            continue;
+          }
+
+          plannedVolumes += 1;
 
           if (options.dryRun) {
             volumes.push({
@@ -394,14 +405,14 @@ export class VolumeService {
           includeUnsafe: options.includeUnsafe === true,
           checkedVolumes: doctorReport.checkedVolumes,
           recommendedVolumes: recommendedVolumes.length,
-          eligibleVolumes: eligibleVolumes.length,
-          plannedVolumes: plannedVolumes.length,
-          blockedVolumes: blockedVolumes.length,
+          eligibleVolumes,
+          plannedVolumes,
+          blockedVolumes,
           compactedVolumes,
           failedVolumes,
           skippedVolumes: Math.max(0, doctorReport.checkedVolumes - recommendedVolumes.length),
-          filteredVolumes: Math.max(0, recommendedVolumes.length - eligibleVolumes.length),
-          deferredVolumes: Math.max(0, safeEligibleVolumes.length - plannedVolumes.length),
+          filteredVolumes,
+          deferredVolumes,
           minimumFreeBytes: options.minFreeBytes ?? null,
           minimumFreeRatio: options.minFreeRatio ?? null,
           totalReclaimedBytes,
@@ -431,6 +442,34 @@ export class VolumeService {
     issues: StorageDoctorReport['volumes'][number]['issues'],
   ): boolean {
     return issues.every((issue) => issue.code === 'COMPACTION_RECOMMENDED');
+  }
+
+  private getCompactionThresholdFilterReason(
+    freeBytes: number,
+    freeRatio: number,
+    options: {
+      minFreeBytes?: number;
+      minFreeRatio?: number;
+    },
+  ): string | null {
+    const requiresFreeBytes =
+      options.minFreeBytes !== undefined && freeBytes < options.minFreeBytes;
+    const requiresFreeRatio =
+      options.minFreeRatio !== undefined && freeRatio < options.minFreeRatio;
+
+    if (!requiresFreeBytes && !requiresFreeRatio) {
+      return null;
+    }
+
+    if (requiresFreeBytes && requiresFreeRatio) {
+      return `Below both thresholds: requires at least ${options.minFreeBytes} B and ${(options.minFreeRatio! * 100).toFixed(1)}%.`;
+    }
+
+    if (requiresFreeBytes) {
+      return `Below --min-free-bytes threshold of ${options.minFreeBytes} B.`;
+    }
+
+    return `Below --min-free-ratio threshold of ${(options.minFreeRatio! * 100).toFixed(1)}%.`;
   }
 
   public async runDoctor(volumeId?: string): Promise<StorageDoctorReport> {

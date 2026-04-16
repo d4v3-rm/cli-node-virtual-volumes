@@ -151,6 +151,7 @@ Per manutenzione ordinaria del database SQLite di un volume gia' in esercizio:
 Per manutenzione batch di tutti i volumi gestiti:
 
 1. Esegui `virtual-volumes compact-recommended --dry-run` per vedere quali volumi verrebbero compattati.
+   Il dry-run espone anche il dettaglio dei volumi `planned`, `blocked`, `filtered` e `deferred`, con il motivo operativo di ciascuno.
 2. Se vuoi limitare il blast radius, aggiungi `--limit <n>` per processare solo i primi N volumi ordinati per free bytes reclaimable.
 3. Se vuoi restringere ulteriormente il batch, aggiungi `--min-free-bytes <bytes>` e/o `--min-free-ratio <ratio>` per includere solo i volumi che superano soglie minime esplicite.
 4. Per default il batch blocca i volumi che hanno anche issue diverse da `COMPACTION_RECOMMENDED`; usa `--include-unsafe` solo quando vuoi forzare esplicitamente la compattazione su volumi ancora diagnostically unhealthy.

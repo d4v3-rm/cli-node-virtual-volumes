@@ -241,8 +241,9 @@ export interface VolumeCompactionBatchItem {
   artifactBytes: number;
   freeBytes: number;
   freeRatio: number;
-  status: 'blocked' | 'planned' | 'compacted' | 'failed';
+  status: 'blocked' | 'filtered' | 'deferred' | 'planned' | 'compacted' | 'failed';
   blockingIssueCodes?: StorageDoctorIssue['code'][];
+  reason?: string;
   error?: string;
   compaction?: VolumeCompactionResult;
 }

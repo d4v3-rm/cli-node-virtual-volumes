@@ -147,6 +147,7 @@ describe('maintenance cli formatter', () => {
           freeRatio: 0.5,
           status: 'blocked',
           blockingIssueCodes: ['MISSING_BLOB'],
+          reason: 'Additional doctor findings must be cleared before batch compaction.',
         },
       ],
     };
@@ -170,7 +171,76 @@ describe('maintenance cli formatter', () => {
         'Minimum free ratio: none',
         'Total reclaimed: 0 B',
         '',
-        '  - BLOCKED Broken (volume-9) revision=12 free=2.0 MB (50.0%) artifacts=4.0 MB issues=2 blocking=MISSING_BLOB',
+        '  - BLOCKED Broken (volume-9) revision=12 free=2.0 MB (50.0%) artifacts=4.0 MB issues=2 blocking=MISSING_BLOB reason=Additional doctor findings must be cleared before batch compaction.',
+      ].join('\n'),
+    );
+  });
+
+  it('formats filtered and deferred plan items with explicit reasons', () => {
+    const result: VolumeCompactionBatchResult = {
+      generatedAt: '2026-04-16T11:20:00.000Z',
+      dryRun: true,
+      includeUnsafe: false,
+      checkedVolumes: 4,
+      recommendedVolumes: 3,
+      eligibleVolumes: 2,
+      plannedVolumes: 1,
+      blockedVolumes: 0,
+      compactedVolumes: 0,
+      failedVolumes: 0,
+      skippedVolumes: 1,
+      filteredVolumes: 1,
+      deferredVolumes: 1,
+      minimumFreeBytes: 1048576,
+      minimumFreeRatio: 0.25,
+      totalReclaimedBytes: 0,
+      volumes: [
+        {
+          volumeId: 'volume-3',
+          volumeName: 'Filtered',
+          revision: 2,
+          issueCount: 1,
+          artifactBytes: 5242880,
+          freeBytes: 786432,
+          freeRatio: 0.2,
+          status: 'filtered',
+          reason: 'Below both thresholds: requires at least 1048576 B and 25.0%.',
+        },
+        {
+          volumeId: 'volume-4',
+          volumeName: 'Deferred',
+          revision: 3,
+          issueCount: 1,
+          artifactBytes: 6291456,
+          freeBytes: 1572864,
+          freeRatio: 0.3,
+          status: 'deferred',
+          reason: 'Deferred by --limit 1.',
+        },
+      ],
+    };
+
+    expect(formatVolumeCompactionBatchResult(result)).toBe(
+      [
+        'Recommended compaction: DRY RUN',
+        `Generated at: ${formatDateTime(result.generatedAt)}`,
+        'Unsafe compaction allowed: no',
+        'Checked volumes: 4',
+        'Recommended volumes: 3',
+        'Eligible volumes: 2',
+        'Planned volumes: 1',
+        'Blocked volumes: 0',
+        'Filtered volumes: 1',
+        'Deferred volumes: 1',
+        'Skipped volumes: 1',
+        'Compacted volumes: 0',
+        'Failed volumes: 0',
+        'Minimum free bytes: 1.0 MB',
+        'Minimum free ratio: 25.0%',
+        'Total reclaimed: 0 B',
+        '',
+        '  - FILTERED Filtered (volume-3) revision=2 free=768 KB (20.0%) artifacts=5.0 MB issues=1 reason=Below both thresholds: requires at least 1048576 B and 25.0%.',
+        '  - DEFERRED Deferred (volume-4) revision=3 free=1.5 MB (30.0%) artifacts=6.0 MB issues=1 reason=Deferred by --limit 1.',
       ].join('\n'),
     );
   });
