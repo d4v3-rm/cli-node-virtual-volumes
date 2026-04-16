@@ -8,7 +8,7 @@ import { VolumeError } from '../domain/errors.js';
 import { ensureDirectory } from '../utils/fs.js';
 
 export const VOLUME_DATABASE_EXTENSION = '.sqlite';
-export const SUPPORTED_VOLUME_SCHEMA_VERSION = 4;
+export const SUPPORTED_VOLUME_SCHEMA_VERSION = 5;
 
 export type SqliteVolumeDatabase = Database<sqlite3.Database, sqlite3.Statement>;
 
@@ -60,7 +60,7 @@ const volumeSchema = `
 
   CREATE TABLE IF NOT EXISTS blobs (
     content_ref TEXT PRIMARY KEY,
-    reference_count INTEGER NOT NULL DEFAULT 0,
+    reference_count INTEGER NOT NULL DEFAULT 0 CHECK (reference_count >= 0),
     size INTEGER NOT NULL,
     chunk_count INTEGER NOT NULL DEFAULT 0,
     content BLOB NOT NULL,
@@ -117,6 +117,44 @@ const volumeSchema = `
 
   CREATE INDEX IF NOT EXISTS idx_blob_chunks_content_ref
     ON blob_chunks (content_ref, chunk_index);
+
+  CREATE TRIGGER IF NOT EXISTS trg_entries_file_insert_blob_refcount
+    AFTER INSERT ON entries
+    WHEN NEW.kind = 'file' AND NEW.content_ref IS NOT NULL
+  BEGIN
+    UPDATE blobs
+       SET reference_count = reference_count + 1
+     WHERE content_ref = NEW.content_ref;
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS trg_entries_file_delete_blob_refcount
+    AFTER DELETE ON entries
+    WHEN OLD.kind = 'file' AND OLD.content_ref IS NOT NULL
+  BEGIN
+    UPDATE blobs
+       SET reference_count = reference_count - 1
+     WHERE content_ref = OLD.content_ref;
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS trg_entries_file_update_blob_refcount
+    AFTER UPDATE OF kind, content_ref ON entries
+    WHEN (
+      (OLD.kind = 'file' AND OLD.content_ref IS NOT NULL)
+      OR (NEW.kind = 'file' AND NEW.content_ref IS NOT NULL)
+    )
+  BEGIN
+    UPDATE blobs
+       SET reference_count = reference_count - 1
+     WHERE OLD.kind = 'file'
+       AND OLD.content_ref IS NOT NULL
+       AND content_ref = OLD.content_ref;
+
+    UPDATE blobs
+       SET reference_count = reference_count + 1
+     WHERE NEW.kind = 'file'
+       AND NEW.content_ref IS NOT NULL
+       AND content_ref = NEW.content_ref;
+  END;
 `;
 
 const metadataSchema = `
@@ -237,6 +275,61 @@ const migrateBlobReferenceCountSchema = async (
          0
        )
   `);
+};
+
+const createBlobReferenceCountTriggers = async (
+  database: SqliteVolumeDatabase,
+): Promise<void> => {
+  await database.exec(`
+    CREATE TRIGGER IF NOT EXISTS trg_entries_file_insert_blob_refcount
+      AFTER INSERT ON entries
+      WHEN NEW.kind = 'file' AND NEW.content_ref IS NOT NULL
+    BEGIN
+      UPDATE blobs
+         SET reference_count = reference_count + 1
+       WHERE content_ref = NEW.content_ref;
+    END;
+  `);
+
+  await database.exec(`
+    CREATE TRIGGER IF NOT EXISTS trg_entries_file_delete_blob_refcount
+      AFTER DELETE ON entries
+      WHEN OLD.kind = 'file' AND OLD.content_ref IS NOT NULL
+    BEGIN
+      UPDATE blobs
+         SET reference_count = reference_count - 1
+       WHERE content_ref = OLD.content_ref;
+    END;
+  `);
+
+  await database.exec(`
+    CREATE TRIGGER IF NOT EXISTS trg_entries_file_update_blob_refcount
+      AFTER UPDATE OF kind, content_ref ON entries
+      WHEN (
+        (OLD.kind = 'file' AND OLD.content_ref IS NOT NULL)
+        OR (NEW.kind = 'file' AND NEW.content_ref IS NOT NULL)
+      )
+    BEGIN
+      UPDATE blobs
+         SET reference_count = reference_count - 1
+       WHERE OLD.kind = 'file'
+         AND OLD.content_ref IS NOT NULL
+         AND content_ref = OLD.content_ref;
+
+      UPDATE blobs
+         SET reference_count = reference_count + 1
+       WHERE NEW.kind = 'file'
+         AND NEW.content_ref IS NOT NULL
+         AND content_ref = NEW.content_ref;
+    END;
+  `);
+};
+
+const migrateBlobReferenceCountTriggerSchema = async (
+  database: SqliteVolumeDatabase,
+): Promise<void> => {
+  await createBlobReferenceCountTriggers(database);
+  await migrateBlobReferenceCountSchema(database);
 };
 
 const migrateManifestRevisionSchema = async (
@@ -494,6 +587,11 @@ const applySchemaMigrations = async (
     if (currentVersion < 4) {
       await migrateBlobReferenceCountSchema(database);
       await recordSchemaMigration(database, 4, 'blob-reference-counts');
+    }
+
+    if (currentVersion < 5) {
+      await migrateBlobReferenceCountTriggerSchema(database);
+      await recordSchemaMigration(database, 5, 'blob-reference-count-triggers');
     }
 
     await database.run(

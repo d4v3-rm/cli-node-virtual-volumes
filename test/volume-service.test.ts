@@ -2224,6 +2224,129 @@ describe('VolumeService', () => {
     });
   });
 
+  it('maintains blob reference counts through direct SQLite entry mutations', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Blob Trigger Counts' });
+
+    await runtime.volumeService.writeTextFile(volume.id, '/a.txt', 'alpha payload');
+    await runtime.volumeService.writeTextFile(volume.id, '/b.txt', 'bravo payload');
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, volume.id), async (database) => {
+      const triggerRows = await database.all<{ name: string }[]>(
+        `SELECT name
+           FROM sqlite_master
+          WHERE type = 'trigger'
+            AND name LIKE 'trg_entries_file_%_blob_refcount'
+          ORDER BY name`,
+      );
+      const rootEntry = await database.get<{ id: string }>(
+        `SELECT id
+           FROM entries
+          WHERE parent_id IS NULL
+          LIMIT 1`,
+      );
+      const entryRows = await database.all<
+        { name: string; content_ref: string; size: number; created_at: string; updated_at: string }[]
+      >(
+        `SELECT name, content_ref, size, created_at, updated_at
+           FROM entries
+          WHERE name IN ('a.txt', 'b.txt')
+          ORDER BY name`,
+      );
+      const aEntry = entryRows[0];
+      const bEntry = entryRows[1];
+
+      expect(triggerRows.map((row) => row.name)).toEqual([
+        'trg_entries_file_delete_blob_refcount',
+        'trg_entries_file_insert_blob_refcount',
+        'trg_entries_file_update_blob_refcount',
+      ]);
+      expect(rootEntry?.id).toBeTruthy();
+      expect(aEntry?.content_ref).toBeTruthy();
+      expect(bEntry?.content_ref).toBeTruthy();
+      expect(aEntry?.content_ref).not.toBe(bEntry?.content_ref);
+
+      await database.run(
+        `INSERT INTO entries (
+           id,
+           kind,
+           name,
+           parent_id,
+           created_at,
+           updated_at,
+           size,
+           content_ref,
+           imported_from_host_path
+         ) VALUES (?, 'file', 'c.txt', ?, ?, ?, ?, ?, NULL)`,
+        'manual-c-entry',
+        rootEntry?.id ?? '',
+        aEntry?.created_at ?? '',
+        aEntry?.updated_at ?? '',
+        aEntry?.size ?? 0,
+        aEntry?.content_ref ?? '',
+      );
+
+      let blobCounts = await database.all<{ content_ref: string; reference_count: number }[]>(
+        `SELECT content_ref, reference_count
+           FROM blobs
+          WHERE content_ref IN (?, ?)
+          ORDER BY content_ref`,
+        aEntry?.content_ref ?? '',
+        bEntry?.content_ref ?? '',
+      );
+
+      expect(
+        Object.fromEntries(blobCounts.map((row) => [row.content_ref, row.reference_count])),
+      ).toEqual({
+        [aEntry?.content_ref ?? '']: 2,
+        [bEntry?.content_ref ?? '']: 1,
+      });
+
+      await database.run(
+        `UPDATE entries
+            SET content_ref = ?,
+                size = ?
+          WHERE id = 'manual-c-entry'`,
+        bEntry?.content_ref ?? '',
+        bEntry?.size ?? 0,
+      );
+
+      blobCounts = await database.all<{ content_ref: string; reference_count: number }[]>(
+        `SELECT content_ref, reference_count
+           FROM blobs
+          WHERE content_ref IN (?, ?)
+          ORDER BY content_ref`,
+        aEntry?.content_ref ?? '',
+        bEntry?.content_ref ?? '',
+      );
+
+      expect(
+        Object.fromEntries(blobCounts.map((row) => [row.content_ref, row.reference_count])),
+      ).toEqual({
+        [aEntry?.content_ref ?? '']: 1,
+        [bEntry?.content_ref ?? '']: 2,
+      });
+
+      await database.run(`DELETE FROM entries WHERE id = 'manual-c-entry'`);
+
+      blobCounts = await database.all<{ content_ref: string; reference_count: number }[]>(
+        `SELECT content_ref, reference_count
+           FROM blobs
+          WHERE content_ref IN (?, ?)
+          ORDER BY content_ref`,
+        aEntry?.content_ref ?? '',
+        bEntry?.content_ref ?? '',
+      );
+
+      expect(
+        Object.fromEntries(blobCounts.map((row) => [row.content_ref, row.reference_count])),
+      ).toEqual({
+        [aEntry?.content_ref ?? '']: 1,
+        [bEntry?.content_ref ?? '']: 1,
+      });
+    });
+  });
+
   it('deletes directory subtrees recursively', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Cleanup' });
