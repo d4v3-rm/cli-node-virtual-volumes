@@ -1428,6 +1428,7 @@ export class VolumeRepository {
           await this.listPersistedBlobReferenceCounts(database);
         const persistedBlobChunkCounts = await this.listPersistedBlobChunkCounts(database);
         const persistedBlobSizes = await this.listPersistedBlobSizes(database);
+        const blobChunkIndexContiguity = await this.listBlobChunkIndexContiguity(database);
         const actualBlobChunkCounts = await this.listActualBlobChunkCounts(database);
         const actualBlobSizes = await this.listActualBlobSizes(database);
         const maintenance = await this.collectStorageMaintenanceStats(database, databasePath);
@@ -1452,6 +1453,7 @@ export class VolumeRepository {
             actualBlobChunkCounts,
             persistedBlobSizes,
             actualBlobSizes,
+            blobChunkIndexContiguity,
           ),
           ...blobPayloadIssues,
           ...this.collectMaintenanceDoctorIssues(record.manifest.id, maintenance),
@@ -1486,6 +1488,7 @@ export class VolumeRepository {
         );
         let persistedBlobChunkCounts = await this.listPersistedBlobChunkCounts(database);
         let persistedBlobSizes = await this.listPersistedBlobSizes(database);
+        let blobChunkIndexContiguity = await this.listBlobChunkIndexContiguity(database);
         let actualBlobChunkCounts = await this.listActualBlobChunkCounts(database);
         let actualBlobSizes = await this.listActualBlobSizes(database);
         const issuesBefore = this.collectDoctorIssues(
@@ -1495,6 +1498,7 @@ export class VolumeRepository {
           actualBlobChunkCounts,
           persistedBlobSizes,
           actualBlobSizes,
+          blobChunkIndexContiguity,
         );
 
         for (const issue of issuesBefore) {
@@ -1521,13 +1525,26 @@ export class VolumeRepository {
               } =>
                 issue.contentRef !== undefined &&
                 (issue.code === 'BLOB_CHUNK_COUNT_MISMATCH' ||
+                  issue.code === 'BLOB_CHUNK_INDEX_GAP' ||
                   issue.code === 'BLOB_SIZE_MISMATCH'),
             )
             .map((issue) => issue.contentRef),
         );
 
         for (const contentRef of blobLayoutSyncTargets) {
-          const payloadStats = await this.readBlobPayloadStats(database, contentRef);
+          let payloadStats = await this.readBlobPayloadStats(database, contentRef);
+          if (payloadStats?.actualContentRef !== contentRef) {
+            continue;
+          }
+
+          let repairedLayout = false;
+
+          if (!payloadStats.contiguousChunkIndexes && payloadStats.actualChunkCount > 0) {
+            await this.resequenceBlobChunkIndexes(database, contentRef);
+            repairedLayout = true;
+            payloadStats = await this.readBlobPayloadStats(database, contentRef);
+          }
+
           if (
             payloadStats?.actualContentRef !== contentRef ||
             !payloadStats?.contiguousChunkIndexes
@@ -1548,23 +1565,30 @@ export class VolumeRepository {
             (persistedBlob.size === payloadStats.actualSize &&
               persistedBlob.chunk_count === payloadStats.actualChunkCount)
           ) {
-            continue;
+            if (!repairedLayout) {
+              continue;
+            }
+          } else {
+            await database.run(
+              `UPDATE blobs
+                  SET size = ?,
+                      chunk_count = ?
+                WHERE content_ref = ?`,
+              payloadStats.actualSize,
+              payloadStats.actualChunkCount,
+              contentRef,
+            );
+            repairedLayout = true;
           }
 
-          await database.run(
-            `UPDATE blobs
-                SET size = ?,
-                    chunk_count = ?
-              WHERE content_ref = ?`,
-            payloadStats.actualSize,
-            payloadStats.actualChunkCount,
-            contentRef,
-          );
-          actions.push({
-            code: 'SYNC_BLOB_LAYOUT_METADATA',
-            message: 'Synchronized blob size and chunk-count metadata from the current SQLite payload layout.',
-            contentRef,
-          });
+          if (repairedLayout) {
+            actions.push({
+              code: 'SYNC_BLOB_LAYOUT_METADATA',
+              message:
+                'Synchronized blob chunk indexes, size, and chunk-count metadata from the current SQLite payload layout.',
+              contentRef,
+            });
+          }
         }
 
         if (
@@ -1602,6 +1626,7 @@ export class VolumeRepository {
         persistedBlobReferenceCounts = await this.listPersistedBlobReferenceCounts(database);
         persistedBlobChunkCounts = await this.listPersistedBlobChunkCounts(database);
         persistedBlobSizes = await this.listPersistedBlobSizes(database);
+        blobChunkIndexContiguity = await this.listBlobChunkIndexContiguity(database);
         actualBlobChunkCounts = await this.listActualBlobChunkCounts(database);
         actualBlobSizes = await this.listActualBlobSizes(database);
         const remainingIssues = this.collectDoctorIssues(
@@ -1611,6 +1636,7 @@ export class VolumeRepository {
           actualBlobChunkCounts,
           persistedBlobSizes,
           actualBlobSizes,
+          blobChunkIndexContiguity,
         );
 
         await database.exec('COMMIT');
@@ -1718,6 +1744,27 @@ export class VolumeRepository {
     return new Map(blobRows.map((row) => [row.content_ref, row.size] as const));
   }
 
+  private async listBlobChunkIndexContiguity(
+    database: SqliteVolumeDatabase,
+  ): Promise<Map<string, boolean>> {
+    const blobRows = await database.all<{ content_ref: string; contiguous: number }[]>(
+      `SELECT blobs.content_ref AS content_ref,
+              CASE
+                WHEN COUNT(blob_chunks.chunk_index) = 0 THEN 1
+                WHEN MIN(blob_chunks.chunk_index) = 0
+                 AND MAX(blob_chunks.chunk_index) = COUNT(blob_chunks.chunk_index) - 1
+                  THEN 1
+                ELSE 0
+              END AS contiguous
+         FROM blobs
+         LEFT JOIN blob_chunks
+           ON blob_chunks.content_ref = blobs.content_ref
+     GROUP BY blobs.content_ref`,
+    );
+
+    return new Map(blobRows.map((row) => [row.content_ref, row.contiguous === 1] as const));
+  }
+
   private async listActualBlobChunkCounts(
     database: SqliteVolumeDatabase,
   ): Promise<Map<string, number>> {
@@ -1751,6 +1798,48 @@ export class VolumeRepository {
     );
 
     return new Map(blobRows.map((row) => [row.content_ref, row.size] as const));
+  }
+
+  private async resequenceBlobChunkIndexes(
+    database: SqliteVolumeDatabase,
+    contentRef: string,
+  ): Promise<void> {
+    const chunkRows = await database.all<{ chunk_index: number }[]>(
+      `SELECT chunk_index
+         FROM blob_chunks
+        WHERE content_ref = ?
+     ORDER BY chunk_index`,
+      contentRef,
+    );
+
+    if (chunkRows.every((row, index) => row.chunk_index === index)) {
+      return;
+    }
+
+    for (let index = 0; index < chunkRows.length; index += 1) {
+      const row = chunkRows[index];
+      await database.run(
+        `UPDATE blob_chunks
+            SET chunk_index = ?
+          WHERE content_ref = ?
+            AND chunk_index = ?`,
+        -(index + 1),
+        contentRef,
+        row?.chunk_index ?? -1,
+      );
+    }
+
+    for (let index = 0; index < chunkRows.length; index += 1) {
+      await database.run(
+        `UPDATE blob_chunks
+            SET chunk_index = ?
+          WHERE content_ref = ?
+            AND chunk_index = ?`,
+        index,
+        contentRef,
+        -(index + 1),
+      );
+    }
   }
 
   private async readBlobPayloadStats(
@@ -1919,6 +2008,7 @@ export class VolumeRepository {
     actualBlobChunkCounts: Map<string, number>,
     persistedBlobSizes: Map<string, number>,
     actualBlobSizes: Map<string, number>,
+    blobChunkIndexContiguity: Map<string, boolean>,
   ): StorageDoctorIssue[] {
     const issues: StorageDoctorIssue[] = [];
     const entries = Object.values(record.state.entries);
@@ -2016,6 +2106,8 @@ export class VolumeRepository {
       const actualChunkCount = actualBlobChunkCounts.get(persistedBlobRef) ?? 0;
       const persistedSize = persistedBlobSizes.get(persistedBlobRef) ?? 0;
       const actualSize = actualBlobSizes.get(persistedBlobRef) ?? 0;
+      const contiguousChunkIndexes =
+        blobChunkIndexContiguity.get(persistedBlobRef) ?? true;
 
       if (actualReferenceCount === 0) {
         issues.push({
@@ -2040,6 +2132,15 @@ export class VolumeRepository {
           code: 'BLOB_CHUNK_COUNT_MISMATCH',
           severity: 'error',
           message: `Blob ${persistedBlobRef} stores chunk_count=${persistedChunkCount}, but ${actualChunkCount} blob chunk row(s) were found in SQLite.`,
+          contentRef: persistedBlobRef,
+        });
+      }
+
+      if (!contiguousChunkIndexes) {
+        issues.push({
+          code: 'BLOB_CHUNK_INDEX_GAP',
+          severity: 'error',
+          message: `Blob ${persistedBlobRef} has non-contiguous chunk_index values in SQLite, so chunked reads can fail even though chunk rows still exist.`,
           contentRef: persistedBlobRef,
         });
       }

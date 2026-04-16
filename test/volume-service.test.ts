@@ -2458,6 +2458,77 @@ describe('VolumeService', () => {
     ).toBe(false);
   });
 
+  it('repairs non-contiguous blob chunk indexes when payload order is still sane', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Blob Chunk Index Drift' });
+    const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+    const largePayload = 'y'.repeat(600_000);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/chunked.txt', largePayload);
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      const fileRow = await database.get<{ content_ref: string; chunk_count: number }>(
+        `SELECT entries.content_ref AS content_ref,
+                blobs.chunk_count AS chunk_count
+           FROM entries
+           JOIN blobs
+             ON blobs.content_ref = entries.content_ref
+          WHERE entries.name = 'chunked.txt'
+          LIMIT 1`,
+      );
+
+      expect(fileRow?.chunk_count).toBeGreaterThan(1);
+
+      await database.run(
+        `UPDATE blob_chunks
+            SET chunk_index = chunk_index + 100
+          WHERE content_ref = ?`,
+        fileRow?.content_ref ?? '',
+      );
+    });
+
+    const doctorReport = await runtime.volumeService.runDoctor(volume.id);
+    const driftIssue = doctorReport.volumes[0]?.issues.find(
+      (issue) => issue.code === 'BLOB_CHUNK_INDEX_GAP',
+    );
+
+    expect(doctorReport.healthy).toBe(false);
+    expect(driftIssue?.message).toContain('non-contiguous chunk_index values');
+
+    const repairReport = await runtime.volumeService.runRepair(volume.id);
+    const repairedVolume = repairReport.volumes[0];
+
+    expect(repairReport.healthy).toBe(true);
+    expect(repairedVolume?.repaired).toBe(true);
+    expect(
+      repairedVolume?.actions.some(
+        (action) => action.code === 'SYNC_BLOB_LAYOUT_METADATA',
+      ),
+    ).toBe(true);
+    expect(repairedVolume?.issueCountAfter).toBe(0);
+
+    const preview = await runtime.volumeService.previewFile(volume.id, '/chunked.txt');
+    expect(preview.content.startsWith('y')).toBe(true);
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      const chunkIndexes = await database.all<{ chunk_index: number }[]>(
+        `SELECT chunk_index
+           FROM blob_chunks
+          WHERE content_ref = (
+            SELECT content_ref
+              FROM entries
+             WHERE name = 'chunked.txt'
+             LIMIT 1
+          )
+       ORDER BY chunk_index`,
+      );
+
+      expect(chunkIndexes.map((row) => row.chunk_index)).toEqual(
+        Array.from({ length: chunkIndexes.length }, (_, index) => index),
+      );
+    });
+  });
+
   it('verifies blob payload hashes only when deep doctor verification is requested', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Blob Payload Verification' });
