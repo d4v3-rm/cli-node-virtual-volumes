@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  evaluateVolumeCompactionBatchPolicy,
+  formatVolumeCompactionBatchPolicyStatus,
   formatVolumeCompactionBatchResult,
   formatVolumeCompactionResult,
 } from '../src/cli/maintenance.js';
@@ -283,6 +285,63 @@ describe('maintenance cli formatter', () => {
         '  - FILTERED Filtered (volume-3) revision=2 free=768 KB (20.0%) artifacts=5.0 MB issues=1 reason=Below both thresholds: requires at least 1048576 B and 25.0%.',
         '  - DEFERRED Deferred (volume-4) revision=3 free=1.5 MB (30.0%) artifacts=6.0 MB issues=1 reason=Deferred by --limit 1.',
       ].join('\n'),
+    );
+  });
+
+  it('evaluates strict batch policy failures for blocked, filtered, deferred, and failed volumes', () => {
+    const status = evaluateVolumeCompactionBatchPolicy(
+      {
+        blockedVolumes: 1,
+        filteredVolumes: 2,
+        deferredVolumes: 3,
+        failedVolumes: 4,
+      },
+      {
+        strictPlan: true,
+      },
+    );
+
+    expect(status).toEqual({
+      strictPlan: true,
+      satisfied: false,
+      messages: [
+        '1 blocked volume(s) still require doctor cleanup before the batch is automation-safe.',
+        '2 volume(s) were filtered out by the current free-space thresholds.',
+        '3 volume(s) remain deferred outside the current --limit budget.',
+        '4 volume(s) failed during compaction execution.',
+      ],
+    });
+    expect(formatVolumeCompactionBatchPolicyStatus(status)).toBe(
+      [
+        'Strict plan gate: FAILED',
+        '- 1 blocked volume(s) still require doctor cleanup before the batch is automation-safe.',
+        '- 2 volume(s) were filtered out by the current free-space thresholds.',
+        '- 3 volume(s) remain deferred outside the current --limit budget.',
+        '- 4 volume(s) failed during compaction execution.',
+      ].join('\n'),
+    );
+  });
+
+  it('passes strict batch policy when the plan is fully actionable', () => {
+    const status = evaluateVolumeCompactionBatchPolicy(
+      {
+        blockedVolumes: 0,
+        filteredVolumes: 0,
+        deferredVolumes: 0,
+        failedVolumes: 0,
+      },
+      {
+        strictPlan: true,
+      },
+    );
+
+    expect(status).toEqual({
+      strictPlan: true,
+      satisfied: true,
+      messages: [],
+    });
+    expect(formatVolumeCompactionBatchPolicyStatus(status)).toBe(
+      'Strict plan gate: PASSED',
     );
   });
 });
