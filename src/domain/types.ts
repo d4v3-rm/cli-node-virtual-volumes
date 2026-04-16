@@ -237,6 +237,7 @@ export interface StorageDoctorIssue {
   code:
     | 'DATABASE_OPEN_FAILED'
     | 'BROKEN_ROOT'
+    | 'COMPACTION_RECOMMENDED'
     | 'DUPLICATE_CHILD_NAME'
     | 'MANIFEST_ENTRY_COUNT_MISMATCH'
     | 'MANIFEST_USAGE_MISMATCH'
@@ -253,6 +254,18 @@ export interface StorageDoctorIssue {
   entryId?: string;
 }
 
+export interface StorageDoctorMaintenanceStats {
+  databaseBytes: number;
+  walBytes: number;
+  artifactBytes: number;
+  pageSizeBytes: number;
+  pageCount: number;
+  freelistCount: number;
+  freeBytes: number;
+  freeRatio: number;
+  compactionRecommended: boolean;
+}
+
 export interface StorageDoctorVolumeReport {
   volumeId: string;
   volumeName: string;
@@ -260,6 +273,7 @@ export interface StorageDoctorVolumeReport {
   healthy: boolean;
   issueCount: number;
   issues: StorageDoctorIssue[];
+  maintenance?: StorageDoctorMaintenanceStats;
 }
 
 export interface StorageDoctorReport {

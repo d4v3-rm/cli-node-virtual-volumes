@@ -1,10 +1,12 @@
 import type {
   StorageDoctorIssue,
   StorageDoctorReport,
+  StorageDoctorMaintenanceStats,
   StorageDoctorVolumeReport,
   StorageRepairReport,
   StorageRepairVolumeReport,
 } from '../domain/types.js';
+import { formatBytes } from '../utils/formatters.js';
 
 const formatIssue = (issue: StorageDoctorIssue): string => {
   const details = [issue.entryId ? `entry=${issue.entryId}` : null, issue.contentRef]
@@ -15,10 +17,24 @@ const formatIssue = (issue: StorageDoctorIssue): string => {
   return `  - [${issue.severity.toUpperCase()}] ${issue.code}: ${issue.message}${suffix}`;
 };
 
+const formatMaintenance = (maintenance: StorageDoctorMaintenanceStats): string =>
+  [
+    '  - Maintenance:',
+    `artifacts=${formatBytes(maintenance.artifactBytes)}`,
+    `db=${formatBytes(maintenance.databaseBytes)}`,
+    `wal=${formatBytes(maintenance.walBytes)}`,
+    `free=${formatBytes(maintenance.freeBytes)} (${(maintenance.freeRatio * 100).toFixed(1)}%)`,
+    `compact=${maintenance.compactionRecommended ? 'recommended' : 'not-needed'}`,
+  ].join(' ');
+
 const formatVolumeReport = (report: StorageDoctorVolumeReport): string => {
   const lines = [
     `${report.healthy ? 'OK' : 'FAIL'} ${report.volumeName} (${report.volumeId}) revision=${report.revision} issues=${report.issueCount}`,
   ];
+
+  if (report.maintenance) {
+    lines.push(formatMaintenance(report.maintenance));
+  }
 
   if (report.issues.length === 0) {
     lines.push('  - No issues detected.');

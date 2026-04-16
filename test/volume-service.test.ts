@@ -1152,10 +1152,14 @@ describe('VolumeService', () => {
     await runtime.volumeService.writeTextFile(volume.id, '/large.txt', largePayload);
     await runtime.volumeService.deleteEntry(volume.id, '/large.txt');
 
+    const doctorBefore = await runtime.volumeService.runDoctor(volume.id);
     const bytesBefore = await getPersistedDatabaseArtifactBytes(runtime.config.dataDir, volume.id);
     const result = await runtime.volumeService.compactVolume(volume.id);
+    const doctorAfter = await runtime.volumeService.runDoctor(volume.id);
     const bytesAfter = await getPersistedDatabaseArtifactBytes(runtime.config.dataDir, volume.id);
     const rootSnapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+    const issueCodesBefore = doctorBefore.volumes[0]?.issues.map((issue) => issue.code) ?? [];
+    const issueCodesAfter = doctorAfter.volumes[0]?.issues.map((issue) => issue.code) ?? [];
 
     expect(result).toMatchObject({
       volumeId: volume.id,
@@ -1168,6 +1172,14 @@ describe('VolumeService', () => {
     expect(result.bytesAfter).toBe(bytesAfter);
     expect(result.bytesAfter).toBeLessThan(bytesBefore);
     expect(result.reclaimedBytes).toBe(bytesBefore - bytesAfter);
+    expect(issueCodesBefore).toContain('COMPACTION_RECOMMENDED');
+    expect(doctorBefore.volumes[0]?.maintenance).toMatchObject({
+      compactionRecommended: true,
+    });
+    expect(issueCodesAfter).not.toContain('COMPACTION_RECOMMENDED');
+    expect(doctorAfter.volumes[0]?.maintenance).toMatchObject({
+      compactionRecommended: false,
+    });
     expect(rootSnapshot.entries).toHaveLength(0);
   });
 
