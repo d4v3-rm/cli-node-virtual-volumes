@@ -278,6 +278,7 @@ export interface StorageDoctorIssue {
   code:
     | 'BLOB_CHUNK_COUNT_MISMATCH'
     | 'BLOB_REFERENCE_COUNT_MISMATCH'
+    | 'BLOB_SIZE_MISMATCH'
     | 'DATABASE_OPEN_FAILED'
     | 'BROKEN_ROOT'
     | 'COMPACTION_RECOMMENDED'
