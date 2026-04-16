@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { createRuntime } from '../src/bootstrap/create-runtime.js';
 import type { AppRuntime } from '../src/bootstrap/create-runtime.js';
+import { isVolumeError } from '../src/domain/errors.js';
 import { runRestoreDrill } from '../src/ops/restore-drill.js';
 
 const sandboxes: string[] = [];
@@ -87,5 +88,29 @@ describe('restore drill', () => {
     ).toBe(true);
 
     sandboxes.push(result.sandboxPath!);
+  });
+
+  it('preserves the sandbox and returns an actionable error when the drill fails', async () => {
+    const runtime = await createIsolatedRuntime();
+    const missingBackupPath = path.join(runtime.config.dataDir, '..', 'missing-drill.sqlite');
+
+    try {
+      await runRestoreDrill(runtime, { backupPath: missingBackupPath });
+      throw new Error('Expected restore drill to fail for a missing backup.');
+    } catch (error) {
+      expect(isVolumeError(error)).toBe(true);
+
+      if (!isVolumeError(error)) {
+        return;
+      }
+
+      expect(error.code).toBe('INVALID_OPERATION');
+      expect(error.details?.backupPath).toBe(path.resolve(missingBackupPath));
+      expect(typeof error.details?.sandboxPath).toBe('string');
+      expect(error.message).toContain('Sandbox preserved');
+      expect((await fs.stat(error.details?.sandboxPath as string)).isDirectory()).toBe(true);
+
+      sandboxes.push(error.details?.sandboxPath as string);
+    }
   });
 });
