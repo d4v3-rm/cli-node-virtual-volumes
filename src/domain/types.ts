@@ -255,13 +255,18 @@ export interface VolumeCompactionBatchResult {
   checkedVolumes: number;
   recommendedVolumes: number;
   eligibleVolumes: number;
+  eligibleReclaimableBytes: number;
   plannedVolumes: number;
+  plannedReclaimableBytes: number;
   blockedVolumes: number;
+  blockedReclaimableBytes: number;
   compactedVolumes: number;
   failedVolumes: number;
   skippedVolumes: number;
   filteredVolumes: number;
+  filteredReclaimableBytes: number;
   deferredVolumes: number;
+  deferredReclaimableBytes: number;
   minimumFreeBytes: number | null;
   minimumFreeRatio: number | null;
   totalReclaimedBytes: number;

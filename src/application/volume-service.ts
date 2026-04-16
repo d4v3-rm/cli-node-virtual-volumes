@@ -280,10 +280,15 @@ export class VolumeService {
           );
         const volumes: VolumeCompactionBatchItem[] = [];
         let eligibleVolumes = 0;
+        let eligibleReclaimableBytes = 0;
         let blockedVolumes = 0;
+        let blockedReclaimableBytes = 0;
         let filteredVolumes = 0;
+        let filteredReclaimableBytes = 0;
         let deferredVolumes = 0;
+        let deferredReclaimableBytes = 0;
         let plannedVolumes = 0;
+        let plannedReclaimableBytes = 0;
         let compactedVolumes = 0;
         let failedVolumes = 0;
         let totalReclaimedBytes = 0;
@@ -301,6 +306,7 @@ export class VolumeService {
           );
           if (thresholdFilterReason) {
             filteredVolumes += 1;
+            filteredReclaimableBytes += maintenance.freeBytes;
             volumes.push({
               volumeId: report.volumeId,
               volumeName: report.volumeName,
@@ -316,9 +322,11 @@ export class VolumeService {
           }
 
           eligibleVolumes += 1;
+          eligibleReclaimableBytes += maintenance.freeBytes;
 
           if (!options.includeUnsafe && !this.isSafeForBatchCompaction(report.issues)) {
             blockedVolumes += 1;
+            blockedReclaimableBytes += maintenance.freeBytes;
             volumes.push({
               volumeId: report.volumeId,
               volumeName: report.volumeName,
@@ -338,6 +346,7 @@ export class VolumeService {
 
           if (options.limit !== undefined && plannedVolumes >= options.limit) {
             deferredVolumes += 1;
+            deferredReclaimableBytes += maintenance.freeBytes;
             volumes.push({
               volumeId: report.volumeId,
               volumeName: report.volumeName,
@@ -353,6 +362,7 @@ export class VolumeService {
           }
 
           plannedVolumes += 1;
+          plannedReclaimableBytes += maintenance.freeBytes;
 
           if (options.dryRun) {
             volumes.push({
@@ -406,13 +416,18 @@ export class VolumeService {
           checkedVolumes: doctorReport.checkedVolumes,
           recommendedVolumes: recommendedVolumes.length,
           eligibleVolumes,
+          eligibleReclaimableBytes,
           plannedVolumes,
+          plannedReclaimableBytes,
           blockedVolumes,
+          blockedReclaimableBytes,
           compactedVolumes,
           failedVolumes,
           skippedVolumes: Math.max(0, doctorReport.checkedVolumes - recommendedVolumes.length),
           filteredVolumes,
+          filteredReclaimableBytes,
           deferredVolumes,
+          deferredReclaimableBytes,
           minimumFreeBytes: options.minFreeBytes ?? null,
           minimumFreeRatio: options.minFreeRatio ?? null,
           totalReclaimedBytes,
