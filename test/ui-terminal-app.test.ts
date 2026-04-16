@@ -1,7 +1,25 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+const { getDefaultHostPathMock, listHostBrowserSnapshotMock } = vi.hoisted(() => ({
+  getDefaultHostPathMock: vi.fn(),
+  listHostBrowserSnapshotMock: vi.fn(),
+}));
+
+vi.mock('../src/ui/host-browser.js', async () => {
+  const actual = await vi.importActual<Record<string, unknown>>(
+    '../src/ui/host-browser.js',
+  );
+
+  return {
+    ...actual,
+    getDefaultHostPath: getDefaultHostPathMock,
+    listHostBrowserSnapshot: listHostBrowserSnapshotMock,
+  };
+});
+
 import type { AppRuntime } from '../src/bootstrap/create-runtime.js';
 import type { ExplorerSnapshot, VolumeManifest } from '../src/domain/types.js';
+import type { HostBrowserSnapshot } from '../src/ui/host-browser.js';
 import {
   TerminalApp,
   type TerminalUiFactory,
@@ -40,9 +58,15 @@ class FakeElement {
 
   public parent: FakeElement | null = null;
 
+  private inputValue = '';
+
   private readonly eventHandlers = new Map<string, (() => void)[]>();
 
   private readonly keyHandlers: { keys: string[]; handler: () => void }[] = [];
+
+  private readInputHandler:
+    | ((error: Error | null, value: string | null | undefined) => void)
+    | null = null;
 
   public constructor(options: Record<string, unknown> = {}) {
     this.style =
@@ -89,6 +113,14 @@ class FakeElement {
     this.focused = true;
   }
 
+  public getValue(): string {
+    return this.inputValue;
+  }
+
+  public setValue(value: string): void {
+    this.inputValue = value;
+  }
+
   public show(): void {
     this.hidden = false;
   }
@@ -120,6 +152,16 @@ class FakeElement {
     const handlers = this.eventHandlers.get(event) ?? [];
     handlers.push(handler);
     this.eventHandlers.set(event, handlers);
+  }
+
+  public readInput(
+    handler: (error: Error | null, value: string | null | undefined) => void,
+  ): void {
+    this.readInputHandler = handler;
+  }
+
+  public resolveInput(value?: string | null, error: Error | null = null): void {
+    this.readInputHandler?.(error, value);
   }
 
   public triggerEvent(event: string): void {
@@ -185,11 +227,25 @@ interface TerminalAppTestHandle {
   leftPane: FakeElement;
   loadVolumes: () => Promise<void>;
   mode: 'dashboard' | 'explorer';
+  openHostImportOverlay: (destinationPath: string) => Promise<string[] | null>;
   openHelpOverlay: () => Promise<void>;
   openVolume: (volumeId: string) => Promise<void>;
   overlayBackdrop: FakeElement;
   overlayContainer: FakeElement;
   overlayMode: 'help' | 'preview' | 'confirm' | 'input' | 'choice' | 'hostBrowser' | null;
+  promptChoice: (options: {
+    choices: string[];
+    description: string;
+    footer: string;
+    initialIndex: number;
+    title: string;
+  }) => Promise<string | null>;
+  promptValue: (options: {
+    description: string;
+    footer: string;
+    initialValue: string;
+    title: string;
+  }) => Promise<string | null>;
   primaryList: FakeElement;
   rightPane: FakeElement;
   shortcutsBox: FakeElement;
@@ -282,12 +338,37 @@ const sampleSnapshot: ExplorerSnapshot = {
   remainingBytes: 4096,
 };
 
+const sampleHostSnapshot: HostBrowserSnapshot = {
+  currentPath: '/host',
+  displayPath: '/host',
+  entries: [
+    {
+      absolutePath: '/host/report.txt',
+      id: '/host/report.txt',
+      kind: 'file',
+      name: 'report.txt',
+      navigable: false,
+      selectable: true,
+    },
+    {
+      absolutePath: '/host/contracts',
+      id: '/host/contracts',
+      kind: 'directory',
+      name: 'contracts',
+      navigable: true,
+      selectable: true,
+    },
+  ],
+};
+
 const flushUi = async (): Promise<void> => {
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
 };
 
 afterEach(() => {
+  getDefaultHostPathMock.mockReset();
+  listHostBrowserSnapshotMock.mockReset();
   vi.restoreAllMocks();
 });
 
@@ -414,5 +495,90 @@ describe('ui terminal app runtime', () => {
     await expect(confirmPromise).resolves.toBe(true);
     expect(testApp.overlayMode).toBeNull();
     expect(ui.screen.renderCount).toBeGreaterThan(0);
+  });
+
+  it('resolves prompt overlays from textbox input and choice hotkeys', async () => {
+    const ui = createFakeUiFactory();
+    const runtime = createRuntime({
+      volumes: [sampleVolume],
+    });
+    const app = new TerminalApp(runtime.runtime, ui.factory);
+    const testApp = asTestApp(app);
+
+    await testApp.loadVolumes();
+
+    const promptPromise = testApp.promptValue({
+      title: 'Rename Entry',
+      description: 'Provide a new name',
+      initialValue: 'report.txt',
+      footer: 'Enter saves. Esc cancels.',
+    });
+
+    expect(testApp.overlayMode).toBe('input');
+    expect(testApp.overlayContainer.label).toBe(' Rename Entry ');
+
+    const promptInput = testApp.overlayContainer.children[1]!;
+    promptInput.setValue('summary.txt');
+    promptInput.resolveInput(undefined);
+
+    await expect(promptPromise).resolves.toBe('summary.txt');
+    expect(testApp.overlayMode).toBeNull();
+
+    const choicePromise = testApp.promptChoice({
+      title: 'Quota Unit',
+      description: 'Choose a binary quota unit',
+      choices: ['KB', 'MB', 'GB'],
+      initialIndex: 0,
+      footer: 'Left/Right switches. Enter saves.',
+    });
+
+    expect(testApp.overlayMode).toBe('choice');
+    const choiceRow = testApp.overlayContainer.children[1]!;
+    expect(choiceRow.content).toContain('[ KB ]');
+
+    choiceRow.triggerKey('g');
+    expect(choiceRow.content).toContain('[ GB ]');
+
+    choiceRow.triggerKey('enter');
+    await expect(choicePromise).resolves.toBe('GB');
+    expect(testApp.overlayMode).toBeNull();
+  });
+
+  it('resolves host import overlays after selecting a host file', async () => {
+    getDefaultHostPathMock.mockResolvedValue('/host');
+    listHostBrowserSnapshotMock.mockImplementation((targetPath?: string | null) =>
+      Promise.resolve({
+        ...sampleHostSnapshot,
+        currentPath: targetPath ?? '/host',
+        displayPath: targetPath ?? '/host',
+      }),
+    );
+
+    const ui = createFakeUiFactory();
+    const runtime = createRuntime({
+      volumes: [sampleVolume],
+    });
+    const app = new TerminalApp(runtime.runtime, ui.factory);
+    const testApp = asTestApp(app);
+
+    await testApp.loadVolumes();
+
+    const importPromise = testApp.openHostImportOverlay('/reports');
+    await flushUi();
+
+    expect(testApp.overlayMode).toBe('hostBrowser');
+    expect(testApp.overlayContainer.label).toBe(' Host Import ');
+
+    const browserPane = testApp.overlayContainer.children[1]!;
+    const browserList = browserPane.children[0]!;
+    expect(browserList.items[0]).toContain('report.txt');
+    expect(listHostBrowserSnapshotMock).toHaveBeenCalledWith('/host');
+
+    browserList.triggerKey('space');
+    browserList.triggerKey('enter');
+
+    await expect(importPromise).resolves.toEqual(['/host/report.txt']);
+    expect(testApp.overlayMode).toBeNull();
+    expect(testApp.overlayBackdrop.hidden).toBe(true);
   });
 });
