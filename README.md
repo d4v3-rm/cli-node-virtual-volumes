@@ -260,7 +260,8 @@ The CLI exposes a full recovery workflow:
 | `virtual-volumes restore <backupPath> --force` | Replace an existing volume with rollback protection |
 | `virtual-volumes compact <volumeId>` | Compact a managed SQLite volume and reclaim free pages |
 | `virtual-volumes compact-recommended` | Compact every managed volume currently flagged by doctor for SQLite maintenance |
-| `virtual-volumes doctor [volumeId]` | Run consistency checks after restore |
+| `virtual-volumes doctor [volumeId]` | Run metadata-level consistency checks after restore |
+| `virtual-volumes doctor [volumeId] --verify-blobs` | Run a deeper doctor pass that hashes referenced blob payloads |
 | `virtual-volumes support-bundle <destinationPath> [volumeId]` | Export doctor data, checksum inventory, runtime metadata, and log snapshot for support |
 | `virtual-volumes inspect-support-bundle <bundlePath>` | Verify support bundle metadata, required files, checksums, and sharing suitability |
 
@@ -279,6 +280,7 @@ virtual-volumes compact-recommended --min-free-bytes 1048576 --min-free-ratio 0.
 virtual-volumes compact-recommended --include-unsafe
 virtual-volumes compact vol_finance_01
 virtual-volumes doctor vol_finance_01
+virtual-volumes doctor vol_finance_01 --verify-blobs
 virtual-volumes support-bundle ./reports/finance-support vol_finance_01 --backup-path ./backups/finance.sqlite
 virtual-volumes inspect-support-bundle ./reports/finance-support --require-sharing internal-only
 ```
@@ -334,6 +336,9 @@ Each standard backup produces:
 - top compaction candidates in descending reclaimable-byte order
 - blob reference-count mismatches when blob liveness metadata drifts from actual file references
 - `COMPACTION_RECOMMENDED` when a volume is fragmented enough to justify running `compact`
+- `Integrity depth: metadata` for the fast default pass, or `Integrity depth: deep` when `--verify-blobs` is enabled
+
+Use `virtual-volumes doctor <volumeId> --verify-blobs` when you need a slower payload scrub that re-hashes referenced blobs and catches content drift even when metadata still looks consistent.
 
 For the full operational procedure, drills, and audit checklist, see [docs/BACKUP-RESTORE-RUNBOOK.md](./docs/BACKUP-RESTORE-RUNBOOK.md).
 

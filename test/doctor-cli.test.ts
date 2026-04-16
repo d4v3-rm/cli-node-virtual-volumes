@@ -44,6 +44,7 @@ describe('doctor cli formatters', () => {
       [
         'Storage doctor: HEALTHY',
         'Generated at: 2026-04-15T10:00:00.000Z',
+        'Integrity depth: metadata',
         'Checked volumes: 1',
         'Total issues: 0',
         'Volumes with maintenance stats: 1',
@@ -97,6 +98,7 @@ describe('doctor cli formatters', () => {
       [
         'Storage doctor: ISSUES FOUND',
         'Generated at: 2026-04-15T10:02:00.000Z',
+        'Integrity depth: metadata',
         'Checked volumes: 2',
         'Total issues: 2',
         'Volumes with maintenance stats: 2',

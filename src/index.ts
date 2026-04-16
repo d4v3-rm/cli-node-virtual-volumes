@@ -419,11 +419,20 @@ const main = async (): Promise<void> => {
     .argument('[volumeId]', 'Diagnose a specific volume by id')
     .option('--json', 'Output the report as JSON')
     .option('--output <path>', 'Write the structured JSON report to this file')
+    .option(
+      '--verify-blobs',
+      'Hash and verify referenced blob payloads during the doctor run',
+    )
     .option('--fix', 'Apply safe automatic repairs for supported issues')
     .action(
       async (
         volumeId: string | undefined,
-        options: { json?: boolean; output?: string; fix?: boolean },
+        options: {
+          json?: boolean;
+          output?: string;
+          verifyBlobs?: boolean;
+          fix?: boolean;
+        },
       ) => {
         await withRuntime(async (runtime) => {
           const correlationId = runtime.correlationId;
@@ -452,7 +461,9 @@ const main = async (): Promise<void> => {
               process.exitCode = 1;
             }
           } else {
-            const report = await runtime.volumeService.runDoctor(volumeId);
+            const report = await runtime.volumeService.runDoctor(volumeId, {
+              verifyBlobPayloads: options.verifyBlobs,
+            });
             const artifactPath = options.output
               ? await writeCliJsonArtifact(
                   'doctor',
