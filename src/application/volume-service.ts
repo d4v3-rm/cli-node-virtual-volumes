@@ -24,6 +24,8 @@ import type {
   RestoreVolumeBackupOptions,
   StorageDoctorReport,
   StorageRepairReport,
+  VolumeCompactionBatchResult,
+  VolumeCompactionBatchItem,
   VolumeCompactionResult,
   VolumeBackupInspectionResult,
   VolumeEntry,
@@ -73,6 +75,7 @@ type AuditEventType =
   | 'volume.restore'
   | 'volume.backup.inspect'
   | 'volume.compact'
+  | 'volume.compact.batch'
   | 'storage.doctor'
   | 'storage.repair'
   | 'entry.directory.create'
@@ -242,6 +245,104 @@ export class VolumeService {
         reclaimedBytes: result.reclaimedBytes,
         bytesBefore: result.bytesBefore,
         bytesAfter: result.bytesAfter,
+      }),
+    );
+  }
+
+  public async compactRecommendedVolumes(
+    options: { dryRun?: boolean } = {},
+  ): Promise<VolumeCompactionBatchResult> {
+    return this.runAuditedOperation(
+      {
+        eventType: 'volume.compact.batch',
+        resourceType: 'storage',
+        details: {
+          dryRun: options.dryRun === true,
+        },
+      },
+      async () => {
+        const doctorReport = await this.repository.runDoctor();
+        const recommendedVolumes = doctorReport.volumes
+          .filter((report) => report.maintenance?.compactionRecommended)
+          .sort(
+            (left, right) =>
+              (right.maintenance?.freeBytes ?? 0) - (left.maintenance?.freeBytes ?? 0),
+          );
+        const volumes: VolumeCompactionBatchItem[] = [];
+        let compactedVolumes = 0;
+        let failedVolumes = 0;
+        let totalReclaimedBytes = 0;
+
+        for (const report of recommendedVolumes) {
+          const maintenance = report.maintenance;
+          if (!maintenance) {
+            continue;
+          }
+
+          if (options.dryRun) {
+            volumes.push({
+              volumeId: report.volumeId,
+              volumeName: report.volumeName,
+              revision: report.revision,
+              issueCount: report.issueCount,
+              artifactBytes: maintenance.artifactBytes,
+              freeBytes: maintenance.freeBytes,
+              freeRatio: maintenance.freeRatio,
+              status: 'planned',
+            });
+            continue;
+          }
+
+          try {
+            const compaction = await this.compactVolume(report.volumeId);
+            compactedVolumes += 1;
+            totalReclaimedBytes += compaction.reclaimedBytes;
+            volumes.push({
+              volumeId: report.volumeId,
+              volumeName: report.volumeName,
+              revision: report.revision,
+              issueCount: report.issueCount,
+              artifactBytes: maintenance.artifactBytes,
+              freeBytes: maintenance.freeBytes,
+              freeRatio: maintenance.freeRatio,
+              status: 'compacted',
+              compaction,
+            });
+          } catch (error) {
+            failedVolumes += 1;
+            volumes.push({
+              volumeId: report.volumeId,
+              volumeName: report.volumeName,
+              revision: report.revision,
+              issueCount: report.issueCount,
+              artifactBytes: maintenance.artifactBytes,
+              freeBytes: maintenance.freeBytes,
+              freeRatio: maintenance.freeRatio,
+              status: 'failed',
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+
+        return {
+          generatedAt: new Date().toISOString(),
+          dryRun: options.dryRun === true,
+          checkedVolumes: doctorReport.checkedVolumes,
+          recommendedVolumes: recommendedVolumes.length,
+          compactedVolumes,
+          failedVolumes,
+          skippedVolumes: Math.max(0, doctorReport.checkedVolumes - recommendedVolumes.length),
+          totalReclaimedBytes,
+          volumes,
+        };
+      },
+      (result) => ({
+        checkedVolumes: result.checkedVolumes,
+        recommendedVolumes: result.recommendedVolumes,
+        compactedVolumes: result.compactedVolumes,
+        failedVolumes: result.failedVolumes,
+        dryRun: result.dryRun,
+        totalReclaimedBytes: result.totalReclaimedBytes,
       }),
     );
   }

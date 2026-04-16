@@ -17,7 +17,10 @@ import {
   formatSupportBundleInspectionResult,
   formatSupportBundleResult,
 } from './cli/support-bundle.js';
-import { formatVolumeCompactionResult } from './cli/maintenance.js';
+import {
+  formatVolumeCompactionBatchResult,
+  formatVolumeCompactionResult,
+} from './cli/maintenance.js';
 import { runRestoreDrill } from './ops/restore-drill.js';
 import { createSupportBundle, inspectSupportBundle } from './ops/support-bundle.js';
 import { TerminalApp } from './ui/terminal-app.js';
@@ -280,6 +283,49 @@ const main = async (): Promise<void> => {
               json: options.json,
             }),
           );
+        });
+      },
+    );
+
+  program
+    .command('compact-recommended')
+    .description(
+      'Compact all managed volumes currently flagged by doctor as needing SQLite compaction.',
+    )
+    .option('--dry-run', 'Report which volumes would be compacted without mutating them')
+    .option('--json', 'Output the batch result as JSON')
+    .option('--output <path>', 'Write the structured JSON result to this file')
+    .action(
+      async (
+        options: { dryRun?: boolean; json?: boolean; output?: string },
+      ) => {
+        await withRuntime(async (runtime) => {
+          const correlationId = runtime.correlationId;
+          const result = await runtime.volumeService.compactRecommendedVolumes({
+            dryRun: options.dryRun,
+          });
+          const artifactPath = options.output
+            ? await writeCliJsonArtifact(
+                'compact-recommended',
+                sanitizeArtifactPayload(result, runtime.config.redactSensitiveDetails),
+                options.output,
+                {
+                  correlationId,
+                },
+              )
+            : null;
+
+          console.log(
+            renderCliResult(result, formatVolumeCompactionBatchResult, {
+              artifactPath,
+              correlationId,
+              json: options.json,
+            }),
+          );
+
+          if (!options.dryRun && result.failedVolumes > 0) {
+            process.exitCode = 1;
+          }
         });
       },
     );

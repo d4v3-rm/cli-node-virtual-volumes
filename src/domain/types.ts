@@ -233,6 +233,31 @@ export interface VolumeCompactionResult {
   compactedAt: string;
 }
 
+export interface VolumeCompactionBatchItem {
+  volumeId: string;
+  volumeName: string;
+  revision: number;
+  issueCount: number;
+  artifactBytes: number;
+  freeBytes: number;
+  freeRatio: number;
+  status: 'planned' | 'compacted' | 'failed';
+  error?: string;
+  compaction?: VolumeCompactionResult;
+}
+
+export interface VolumeCompactionBatchResult {
+  generatedAt: string;
+  dryRun: boolean;
+  checkedVolumes: number;
+  recommendedVolumes: number;
+  compactedVolumes: number;
+  failedVolumes: number;
+  skippedVolumes: number;
+  totalReclaimedBytes: number;
+  volumes: VolumeCompactionBatchItem[];
+}
+
 export interface StorageDoctorIssue {
   code:
     | 'DATABASE_OPEN_FAILED'

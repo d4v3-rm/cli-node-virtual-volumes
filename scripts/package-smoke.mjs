@@ -153,6 +153,10 @@ try {
   const backupsDir = path.join(runtimeRoot, 'backups');
   const doctorArtifactPath = path.join(runtimeRoot, 'doctor-report.json');
   const backupArtifactPath = path.join(runtimeRoot, 'backup-report.json');
+  const compactRecommendedArtifactPath = path.join(
+    runtimeRoot,
+    'compact-recommended-report.json',
+  );
   const compactArtifactPath = path.join(runtimeRoot, 'compact-report.json');
   const restoreDrillArtifactPath = path.join(runtimeRoot, 'restore-drill-report.json');
   const supportBundlePath = path.join(runtimeRoot, 'support-bundle');
@@ -207,6 +211,8 @@ try {
         "const runtime = await createRuntime({ dataDir, logDir, logLevel: 'silent' });",
         "const volume = await runtime.volumeService.createVolume({ name: 'Package Smoke' });",
         "await runtime.volumeService.writeTextFile(volume.id, '/package.txt', 'package smoke ok');",
+        "await runtime.volumeService.writeTextFile(volume.id, '/transient-churn.txt', 'x'.repeat(2 * 1024 * 1024));",
+        "await runtime.volumeService.deleteEntry(volume.id, '/transient-churn.txt');",
         'await runtime.close();',
         'process.stdout.write(volume.id);',
       ].join(' '),
@@ -220,49 +226,6 @@ try {
   assert(
     volumeId.startsWith('vol_'),
     'Installed package did not create a valid test volume.',
-  );
-
-  const doctorRun = runCommand(
-    process.execPath,
-    [
-      installedCliPath,
-      '--data-dir',
-      dataDir,
-      '--log-dir',
-      logDir,
-      '--log-level',
-      'silent',
-      'doctor',
-      volumeId,
-      '--json',
-      '--output',
-      doctorArtifactPath,
-    ],
-    { cwd: consumerRoot },
-  );
-  const doctorPayload = JSON.parse(doctorRun.stdout);
-  const doctorArtifact = await readJson(doctorArtifactPath);
-
-  assert(
-    doctorPayload.healthy === true,
-    'Installed CLI doctor command should report a healthy smoke volume.',
-  );
-  assert(
-    doctorArtifact.command === 'doctor',
-    'Installed CLI artifact should include the doctor command metadata.',
-  );
-  assert(
-    doctorArtifact.cliVersion === packageJson.version,
-    'Installed CLI artifact should use the packaged CLI version.',
-  );
-  assert(
-    typeof doctorArtifact.correlationId === 'string' &&
-      doctorArtifact.correlationId.length > 0,
-    'Installed CLI artifact should include a correlation id.',
-  );
-  assert(
-    doctorArtifact.payload.volumes?.[0]?.volumeId === volumeId,
-    'Installed CLI artifact should reference the smoke-test volume.',
   );
 
   const backupPath = path.join(backupsDir, 'package-smoke.sqlite');
@@ -335,6 +298,39 @@ try {
     'Installed CLI restore-drill should clean its sandbox by default.',
   );
 
+  const compactRecommendedRun = runCommand(
+    process.execPath,
+    [
+      installedCliPath,
+      '--data-dir',
+      dataDir,
+      '--log-dir',
+      logDir,
+      '--log-level',
+      'silent',
+      'compact-recommended',
+      '--json',
+      '--output',
+      compactRecommendedArtifactPath,
+    ],
+    { cwd: consumerRoot },
+  );
+  const compactRecommendedPayload = JSON.parse(compactRecommendedRun.stdout);
+  const compactRecommendedArtifact = await readJson(compactRecommendedArtifactPath);
+
+  assert(
+    compactRecommendedPayload.recommendedVolumes === 1,
+    'Installed CLI compact-recommended should detect the churned smoke-test volume.',
+  );
+  assert(
+    compactRecommendedPayload.compactedVolumes === 1,
+    'Installed CLI compact-recommended should compact the churned smoke-test volume.',
+  );
+  assert(
+    compactRecommendedArtifact.command === 'compact-recommended',
+    'Installed CLI compact-recommended artifact should include the command metadata.',
+  );
+
   const compactRun = runCommand(
     process.execPath,
     [
@@ -383,8 +379,51 @@ try {
       Math.max(
         0,
         compactArtifact.payload.bytesBefore - compactArtifact.payload.bytesAfter,
-      ),
+    ),
     'Installed CLI compact artifact should report reclaimed bytes consistently.',
+  );
+
+  const doctorRun = runCommand(
+    process.execPath,
+    [
+      installedCliPath,
+      '--data-dir',
+      dataDir,
+      '--log-dir',
+      logDir,
+      '--log-level',
+      'silent',
+      'doctor',
+      volumeId,
+      '--json',
+      '--output',
+      doctorArtifactPath,
+    ],
+    { cwd: consumerRoot },
+  );
+  const doctorPayload = JSON.parse(doctorRun.stdout);
+  const doctorArtifact = await readJson(doctorArtifactPath);
+
+  assert(
+    doctorPayload.healthy === true,
+    'Installed CLI doctor command should report a healthy smoke volume after compaction.',
+  );
+  assert(
+    doctorArtifact.command === 'doctor',
+    'Installed CLI artifact should include the doctor command metadata.',
+  );
+  assert(
+    doctorArtifact.cliVersion === packageJson.version,
+    'Installed CLI artifact should use the packaged CLI version.',
+  );
+  assert(
+    typeof doctorArtifact.correlationId === 'string' &&
+      doctorArtifact.correlationId.length > 0,
+    'Installed CLI artifact should include a correlation id.',
+  );
+  assert(
+    doctorArtifact.payload.volumes?.[0]?.volumeId === volumeId,
+    'Installed CLI artifact should reference the smoke-test volume.',
   );
 
   const supportBundleRun = runCommand(
@@ -522,7 +561,7 @@ try {
   );
 
   process.stdout.write(
-    `[package-smoke] installed ${path.basename(tarballPath)} and verified package import + CLI backup + restore drill + compact + doctor + support bundle + support bundle inspection flows\n`,
+    `[package-smoke] installed ${path.basename(tarballPath)} and verified package import + CLI backup + restore drill + compact-recommended + compact + doctor + support bundle + support bundle inspection flows\n`,
   );
 } catch (error) {
   const message =

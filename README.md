@@ -259,6 +259,7 @@ The CLI exposes a full recovery workflow:
 | `virtual-volumes restore <backupPath>` | Restore a volume from backup |
 | `virtual-volumes restore <backupPath> --force` | Replace an existing volume with rollback protection |
 | `virtual-volumes compact <volumeId>` | Compact a managed SQLite volume and reclaim free pages |
+| `virtual-volumes compact-recommended` | Compact every managed volume currently flagged by doctor for SQLite maintenance |
 | `virtual-volumes doctor [volumeId]` | Run consistency checks after restore |
 | `virtual-volumes support-bundle <destinationPath> [volumeId]` | Export doctor data, checksum inventory, runtime metadata, and log snapshot for support |
 | `virtual-volumes inspect-support-bundle <bundlePath>` | Verify support bundle metadata, required files, checksums, and sharing suitability |
@@ -270,6 +271,7 @@ virtual-volumes backup vol_finance_01 ./backups/finance.sqlite
 virtual-volumes inspect-backup ./backups/finance.sqlite
 virtual-volumes restore-drill ./backups/finance.sqlite
 virtual-volumes restore ./backups/finance.sqlite
+virtual-volumes compact-recommended --dry-run
 virtual-volumes compact vol_finance_01
 virtual-volumes doctor vol_finance_01
 virtual-volumes support-bundle ./reports/finance-support vol_finance_01 --backup-path ./backups/finance.sqlite
@@ -305,6 +307,12 @@ Each standard backup produces:
 - checkpoints and truncates the WAL
 - runs `VACUUM` and `PRAGMA optimize`
 - reports database artifact bytes before and after compaction
+
+`compact-recommended` turns that into a fleet workflow:
+
+- scans every managed volume through the same maintenance signals exposed by `doctor`
+- compacts only volumes currently marked with `COMPACTION_RECOMMENDED`
+- supports `--dry-run` to preview the plan before mutating anything
 
 `doctor` now also reports SQLite maintenance stats for each volume:
 

@@ -1183,6 +1183,56 @@ describe('VolumeService', () => {
     expect(rootSnapshot.entries).toHaveLength(0);
   });
 
+  it('compacts all recommended volumes in batch and leaves clean volumes untouched', async () => {
+    const runtime = await createIsolatedRuntime();
+    const churnedVolume = await runtime.volumeService.createVolume({ name: 'Churned' });
+    const cleanVolume = await runtime.volumeService.createVolume({ name: 'Clean' });
+    const largePayload = 'y'.repeat(2 * 1024 * 1024);
+
+    await runtime.volumeService.writeTextFile(churnedVolume.id, '/large.txt', largePayload);
+    await runtime.volumeService.deleteEntry(churnedVolume.id, '/large.txt');
+    await runtime.volumeService.writeTextFile(cleanVolume.id, '/steady.txt', 'steady');
+
+    const dryRun = await runtime.volumeService.compactRecommendedVolumes({ dryRun: true });
+    const dryRunItem = dryRun.volumes.find((item) => item.volumeId === churnedVolume.id);
+
+    expect(dryRun.checkedVolumes).toBe(2);
+    expect(dryRun.recommendedVolumes).toBe(1);
+    expect(dryRun.skippedVolumes).toBe(1);
+    expect(dryRun.compactedVolumes).toBe(0);
+    expect(dryRun.failedVolumes).toBe(0);
+    expect(dryRunItem).toMatchObject({
+      volumeId: churnedVolume.id,
+      status: 'planned',
+    });
+
+    const batchResult = await runtime.volumeService.compactRecommendedVolumes();
+    const compactedItem = batchResult.volumes.find(
+      (item) => item.volumeId === churnedVolume.id,
+    );
+    const followUpDoctor = await runtime.volumeService.runDoctor();
+    const churnedDoctor = followUpDoctor.volumes.find(
+      (volumeReport) => volumeReport.volumeId === churnedVolume.id,
+    );
+    const cleanDoctor = followUpDoctor.volumes.find(
+      (volumeReport) => volumeReport.volumeId === cleanVolume.id,
+    );
+
+    expect(batchResult.checkedVolumes).toBe(2);
+    expect(batchResult.recommendedVolumes).toBe(1);
+    expect(batchResult.compactedVolumes).toBe(1);
+    expect(batchResult.failedVolumes).toBe(0);
+    expect(batchResult.totalReclaimedBytes).toBeGreaterThan(0);
+    expect(compactedItem?.status).toBe('compacted');
+    expect(compactedItem?.compaction?.reclaimedBytes).toBeGreaterThan(0);
+    expect(
+      churnedDoctor?.issues.some((issue) => issue.code === 'COMPACTION_RECOMMENDED'),
+    ).toBe(false);
+    expect(churnedDoctor?.maintenance?.compactionRecommended).toBe(false);
+    expect(cleanDoctor?.maintenance?.compactionRecommended).toBe(false);
+    expect(cleanDoctor?.issues).toEqual([]);
+  });
+
   it('rejects restore when the backup manifest checksum does not match the artifact', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Tamper Detection' });
