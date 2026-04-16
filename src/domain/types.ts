@@ -210,6 +210,17 @@ export interface VolumeRestoreResult {
   validatedWithManifest: boolean;
 }
 
+export interface VolumeRestoreDrillResult {
+  generatedAt: string;
+  backupPath: string;
+  sandboxPath: string | null;
+  keptSandbox: boolean;
+  healthy: boolean;
+  inspection: VolumeBackupInspectionResult;
+  restore: VolumeRestoreResult;
+  doctor: StorageDoctorReport;
+}
+
 export interface StorageDoctorIssue {
   code:
     | 'DATABASE_OPEN_FAILED'

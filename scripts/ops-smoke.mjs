@@ -197,6 +197,32 @@ try {
     'Inspection artifact should match the backup checksum.',
   );
 
+  const restoreDrillReportPath = path.join(reportsDir, 'restore-drill-report.json');
+  const restoreDrillRun = runCli(
+    ['restore-drill', backupPath, '--json', '--output', restoreDrillReportPath],
+    runtimePaths,
+  );
+  const restoreDrillResult = JSON.parse(restoreDrillRun.stdout);
+  const restoreDrillArtifact = await readJson(restoreDrillReportPath);
+
+  assert(
+    restoreDrillResult.healthy === true,
+    'Restore drill should report a healthy isolated restore.',
+  );
+  assertArtifactEnvelope(
+    restoreDrillArtifact,
+    'restore-drill',
+    packageJson.version,
+  );
+  assert(
+    restoreDrillArtifact.payload.restore.volumeId === volume.id,
+    'Restore drill artifact should report the restored volume id.',
+  );
+  assert(
+    restoreDrillArtifact.payload.sandboxPath === null,
+    'Restore drill should clean its sandbox by default.',
+  );
+
   await runtime.volumeService.deleteVolume(volume.id);
 
   const restoreReportPath = path.join(reportsDir, 'restore-report.json');
@@ -436,7 +462,7 @@ try {
   );
 
   process.stdout.write(
-    `[ops-smoke] verified backup, inspect, restore, doctor, support bundle, and support bundle inspection flows for ${volume.id}\n`,
+    `[ops-smoke] verified backup, inspect, restore drill, restore, doctor, support bundle, and support bundle inspection flows for ${volume.id}\n`,
   );
 } catch (error) {
   const message = error instanceof Error ? error.message : 'Unknown smoke failure.';
