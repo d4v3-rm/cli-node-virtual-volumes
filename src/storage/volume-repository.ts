@@ -1664,6 +1664,23 @@ export class VolumeRepository {
               : []
           ),
         ];
+        const temporaryBlobReferenceTargets = new Set(
+          issuesBefore
+            .filter(
+              (
+                issue,
+              ): issue is StorageDoctorIssue & {
+                entryId: string;
+                contentRef: string;
+              } =>
+                issue.code === 'TEMPORARY_BLOB_REFERENCE' &&
+                issue.entryId !== undefined &&
+                issue.contentRef !== undefined,
+            )
+            .map((issue) => issue.entryId),
+        );
+        let temporaryBlobReferencesPromoted = false;
+        const temporaryBlobRefsToDelete = new Set<string>();
         let entrySizesSynchronized = false;
         const entrySizeSyncTargets = new Set(
           issuesBefore
@@ -1688,6 +1705,62 @@ export class VolumeRepository {
           actions.push({
             code: 'CLEAR_MUTATION_JOURNAL',
             message: `Cleared ${pendingMutationJournals.length} pending mutation journal entr${pendingMutationJournals.length === 1 ? 'y' : 'ies'} after an explicit repair verification run.`,
+          });
+        }
+
+        for (const entryId of temporaryBlobReferenceTargets) {
+          const entry = record.state.entries[entryId];
+          if (entry?.kind !== 'file' || !entry.contentRef.startsWith('tmp_')) {
+            continue;
+          }
+
+          const temporaryContentRef = entry.contentRef;
+          const payloadStats = await this.readBlobPayloadStats(
+            database,
+            temporaryContentRef,
+          );
+          if (!payloadStats) {
+            continue;
+          }
+
+          const finalContentRef = payloadStats.actualContentRef;
+          const existingFinalBlobStats =
+            finalContentRef === temporaryContentRef
+              ? null
+              : await this.readBlobPayloadStats(database, finalContentRef);
+
+          if (
+            existingFinalBlobStats &&
+            existingFinalBlobStats.actualContentRef !== finalContentRef
+          ) {
+            continue;
+          }
+
+          if (existingFinalBlobStats) {
+            temporaryBlobRefsToDelete.add(temporaryContentRef);
+          } else if (finalContentRef !== temporaryContentRef) {
+            await this.duplicateBlobContentRef(
+              database,
+              temporaryContentRef,
+              finalContentRef,
+              payloadStats.actualSize,
+              payloadStats.actualChunkCount,
+            );
+          }
+
+          entry.contentRef = finalContentRef;
+          if (entry.size !== payloadStats.actualSize) {
+            entry.size = payloadStats.actualSize;
+            entry.updatedAt = new Date().toISOString();
+            entrySizesSynchronized = true;
+          }
+          temporaryBlobRefsToDelete.add(temporaryContentRef);
+          temporaryBlobReferencesPromoted = true;
+
+          actions.push({
+            code: 'PROMOTE_TEMPORARY_BLOB_REFERENCE',
+            message: `Promoted temporary blob ${temporaryContentRef} to final content ref ${finalContentRef} for file entry ${entry.id}.`,
+            contentRef: finalContentRef,
           });
         }
 
@@ -1811,8 +1884,11 @@ export class VolumeRepository {
           (issue) => issue.code === 'BLOB_REFERENCE_COUNT_MISMATCH',
         );
 
-        if (entrySizesSynchronized || hasManifestMismatch) {
+        if (temporaryBlobReferencesPromoted || entrySizesSynchronized || hasManifestMismatch) {
           await this.persistVolumeToDatabase(database, record);
+          for (const temporaryContentRef of temporaryBlobRefsToDelete) {
+            await this.deleteBlobRows(database, temporaryContentRef);
+          }
           if (hasManifestMismatch) {
             actions.push({
               code: 'REBUILD_MANIFEST',
@@ -2060,6 +2136,88 @@ export class VolumeRepository {
         -(index + 1),
       );
     }
+  }
+
+  private async promoteBlobContentRef(
+    database: SqliteVolumeDatabase,
+    temporaryContentRef: string,
+    contentRef: string,
+    size: number,
+    chunkCount: number,
+  ): Promise<void> {
+    await database.run(
+      `UPDATE blobs
+          SET size = ?,
+              chunk_count = ?,
+              content_ref = ?
+        WHERE content_ref = ?`,
+      size,
+      chunkCount,
+      contentRef,
+      temporaryContentRef,
+    );
+    await database.run(
+      `UPDATE blob_chunks
+          SET content_ref = ?
+        WHERE content_ref = ?`,
+      contentRef,
+      temporaryContentRef,
+    );
+  }
+
+  private async duplicateBlobContentRef(
+    database: SqliteVolumeDatabase,
+    sourceContentRef: string,
+    targetContentRef: string,
+    size: number,
+    chunkCount: number,
+  ): Promise<void> {
+    await database.run(
+      `INSERT INTO blobs (
+         content_ref,
+         reference_count,
+         size,
+         chunk_count,
+         content,
+         created_at
+       )
+       SELECT
+         ?,
+         0,
+         ?,
+         ?,
+         content,
+         created_at
+       FROM blobs
+      WHERE content_ref = ?`,
+      targetContentRef,
+      size,
+      chunkCount,
+      sourceContentRef,
+    );
+    await database.run(
+      `INSERT INTO blob_chunks (
+         content_ref,
+         chunk_index,
+         content
+       )
+       SELECT
+         ?,
+         chunk_index,
+         content
+       FROM blob_chunks
+      WHERE content_ref = ?`,
+      targetContentRef,
+      sourceContentRef,
+    );
+  }
+
+  private async deleteBlobRows(
+    database: SqliteVolumeDatabase,
+    contentRef: string,
+  ): Promise<void> {
+    await database.run('DELETE FROM blob_chunks WHERE content_ref = ?', contentRef);
+    await database.run('DELETE FROM blobs WHERE content_ref = ?', contentRef);
   }
 
   private async readBlobPayloadStats(
@@ -2348,6 +2506,16 @@ export class VolumeRepository {
           entryId: entry.id,
         });
         continue;
+      }
+
+      if (entry.contentRef.startsWith('tmp_')) {
+        issues.push({
+          code: 'TEMPORARY_BLOB_REFERENCE',
+          severity: 'error',
+          message: `File ${entry.id} (${entry.name}) still references temporary staged blob ${entry.contentRef} instead of a final content hash.`,
+          contentRef: entry.contentRef,
+          entryId: entry.id,
+        });
       }
 
       const actualBlobSize = actualBlobSizes.get(entry.contentRef);

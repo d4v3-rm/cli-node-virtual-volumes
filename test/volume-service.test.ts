@@ -2784,6 +2784,88 @@ describe('VolumeService', () => {
     expect(snapshot.entries[0]?.size).toBe(Buffer.byteLength('sized payload', 'utf8'));
   });
 
+  it('repairs file entries that still reference temporary staged blobs', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({
+      name: 'Temporary Blob Reference',
+    });
+    const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/temp.txt', 'temporary payload');
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      const fileRow = await database.get<{ content_ref: string }>(
+        `SELECT content_ref
+           FROM entries
+          WHERE name = 'temp.txt'
+          LIMIT 1`,
+      );
+      const originalContentRef = fileRow?.content_ref ?? '';
+      const temporaryContentRef = 'tmp_manual_repair_target';
+
+      await database.exec('PRAGMA foreign_keys = OFF');
+
+      try {
+        await database.run(
+          `UPDATE blobs
+              SET content_ref = ?
+            WHERE content_ref = ?`,
+          temporaryContentRef,
+          originalContentRef,
+        );
+        await database.run(
+          `UPDATE blob_chunks
+              SET content_ref = ?
+            WHERE content_ref = ?`,
+          temporaryContentRef,
+          originalContentRef,
+        );
+        await database.run(
+          `UPDATE entries
+              SET content_ref = ?
+            WHERE id = (
+              SELECT id
+                FROM entries
+               WHERE name = 'temp.txt'
+               LIMIT 1
+            )`,
+          temporaryContentRef,
+        );
+      } finally {
+        await database.exec('PRAGMA foreign_keys = ON');
+      }
+    });
+
+    const doctorReport = await runtime.volumeService.runDoctor(volume.id);
+    const temporaryIssue = doctorReport.volumes[0]?.issues.find(
+      (issue) => issue.code === 'TEMPORARY_BLOB_REFERENCE',
+    );
+
+    expect(doctorReport.healthy).toBe(false);
+    expect(temporaryIssue?.message).toContain('temporary staged blob');
+
+    const repairReport = await runtime.volumeService.runRepair(volume.id);
+    const repairedVolume = repairReport.volumes[0];
+
+    expect(repairReport.healthy).toBe(true);
+    expect(
+      repairedVolume?.actions.some(
+        (action) => action.code === 'PROMOTE_TEMPORARY_BLOB_REFERENCE',
+      ),
+    ).toBe(true);
+    expect(repairedVolume?.issueCountAfter).toBe(0);
+
+    const preview = await runtime.volumeService.previewFile(volume.id, '/temp.txt');
+    expect(preview.content).toContain('temporary payload');
+
+    const doctorAfter = await runtime.volumeService.runDoctor(volume.id);
+    expect(
+      doctorAfter.volumes[0]?.issues.some(
+        (issue) => issue.code === 'TEMPORARY_BLOB_REFERENCE',
+      ),
+    ).toBe(false);
+  });
+
   it('repairs non-contiguous blob chunk indexes when payload order is still sane', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Blob Chunk Index Drift' });
