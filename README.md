@@ -376,6 +376,7 @@ Use `virtual-volumes support-bundle ... --verify-blobs` when you want the embedd
 `inspect-support-bundle` validates:
 
 - required metadata files
+- `doctor-report.json` structure and consistency with the bundle manifest and scope
 - manifest path consistency
 - `action-plan.json` structure and consistency with the bundle manifest
 - checksum inventory structure
