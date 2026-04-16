@@ -4,13 +4,47 @@ import { APP_VERSION } from '../config/app-metadata.js';
 import { createCorrelationId } from '../utils/correlation.js';
 import { writeJsonAtomic } from '../utils/fs.js';
 
+export interface CliArtifactHandlingProfile {
+  redacted: boolean;
+  sensitivity: 'sanitized' | 'restricted';
+  sharingRecommendation: 'external-shareable' | 'internal-only';
+  recommendedRetentionDays: number;
+  notes: string[];
+}
+
 export interface CliJsonArtifact<T> {
   cliVersion: string;
   command: string;
   correlationId: string;
   generatedAt: string;
+  handling: CliArtifactHandlingProfile;
   payload: T;
 }
+
+export const buildCliArtifactHandlingProfile = (
+  redacted: boolean,
+): CliArtifactHandlingProfile =>
+  redacted
+    ? {
+        redacted: true,
+        sensitivity: 'sanitized',
+        sharingRecommendation: 'external-shareable',
+        recommendedRetentionDays: 30,
+        notes: [
+          'Artifact payload was redacted before export.',
+          'External sharing is allowed only when the receiving process accepts sanitized operational data.',
+        ],
+      }
+    : {
+        redacted: false,
+        sensitivity: 'restricted',
+        sharingRecommendation: 'internal-only',
+        recommendedRetentionDays: 7,
+        notes: [
+          'Artifact payload may contain sensitive operational paths or runtime details.',
+          'Keep this artifact inside the organization unless it is regenerated with redaction enabled.',
+        ],
+      };
 
 export const writeCliJsonArtifact = async (
   command: string,
@@ -18,6 +52,7 @@ export const writeCliJsonArtifact = async (
   outputPath: string,
   options: {
     correlationId?: string;
+    redactSensitiveDetails?: boolean;
   } = {},
 ): Promise<string> => {
   const absoluteOutputPath = path.resolve(outputPath);
@@ -26,6 +61,9 @@ export const writeCliJsonArtifact = async (
     command,
     correlationId: options.correlationId ?? createCorrelationId(),
     generatedAt: new Date().toISOString(),
+    handling: buildCliArtifactHandlingProfile(
+      options.redactSensitiveDetails ?? false,
+    ),
     payload,
   };
   await writeJsonAtomic(absoluteOutputPath, artifact);
