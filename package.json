@@ -59,10 +59,7 @@
     "virtual-volume",
     "volume"
   ],
-  "author": {
-    "name": "Salvatore Scarano",
-    "email": "scarano.salvatore.71@gmail.com"
-  },
+  "author": "d4v3-rm",
   "license": "MIT",
   "engines": {
     "node": ">=20"

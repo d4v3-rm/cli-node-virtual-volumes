@@ -4,7 +4,7 @@ Questo runbook descrive il flusso operativo consigliato per backup, verifica e r
 
 ## Obiettivo
 
-Ogni backup enterprise-grade deve essere:
+Ogni backup affidabile deve essere:
 
 - consistente a livello SQLite
 - verificabile prima del restore
