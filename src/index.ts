@@ -17,6 +17,7 @@ import {
   formatSupportBundleInspectionResult,
   formatSupportBundleResult,
 } from './cli/support-bundle.js';
+import { formatVolumeCompactionResult } from './cli/maintenance.js';
 import { runRestoreDrill } from './ops/restore-drill.js';
 import { createSupportBundle, inspectSupportBundle } from './ops/support-bundle.js';
 import { TerminalApp } from './ui/terminal-app.js';
@@ -243,6 +244,42 @@ const main = async (): Promise<void> => {
           if (!result.healthy) {
             process.exitCode = 1;
           }
+        });
+      },
+    );
+
+  program
+    .command('compact')
+    .description('Compact a managed volume database and reclaim SQLite free pages.')
+    .argument('<volumeId>', 'Compact a specific volume by id')
+    .option('--json', 'Output the compaction result as JSON')
+    .option('--output <path>', 'Write the structured JSON result to this file')
+    .action(
+      async (
+        volumeId: string,
+        options: { json?: boolean; output?: string },
+      ) => {
+        await withRuntime(async (runtime) => {
+          const correlationId = runtime.correlationId;
+          const result = await runtime.volumeService.compactVolume(volumeId);
+          const artifactPath = options.output
+            ? await writeCliJsonArtifact(
+                'compact',
+                sanitizeArtifactPayload(result, runtime.config.redactSensitiveDetails),
+                options.output,
+                {
+                  correlationId,
+                },
+              )
+            : null;
+
+          console.log(
+            renderCliResult(result, formatVolumeCompactionResult, {
+              artifactPath,
+              correlationId,
+              json: options.json,
+            }),
+          );
         });
       },
     );

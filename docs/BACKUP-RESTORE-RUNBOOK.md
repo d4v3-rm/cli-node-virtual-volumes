@@ -140,6 +140,13 @@ Per un backup di routine:
 4. Se serve audit operativo, aggiungi `--output <path>` per salvare l'artifact JSON del comando.
 5. Conserva insieme `.sqlite` e `.manifest.json`.
 
+Per manutenzione ordinaria del database SQLite di un volume gia' in esercizio:
+
+1. Esegui `virtual-volumes doctor <volumeId>` per verificare che il volume sia integro.
+2. Esegui `virtual-volumes compact <volumeId>` per forzare checkpoint WAL, `VACUUM` e `PRAGMA optimize`.
+3. Se vuoi tracciare l'intervento, aggiungi `--output <path>` e conserva l'artifact del compattamento.
+4. Riesegui `virtual-volumes doctor <volumeId>` se vuoi validare il volume anche dopo la compattazione.
+
 Per un restore di emergenza:
 
 1. Esegui `virtual-volumes inspect-backup`.

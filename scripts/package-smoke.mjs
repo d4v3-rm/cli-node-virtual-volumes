@@ -153,6 +153,7 @@ try {
   const backupsDir = path.join(runtimeRoot, 'backups');
   const doctorArtifactPath = path.join(runtimeRoot, 'doctor-report.json');
   const backupArtifactPath = path.join(runtimeRoot, 'backup-report.json');
+  const compactArtifactPath = path.join(runtimeRoot, 'compact-report.json');
   const restoreDrillArtifactPath = path.join(runtimeRoot, 'restore-drill-report.json');
   const supportBundlePath = path.join(runtimeRoot, 'support-bundle');
   const supportBundleSummaryPath = path.join(
@@ -334,6 +335,58 @@ try {
     'Installed CLI restore-drill should clean its sandbox by default.',
   );
 
+  const compactRun = runCommand(
+    process.execPath,
+    [
+      installedCliPath,
+      '--data-dir',
+      dataDir,
+      '--log-dir',
+      logDir,
+      '--log-level',
+      'silent',
+      'compact',
+      volumeId,
+      '--json',
+      '--output',
+      compactArtifactPath,
+    ],
+    { cwd: consumerRoot },
+  );
+  const compactPayload = JSON.parse(compactRun.stdout);
+  const compactArtifact = await readJson(compactArtifactPath);
+
+  assert(
+    compactPayload.volumeId === volumeId,
+    'Installed CLI compact command should target the smoke-test volume.',
+  );
+  assert(
+    compactArtifact.command === 'compact',
+    'Installed CLI compact artifact should include the command metadata.',
+  );
+  assert(
+    compactArtifact.payload.volumeId === volumeId,
+    'Installed CLI compact artifact should target the smoke-test volume.',
+  );
+  assert(
+    Number.isInteger(compactArtifact.payload.bytesBefore) &&
+      compactArtifact.payload.bytesBefore >= 0,
+    'Installed CLI compact artifact should report a non-negative bytesBefore value.',
+  );
+  assert(
+    Number.isInteger(compactArtifact.payload.bytesAfter) &&
+      compactArtifact.payload.bytesAfter >= 0,
+    'Installed CLI compact artifact should report a non-negative bytesAfter value.',
+  );
+  assert(
+    compactArtifact.payload.reclaimedBytes ===
+      Math.max(
+        0,
+        compactArtifact.payload.bytesBefore - compactArtifact.payload.bytesAfter,
+      ),
+    'Installed CLI compact artifact should report reclaimed bytes consistently.',
+  );
+
   const supportBundleRun = runCommand(
     process.execPath,
     [
@@ -469,7 +522,7 @@ try {
   );
 
   process.stdout.write(
-    `[package-smoke] installed ${path.basename(tarballPath)} and verified package import + CLI backup + restore drill + doctor + support bundle + support bundle inspection flows\n`,
+    `[package-smoke] installed ${path.basename(tarballPath)} and verified package import + CLI backup + restore drill + compact + doctor + support bundle + support bundle inspection flows\n`,
   );
 } catch (error) {
   const message =

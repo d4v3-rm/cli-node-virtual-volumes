@@ -72,6 +72,31 @@ const getPersistedBlobChunkCount = async (
     return row?.count ?? 0;
   });
 
+const getPersistedDatabaseArtifactBytes = async (
+  dataDir: string,
+  volumeId: string,
+): Promise<number> => {
+  const databasePath = getVolumeDatabasePath(dataDir, volumeId);
+  const artifactPaths = [
+    databasePath,
+    `${databasePath}-journal`,
+    `${databasePath}-wal`,
+    `${databasePath}-shm`,
+  ];
+  const sizes = await Promise.all(
+    artifactPaths.map(async (artifactPath) => {
+      try {
+        const stats = await fs.stat(artifactPath);
+        return stats.size;
+      } catch {
+        return 0;
+      }
+    }),
+  );
+
+  return sizes.reduce((total, size) => total + size, 0);
+};
+
 afterEach(async () => {
   await Promise.all(runtimes.splice(0, runtimes.length).map((runtime) => runtime.close()));
   await Promise.all(
@@ -1117,6 +1142,33 @@ describe('VolumeService', () => {
       kind: 'text',
       content: 'must survive',
     });
+  });
+
+  it('compacts volume databases and reclaims free SQLite pages after churn', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Compaction Drill' });
+    const largePayload = 'x'.repeat(2 * 1024 * 1024);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/large.txt', largePayload);
+    await runtime.volumeService.deleteEntry(volume.id, '/large.txt');
+
+    const bytesBefore = await getPersistedDatabaseArtifactBytes(runtime.config.dataDir, volume.id);
+    const result = await runtime.volumeService.compactVolume(volume.id);
+    const bytesAfter = await getPersistedDatabaseArtifactBytes(runtime.config.dataDir, volume.id);
+    const rootSnapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+
+    expect(result).toMatchObject({
+      volumeId: volume.id,
+      volumeName: 'Compaction Drill',
+      revision: 3,
+      schemaVersion: 3,
+      databasePath: getVolumeDatabasePath(runtime.config.dataDir, volume.id),
+    });
+    expect(result.bytesBefore).toBe(bytesBefore);
+    expect(result.bytesAfter).toBe(bytesAfter);
+    expect(result.bytesAfter).toBeLessThan(bytesBefore);
+    expect(result.reclaimedBytes).toBe(bytesBefore - bytesAfter);
+    expect(rootSnapshot.entries).toHaveLength(0);
   });
 
   it('rejects restore when the backup manifest checksum does not match the artifact', async () => {

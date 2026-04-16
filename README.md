@@ -258,6 +258,7 @@ The CLI exposes a full recovery workflow:
 | `virtual-volumes restore-drill <backupPath>` | Run an isolated inspect, restore, and doctor drill in a temporary sandbox |
 | `virtual-volumes restore <backupPath>` | Restore a volume from backup |
 | `virtual-volumes restore <backupPath> --force` | Replace an existing volume with rollback protection |
+| `virtual-volumes compact <volumeId>` | Compact a managed SQLite volume and reclaim free pages |
 | `virtual-volumes doctor [volumeId]` | Run consistency checks after restore |
 | `virtual-volumes support-bundle <destinationPath> [volumeId]` | Export doctor data, checksum inventory, runtime metadata, and log snapshot for support |
 | `virtual-volumes inspect-support-bundle <bundlePath>` | Verify support bundle metadata, required files, checksums, and sharing suitability |
@@ -269,6 +270,7 @@ virtual-volumes backup vol_finance_01 ./backups/finance.sqlite
 virtual-volumes inspect-backup ./backups/finance.sqlite
 virtual-volumes restore-drill ./backups/finance.sqlite
 virtual-volumes restore ./backups/finance.sqlite
+virtual-volumes compact vol_finance_01
 virtual-volumes doctor vol_finance_01
 virtual-volumes support-bundle ./reports/finance-support vol_finance_01 --backup-path ./backups/finance.sqlite
 virtual-volumes inspect-support-bundle ./reports/finance-support --require-sharing internal-only
@@ -297,6 +299,12 @@ Each standard backup produces:
 - restores the backup into an isolated temporary data directory
 - runs `doctor` on the restored copy
 - removes the sandbox automatically unless `--keep-sandbox` is used
+
+`compact` runs SQLite maintenance on a managed volume:
+
+- checkpoints and truncates the WAL
+- runs `VACUUM` and `PRAGMA optimize`
+- reports database artifact bytes before and after compaction
 
 For the full operational procedure, drills, and audit checklist, see [docs/BACKUP-RESTORE-RUNBOOK.md](./docs/BACKUP-RESTORE-RUNBOOK.md).
 
