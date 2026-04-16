@@ -1,0 +1,92 @@
+import type { Logger } from 'pino';
+
+import { VolumeService } from '../application/volume-service.js';
+import type { AppConfig, RuntimeOverrides } from '../config/env.js';
+import { loadAppConfig } from '../config/env.js';
+import {
+  createAppLogger,
+  createAuditLogger,
+  pruneRetainedLogFiles,
+} from '../logging/logger.js';
+import { VolumeRepository } from '../storage/volume-repository.js';
+import { createCorrelationId } from '../utils/correlation.js';
+import { sanitizeObservabilityValue } from '../utils/observability-redaction.js';
+
+export interface AppRuntime {
+  auditLogger: Logger;
+  close: () => Promise<void>;
+  config: AppConfig;
+  correlationId: string;
+  logger: Logger;
+  volumeService: VolumeService;
+}
+
+export const createRuntime = async (
+  overrides: RuntimeOverrides = {},
+): Promise<AppRuntime> => {
+  const config = loadAppConfig(overrides);
+  const correlationId =
+    overrides.correlationId?.trim().length
+      ? overrides.correlationId.trim()
+      : createCorrelationId();
+  const appLogger = createAppLogger(config, { correlationId });
+  const auditLogger = createAuditLogger(config, { correlationId });
+  const logger = appLogger.logger;
+  const prunedLogs = await pruneRetainedLogFiles(config);
+  const repository = new VolumeRepository(config, logger.child({ scope: 'repository' }));
+
+  await repository.initialize();
+
+  const volumeService = new VolumeService(
+    repository,
+    config,
+    logger.child({ scope: 'volume-service' }),
+    auditLogger.logger,
+  );
+
+  if (prunedLogs.appDeletedFiles.length > 0 || prunedLogs.auditDeletedFiles.length > 0) {
+    logger.info(
+      sanitizeObservabilityValue(
+        {
+          appDeletedFiles: prunedLogs.appDeletedFiles.length,
+          auditDeletedFiles: prunedLogs.auditDeletedFiles.length,
+          logRetentionDays: config.logRetentionDays,
+        },
+        config.redactSensitiveDetails,
+      ),
+      'Pruned retained log files.',
+    );
+  }
+
+  logger.info(
+    sanitizeObservabilityValue(
+      {
+        dataDir: config.dataDir,
+        logDir: config.logDir,
+        auditLogDir: config.auditLogDir,
+        logRetentionDays: config.logRetentionDays,
+        supportBundleLogTailLines: config.supportBundleLogTailLines,
+      },
+      config.redactSensitiveDetails,
+    ),
+    'Runtime initialized.',
+  );
+
+  let closed = false;
+
+  return {
+    auditLogger: auditLogger.logger,
+    close: async () => {
+      if (closed) {
+        return;
+      }
+
+      closed = true;
+      await Promise.all([appLogger.close(), auditLogger.close()]);
+    },
+    config,
+    correlationId,
+    logger,
+    volumeService,
+  };
+};

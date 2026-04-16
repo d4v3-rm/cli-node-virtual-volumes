@@ -1,0 +1,702 @@
+#!/usr/bin/env node
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import process from 'node:process';
+import { fileURLToPath } from 'node:url';
+
+import { open } from 'sqlite';
+import sqlite3 from 'sqlite3';
+
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const packageJsonPath = path.join(rootDir, 'package.json');
+const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+
+const assert = (condition, message) => {
+  if (!condition) {
+    throw new Error(message);
+  }
+};
+
+const assertArtifactHandling = (artifact, expectedCommand) => {
+  assert(
+    artifact.handling &&
+      typeof artifact.handling === 'object' &&
+      typeof artifact.handling.redacted === 'boolean' &&
+      typeof artifact.handling.sensitivity === 'string' &&
+      typeof artifact.handling.sharingRecommendation === 'string' &&
+      Number.isInteger(artifact.handling.recommendedRetentionDays) &&
+      Array.isArray(artifact.handling.notes),
+    `Installed CLI ${expectedCommand} artifact should include handling metadata.`,
+  );
+};
+
+const pathExists = async (targetPath) => {
+  try {
+    await fs.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const readJson = async (filePath) =>
+  JSON.parse(await fs.readFile(filePath, 'utf8'));
+
+const tamperBlobSize = async (databasePath, entryName, deltaBytes) => {
+  const database = await open({
+    filename: databasePath,
+    driver: sqlite3.Database,
+  });
+
+  try {
+    const fileRow = await database.get(
+      `SELECT entries.content_ref AS content_ref
+         FROM entries
+        WHERE entries.name = ?
+        LIMIT 1`,
+      entryName,
+    );
+
+    assert(
+      fileRow?.content_ref,
+      `Unable to locate ${entryName} while preparing packaged repair-safe smoke drift.`,
+    );
+
+    await database.run(
+      `UPDATE blobs
+          SET size = size + ?
+        WHERE content_ref = ?`,
+      deltaBytes,
+      fileRow.content_ref,
+    );
+  } finally {
+    await database.close();
+  }
+};
+
+const parseTrailingJson = (value) => {
+  const trimmed = value.trim();
+  const arrayStart = trimmed.lastIndexOf('\n[');
+  const objectStart = trimmed.lastIndexOf('\n{');
+  const jsonStartCandidates = [trimmed.startsWith('[') || trimmed.startsWith('{') ? 0 : -1];
+
+  if (arrayStart >= 0) {
+    jsonStartCandidates.push(arrayStart + 1);
+  }
+
+  if (objectStart >= 0) {
+    jsonStartCandidates.push(objectStart + 1);
+  }
+
+  for (const jsonStart of jsonStartCandidates.sort((left, right) => right - left)) {
+    if (jsonStart < 0) {
+      continue;
+    }
+
+    try {
+      return JSON.parse(trimmed.slice(jsonStart));
+    } catch {
+      // Fall through and try the next candidate.
+    }
+  }
+
+  return JSON.parse(trimmed);
+};
+
+const quoteWindowsArg = (value) => {
+  if (value.length === 0) {
+    return '""';
+  }
+
+  if (!/[ \t"&()^<>|]/.test(value)) {
+    return value;
+  }
+
+  return `"${value
+    .replace(/(\\*)"/g, '$1$1\\"')
+    .replace(/(\\+)$/g, '$1$1')}"`;
+};
+
+const runCommand = (command, args, options = {}) => {
+  const isWindowsCmd = process.platform === 'win32' && command.endsWith('.cmd');
+  const executable = isWindowsCmd ? 'cmd.exe' : command;
+  const finalArgs = isWindowsCmd
+    ? ['/d', '/s', '/c', [quoteWindowsArg(command), ...args.map(quoteWindowsArg)].join(' ')]
+    : args;
+  const result = spawnSync(executable, finalArgs, {
+    cwd: rootDir,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      NO_COLOR: '1',
+      ...options.env,
+    },
+    ...options,
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  if (result.status !== 0) {
+    throw new Error(
+      [
+        `Command failed: ${command} ${args.join(' ')}`,
+        result.stdout.trim(),
+        result.stderr.trim(),
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    );
+  }
+
+  return {
+    stdout: result.stdout.trim(),
+    stderr: result.stderr.trim(),
+  };
+};
+
+const resolveTarballPath = async () => {
+  const explicitPath = process.argv[2];
+  if (explicitPath) {
+    return path.resolve(explicitPath);
+  }
+
+  const packRun = runCommand(npmCommand, ['pack', '--json']);
+  const packResults = parseTrailingJson(packRun.stdout);
+  const packedFile = packResults.at(0)?.filename;
+
+  assert(typeof packedFile === 'string', 'npm pack did not produce a tarball.');
+  return path.join(rootDir, packedFile);
+};
+
+let sandboxRoot = null;
+
+try {
+  const packageJson = await readJson(packageJsonPath);
+  const tarballPath = await resolveTarballPath();
+
+  assert(await pathExists(tarballPath), `Package tarball not found: ${tarballPath}`);
+
+  sandboxRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'virtual-volumes-package-smoke-'),
+  );
+
+  const consumerRoot = path.join(sandboxRoot, 'consumer');
+  const runtimeRoot = path.join(sandboxRoot, 'runtime');
+  const dataDir = path.join(runtimeRoot, 'data');
+  const logDir = path.join(runtimeRoot, 'logs');
+  const backupsDir = path.join(runtimeRoot, 'backups');
+  const doctorArtifactPath = path.join(runtimeRoot, 'doctor-report.json');
+  const backupArtifactPath = path.join(runtimeRoot, 'backup-report.json');
+  const compactRecommendedArtifactPath = path.join(
+    runtimeRoot,
+    'compact-recommended-report.json',
+  );
+  const compactArtifactPath = path.join(runtimeRoot, 'compact-report.json');
+  const repairSafeArtifactPath = path.join(runtimeRoot, 'repair-safe-report.json');
+  const restoreDrillArtifactPath = path.join(runtimeRoot, 'restore-drill-report.json');
+  const supportBundlePath = path.join(runtimeRoot, 'support-bundle');
+  const supportBundleSummaryPath = path.join(
+    runtimeRoot,
+    'support-bundle-summary.json',
+  );
+  const supportBundleInspectionArtifactPath = path.join(
+    runtimeRoot,
+    'support-bundle-inspection.json',
+  );
+
+  await fs.mkdir(consumerRoot, { recursive: true });
+  await fs.mkdir(backupsDir, { recursive: true });
+
+  const consumerTarballPath = path.join(consumerRoot, path.basename(tarballPath));
+  await fs.copyFile(tarballPath, consumerTarballPath);
+
+  runCommand(npmCommand, ['init', '-y'], { cwd: consumerRoot });
+  runCommand(
+    npmCommand,
+    ['install', '--no-package-lock', `./${path.basename(consumerTarballPath)}`],
+    { cwd: consumerRoot },
+  );
+
+  const installedPackageRoot = path.join(consumerRoot, 'node_modules', packageJson.name);
+  const installedPackageJson = await readJson(
+    path.join(installedPackageRoot, 'package.json'),
+  );
+  const installedCliPath = path.join(
+    installedPackageRoot,
+    installedPackageJson.bin['virtual-volumes'],
+  );
+
+  assert(
+    installedPackageJson.version === packageJson.version,
+    'Installed tarball version does not match the repository version.',
+  );
+  assert(
+    await pathExists(installedCliPath),
+    'Installed package is missing the CLI entrypoint.',
+  );
+
+  const bootstrapRun = runCommand(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      [
+        "import { createRuntime } from 'cli-node-virtual-volumes';",
+        'const [dataDir, logDir] = process.argv.slice(-2);',
+        "const runtime = await createRuntime({ dataDir, logDir, logLevel: 'silent' });",
+        "const volume = await runtime.volumeService.createVolume({ name: 'Package Smoke' });",
+        "await runtime.volumeService.writeTextFile(volume.id, '/package.txt', 'package smoke ok');",
+        "await runtime.volumeService.writeTextFile(volume.id, '/transient-churn.txt', 'x'.repeat(2 * 1024 * 1024));",
+        "await runtime.volumeService.deleteEntry(volume.id, '/transient-churn.txt');",
+        'await runtime.close();',
+        'process.stdout.write(volume.id);',
+      ].join(' '),
+      dataDir,
+      logDir,
+    ],
+    { cwd: consumerRoot },
+  );
+  const volumeId = bootstrapRun.stdout.trim();
+
+  assert(
+    volumeId.startsWith('vol_'),
+    'Installed package did not create a valid test volume.',
+  );
+
+  const backupPath = path.join(backupsDir, 'package-smoke.sqlite');
+  const backupRun = runCommand(
+    process.execPath,
+    [
+      installedCliPath,
+      '--data-dir',
+      dataDir,
+      '--log-dir',
+      logDir,
+      '--log-level',
+      'silent',
+      'backup',
+      volumeId,
+      backupPath,
+      '--json',
+      '--output',
+      backupArtifactPath,
+    ],
+    { cwd: consumerRoot },
+  );
+  const backupPayload = JSON.parse(backupRun.stdout);
+  const backupArtifact = await readJson(backupArtifactPath);
+
+  assert(
+    backupPayload.volumeId === volumeId,
+    'Installed CLI backup command should target the smoke-test volume.',
+  );
+  assert(
+    backupArtifact.command === 'backup',
+    'Installed CLI backup artifact should include the command metadata.',
+  );
+  assertArtifactHandling(backupArtifact, 'backup');
+
+  const restoreDrillRun = runCommand(
+    process.execPath,
+    [
+      installedCliPath,
+      '--data-dir',
+      dataDir,
+      '--log-dir',
+      logDir,
+      '--log-level',
+      'silent',
+      'restore-drill',
+      backupPath,
+      '--json',
+      '--output',
+      restoreDrillArtifactPath,
+    ],
+    { cwd: consumerRoot },
+  );
+  const restoreDrillPayload = JSON.parse(restoreDrillRun.stdout);
+  const restoreDrillArtifact = await readJson(restoreDrillArtifactPath);
+
+  assert(
+    restoreDrillPayload.healthy === true,
+    'Installed CLI restore-drill command should report a healthy isolated restore.',
+  );
+  assert(
+    restoreDrillArtifact.command === 'restore-drill',
+    'Installed CLI restore-drill artifact should include the command metadata.',
+  );
+  assertArtifactHandling(restoreDrillArtifact, 'restore-drill');
+  assert(
+    restoreDrillArtifact.payload.restore.volumeId === volumeId,
+    'Installed CLI restore-drill artifact should reference the smoke-test volume.',
+  );
+  assert(
+    restoreDrillArtifact.payload.sandboxPath === null,
+    'Installed CLI restore-drill should clean its sandbox by default.',
+  );
+
+  const compactRecommendedRun = runCommand(
+    process.execPath,
+    [
+      installedCliPath,
+      '--data-dir',
+      dataDir,
+      '--log-dir',
+      logDir,
+      '--log-level',
+      'silent',
+      'compact-recommended',
+      '--strict-plan',
+      '--json',
+      '--output',
+      compactRecommendedArtifactPath,
+    ],
+    { cwd: consumerRoot },
+  );
+  const compactRecommendedPayload = JSON.parse(compactRecommendedRun.stdout);
+  const compactRecommendedArtifact = await readJson(compactRecommendedArtifactPath);
+
+  assert(
+    compactRecommendedPayload.recommendedVolumes === 1,
+    'Installed CLI compact-recommended should detect the churned smoke-test volume.',
+  );
+  assert(
+    compactRecommendedPayload.compactedVolumes === 1,
+    'Installed CLI compact-recommended should compact the churned smoke-test volume.',
+  );
+  assert(
+    compactRecommendedArtifact.command === 'compact-recommended',
+    'Installed CLI compact-recommended artifact should include the command metadata.',
+  );
+  assertArtifactHandling(compactRecommendedArtifact, 'compact-recommended');
+
+  const compactRun = runCommand(
+    process.execPath,
+    [
+      installedCliPath,
+      '--data-dir',
+      dataDir,
+      '--log-dir',
+      logDir,
+      '--log-level',
+      'silent',
+      'compact',
+      volumeId,
+      '--json',
+      '--output',
+      compactArtifactPath,
+    ],
+    { cwd: consumerRoot },
+  );
+  const compactPayload = JSON.parse(compactRun.stdout);
+  const compactArtifact = await readJson(compactArtifactPath);
+
+  assert(
+    compactPayload.volumeId === volumeId,
+    'Installed CLI compact command should target the smoke-test volume.',
+  );
+  assert(
+    compactArtifact.command === 'compact',
+    'Installed CLI compact artifact should include the command metadata.',
+  );
+  assertArtifactHandling(compactArtifact, 'compact');
+  assert(
+    compactArtifact.payload.volumeId === volumeId,
+    'Installed CLI compact artifact should target the smoke-test volume.',
+  );
+  assert(
+    Number.isInteger(compactArtifact.payload.bytesBefore) &&
+      compactArtifact.payload.bytesBefore >= 0,
+    'Installed CLI compact artifact should report a non-negative bytesBefore value.',
+  );
+  assert(
+    Number.isInteger(compactArtifact.payload.bytesAfter) &&
+      compactArtifact.payload.bytesAfter >= 0,
+    'Installed CLI compact artifact should report a non-negative bytesAfter value.',
+  );
+  assert(
+    compactArtifact.payload.reclaimedBytes ===
+      Math.max(
+        0,
+        compactArtifact.payload.bytesBefore - compactArtifact.payload.bytesAfter,
+      ),
+    'Installed CLI compact artifact should report reclaimed bytes consistently.',
+  );
+
+  await tamperBlobSize(compactArtifact.payload.databasePath, 'package.txt', 7);
+
+  const repairSafeRun = runCommand(
+    process.execPath,
+    [
+      installedCliPath,
+      '--data-dir',
+      dataDir,
+      '--log-dir',
+      logDir,
+      '--log-level',
+      'silent',
+      'repair-safe',
+      '--verify-blobs',
+      '--strict-plan',
+      '--json',
+      '--output',
+      repairSafeArtifactPath,
+    ],
+    { cwd: consumerRoot },
+  );
+  const repairSafePayload = JSON.parse(repairSafeRun.stdout);
+  const repairSafeArtifact = await readJson(repairSafeArtifactPath);
+
+  assert(
+    repairSafePayload.repairableVolumes === 1,
+    'Installed CLI repair-safe should detect the tampered metadata drift.',
+  );
+  assert(
+    repairSafePayload.repairedVolumes === 1,
+    'Installed CLI repair-safe should repair the tampered metadata drift.',
+  );
+  assert(
+    repairSafePayload.failedVolumes === 0,
+    'Installed CLI repair-safe should finish without failed volumes.',
+  );
+  assert(
+    repairSafeArtifact.command === 'repair-safe',
+    'Installed CLI repair-safe artifact should include the command metadata.',
+  );
+  assertArtifactHandling(repairSafeArtifact, 'repair-safe');
+  assert(
+    repairSafeArtifact.payload.actionsApplied >= 1,
+    'Installed CLI repair-safe artifact should report at least one applied action.',
+  );
+
+  const doctorRun = runCommand(
+    process.execPath,
+    [
+      installedCliPath,
+      '--data-dir',
+      dataDir,
+      '--log-dir',
+      logDir,
+      '--log-level',
+      'silent',
+      'doctor',
+      volumeId,
+      '--json',
+      '--output',
+      doctorArtifactPath,
+    ],
+    { cwd: consumerRoot },
+  );
+  const doctorPayload = JSON.parse(doctorRun.stdout);
+  const doctorArtifact = await readJson(doctorArtifactPath);
+
+  assert(
+    doctorPayload.healthy === true,
+    'Installed CLI doctor command should report a healthy smoke volume after compaction.',
+  );
+  assert(
+    doctorArtifact.command === 'doctor',
+    'Installed CLI artifact should include the doctor command metadata.',
+  );
+  assertArtifactHandling(doctorArtifact, 'doctor');
+  assert(
+    doctorArtifact.cliVersion === packageJson.version,
+    'Installed CLI artifact should use the packaged CLI version.',
+  );
+  assert(
+    typeof doctorArtifact.correlationId === 'string' &&
+      doctorArtifact.correlationId.length > 0,
+    'Installed CLI artifact should include a correlation id.',
+  );
+  assert(
+    doctorArtifact.payload.volumes?.[0]?.volumeId === volumeId,
+    'Installed CLI artifact should reference the smoke-test volume.',
+  );
+
+  const supportBundleRun = runCommand(
+    process.execPath,
+    [
+      installedCliPath,
+      '--data-dir',
+      dataDir,
+      '--log-dir',
+      logDir,
+      '--log-level',
+      'silent',
+      'support-bundle',
+      supportBundlePath,
+      volumeId,
+      '--json',
+      '--output',
+      supportBundleSummaryPath,
+    ],
+    { cwd: consumerRoot },
+  );
+  const supportBundlePayload = JSON.parse(supportBundleRun.stdout);
+  const supportBundleArtifact = await readJson(supportBundleSummaryPath);
+  const supportBundleManifest = await readJson(
+    path.join(supportBundlePath, 'manifest.json'),
+  );
+  const supportBundleActionPlan = await readJson(
+    path.join(supportBundlePath, 'action-plan.json'),
+  );
+  const checksumManifest = await readJson(supportBundleManifest.checksumsPath);
+
+  assert(
+    supportBundlePayload.bundlePath === path.resolve(supportBundlePath),
+    'Installed CLI support-bundle command should point to the generated bundle path.',
+  );
+  assert(
+    supportBundleArtifact.command === 'support-bundle',
+    'Installed CLI support-bundle artifact should include the command metadata.',
+  );
+  assertArtifactHandling(supportBundleArtifact, 'support-bundle');
+  assert(
+    typeof supportBundleArtifact.correlationId === 'string' &&
+      supportBundleArtifact.correlationId.length > 0,
+    'Installed CLI support-bundle artifact should include a correlation id.',
+  );
+  assert(
+    supportBundleArtifact.payload.bundlePath === path.resolve(supportBundlePath),
+    'Installed CLI support-bundle artifact should include the bundle path.',
+  );
+  assert(
+    supportBundleManifest.correlationId === supportBundleArtifact.correlationId,
+    'Installed CLI support bundle manifest should reuse the command correlation id.',
+  );
+  assert(
+    supportBundleManifest.doctorReportPath ===
+      path.join(path.resolve(supportBundlePath), 'doctor-report.json'),
+    'Installed CLI support bundle should include a doctor report path.',
+  );
+  assert(
+    supportBundleManifest.actionPlanPath ===
+      path.join(path.resolve(supportBundlePath), 'action-plan.json'),
+    'Installed CLI support bundle should include an action plan path.',
+  );
+  assert(
+    supportBundleManifest.handoffReportPath ===
+      path.join(path.resolve(supportBundlePath), 'handoff-report.md'),
+    'Installed CLI support bundle should include a handoff report path.',
+  );
+  assert(
+    supportBundleManifest.checksumsPath ===
+      path.join(path.resolve(supportBundlePath), 'checksums.json'),
+    'Installed CLI support bundle should include a checksum manifest path.',
+  );
+  assert(
+    supportBundleManifest.auditLogSnapshotPath ===
+      path.join(
+        path.resolve(supportBundlePath),
+        'audit',
+        `cli-node-virtual-volumes-audit-${new Date().toISOString().slice(0, 10)}.log`,
+      ),
+    'Installed CLI support bundle should include an audit log snapshot path.',
+  );
+  assert(
+    await pathExists(supportBundleManifest.auditLogSnapshotPath),
+    'Installed CLI support bundle should include a copied audit log snapshot.',
+  );
+  assert(
+    await pathExists(supportBundleManifest.handoffReportPath),
+    'Installed CLI support bundle should include a handoff report.',
+  );
+  assert(
+    await pathExists(supportBundleManifest.actionPlanPath),
+    'Installed CLI support bundle should include an action plan.',
+  );
+  assert(
+    Array.isArray(supportBundleActionPlan.steps) &&
+      supportBundleActionPlan.steps.length >= 1,
+    'Installed CLI support bundle action plan should include at least one step.',
+  );
+  assert(
+    supportBundleManifest.backupManifestCopyPath === null,
+    'Installed CLI support bundle should not include a backup manifest copy without a backup path.',
+  );
+  assert(
+    Array.isArray(checksumManifest.files) && checksumManifest.files.length >= 4,
+    'Installed CLI support bundle should include checksum records.',
+  );
+
+  const supportBundleInspectRun = runCommand(
+    process.execPath,
+    [
+      installedCliPath,
+      'inspect-support-bundle',
+      supportBundlePath,
+      '--require-sharing',
+      'internal-only',
+      '--require-integrity-depth',
+      'metadata',
+      '--json',
+      '--output',
+      supportBundleInspectionArtifactPath,
+    ],
+    { cwd: consumerRoot },
+  );
+  const supportBundleInspection = JSON.parse(supportBundleInspectRun.stdout);
+  const supportBundleInspectionArtifact = await readJson(
+    supportBundleInspectionArtifactPath,
+  );
+
+  assert(
+    supportBundleInspection.healthy === true,
+    'Installed CLI inspect-support-bundle command should report a healthy bundle.',
+  );
+  assert(
+    supportBundleInspection.contentProfile?.sharingRecommendation === 'internal-only',
+    'Installed CLI inspect-support-bundle should expose the expected sharing recommendation.',
+  );
+  assert(
+    supportBundleInspection.actionPlanPath === supportBundleManifest.actionPlanPath,
+    'Installed CLI inspect-support-bundle should expose the action plan path.',
+  );
+  assert(
+    supportBundleInspectionArtifact.command === 'inspect-support-bundle',
+    'Installed CLI support-bundle inspection artifact should include the command metadata.',
+  );
+  assertArtifactHandling(
+    supportBundleInspectionArtifact,
+    'inspect-support-bundle',
+  );
+  assert(
+    typeof supportBundleInspectionArtifact.correlationId === 'string' &&
+      supportBundleInspectionArtifact.correlationId.length > 0,
+    'Installed CLI support-bundle inspection artifact should include a correlation id.',
+  );
+  assert(
+    supportBundleInspectionArtifact.payload.verifiedFiles >= 3,
+    'Installed CLI support-bundle inspection artifact should report verified files.',
+  );
+  assert(
+    supportBundleInspectionArtifact.payload.bundleCorrelationId ===
+      supportBundleManifest.correlationId,
+    'Installed CLI support-bundle inspection should expose the bundle correlation id.',
+  );
+  assert(
+    supportBundleInspectionArtifact.payload.actionPlanPath ===
+      supportBundleManifest.actionPlanPath,
+    'Installed CLI support-bundle inspection artifact should expose the action plan path.',
+  );
+
+  process.stdout.write(
+    `[package-smoke] installed ${path.basename(tarballPath)} and verified package import + CLI backup + restore drill + compact-recommended + compact + repair-safe + doctor + support bundle + support bundle inspection flows\n`,
+  );
+} catch (error) {
+  const message =
+    error instanceof Error ? error.message : 'Unknown packaged smoke failure.';
+  if (sandboxRoot) {
+    process.stderr.write(`[package-smoke] sandbox preserved at ${sandboxRoot}\n`);
+  }
+  process.stderr.write(`${message}\n`);
+  process.exitCode = 1;
+} finally {
+  if (sandboxRoot) {
+    await fs.rm(sandboxRoot, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
