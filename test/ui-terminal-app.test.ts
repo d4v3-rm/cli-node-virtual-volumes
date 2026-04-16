@@ -176,11 +176,20 @@ interface RuntimeTestContext {
 }
 
 interface TerminalAppTestHandle {
+  confirmAction: (options: {
+    body: string;
+    confirmLabel: string;
+    title: string;
+  }) => Promise<boolean>;
   inspectorBox: FakeElement;
   leftPane: FakeElement;
   loadVolumes: () => Promise<void>;
   mode: 'dashboard' | 'explorer';
+  openHelpOverlay: () => Promise<void>;
   openVolume: (volumeId: string) => Promise<void>;
+  overlayBackdrop: FakeElement;
+  overlayContainer: FakeElement;
+  overlayMode: 'help' | 'preview' | 'confirm' | 'input' | 'choice' | 'hostBrowser' | null;
   primaryList: FakeElement;
   rightPane: FakeElement;
   shortcutsBox: FakeElement;
@@ -340,5 +349,70 @@ describe('ui terminal app runtime', () => {
     ui.screen.triggerKey('q');
 
     expect(ui.screen.destroyCount).toBe(1);
+  });
+
+  it('opens and closes the help overlay inside the shell runtime', async () => {
+    const ui = createFakeUiFactory();
+    const runtime = createRuntime({
+      volumes: [sampleVolume],
+    });
+    const app = new TerminalApp(runtime.runtime, ui.factory);
+    const testApp = asTestApp(app);
+
+    await testApp.loadVolumes();
+
+    const helpPromise = testApp.openHelpOverlay();
+
+    expect(testApp.overlayMode).toBe('help');
+    expect(testApp.overlayBackdrop.hidden).toBe(false);
+    expect(testApp.overlayContainer.hidden).toBe(false);
+    expect(testApp.overlayContainer.label).toBe(' Help ');
+    expect(testApp.overlayContainer.children[0]?.content).toContain('Dashboard');
+
+    testApp.overlayContainer.children[0]?.triggerKey('escape');
+    await helpPromise;
+
+    expect(testApp.overlayMode).toBeNull();
+    expect(testApp.overlayBackdrop.hidden).toBe(true);
+    expect(testApp.overlayContainer.hidden).toBe(true);
+  });
+
+  it('resolves confirm overlays through button navigation and keyboard shortcuts', async () => {
+    const ui = createFakeUiFactory();
+    const runtime = createRuntime({
+      volumes: [sampleVolume],
+    });
+    const app = new TerminalApp(runtime.runtime, ui.factory);
+    const testApp = asTestApp(app);
+
+    await testApp.loadVolumes();
+
+    const cancelPromise = testApp.confirmAction({
+      title: 'Delete Volume',
+      body: 'Delete Finance?',
+      confirmLabel: 'Delete',
+    });
+
+    expect(testApp.overlayMode).toBe('confirm');
+    expect(testApp.overlayContainer.label).toBe(' Delete Volume ');
+    expect(testApp.overlayContainer.children[1]?.content).toContain('[ Delete ]');
+
+    testApp.overlayContainer.children[1]?.triggerKey('right');
+    expect(testApp.overlayContainer.children[1]?.content).toContain('[ Cancel ]');
+
+    testApp.overlayContainer.children[1]?.triggerKey('enter');
+    await expect(cancelPromise).resolves.toBe(false);
+    expect(testApp.overlayMode).toBeNull();
+
+    const confirmPromise = testApp.confirmAction({
+      title: 'Delete Volume',
+      body: 'Delete Finance?',
+      confirmLabel: 'Delete',
+    });
+
+    testApp.overlayContainer.children[1]?.triggerKey('y');
+    await expect(confirmPromise).resolves.toBe(true);
+    expect(testApp.overlayMode).toBeNull();
+    expect(ui.screen.renderCount).toBeGreaterThan(0);
   });
 });
