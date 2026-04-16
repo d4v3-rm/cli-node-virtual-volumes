@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  evaluateStorageRepairBatchPolicy,
   evaluateVolumeCompactionBatchPolicy,
+  formatStorageRepairBatchPolicyStatus,
+  formatStorageRepairBatchResult,
   formatVolumeCompactionBatchPolicyStatus,
   formatVolumeCompactionBatchResult,
   formatVolumeCompactionResult,
 } from '../src/cli/maintenance.js';
 import type {
+  StorageRepairBatchResult,
   VolumeCompactionBatchResult,
   VolumeCompactionResult,
 } from '../src/domain/types.js';
@@ -429,6 +433,158 @@ describe('maintenance cli formatter', () => {
     });
     expect(formatVolumeCompactionBatchPolicyStatus(status)).toBe(
       'Strict plan gate: PASSED',
+    );
+  });
+
+  it('formats safe repair batch output with blocked, repaired, and deferred volumes', () => {
+    const result: StorageRepairBatchResult = {
+      generatedAt: '2026-04-16T11:30:00.000Z',
+      dryRun: false,
+      checkedVolumes: 4,
+      integrityDepth: 'deep',
+      repairableVolumes: 3,
+      plannedVolumes: 2,
+      blockedVolumes: 1,
+      deferredVolumes: 1,
+      skippedVolumes: 1,
+      repairedVolumes: 1,
+      failedVolumes: 0,
+      actionsApplied: 2,
+      volumes: [
+        {
+          volumeId: 'volume-9',
+          volumeName: 'Blocked',
+          revision: 12,
+          issueCount: 2,
+          repairableIssueCodes: ['BLOB_SIZE_MISMATCH'],
+          status: 'blocked',
+          blockingIssueCodes: ['BLOB_CONTENT_REF_MISMATCH'],
+          reason:
+            'Additional non-safe doctor findings must be cleared before batch repair can automate this volume.',
+        },
+        {
+          volumeId: 'volume-1',
+          volumeName: 'Finance',
+          revision: 9,
+          issueCount: 1,
+          repairableIssueCodes: ['BLOB_SIZE_MISMATCH'],
+          status: 'repaired',
+          repair: {
+            volumeId: 'volume-1',
+            volumeName: 'Finance',
+            revision: 10,
+            healthy: true,
+            repaired: true,
+            issueCountBefore: 1,
+            issueCountAfter: 0,
+            actions: [
+              {
+                code: 'SYNC_BLOB_LAYOUT_METADATA',
+                message: 'Recomputed blob layout metadata from payload.',
+                contentRef: 'blob:1',
+              },
+            ],
+            remainingIssues: [],
+          },
+        },
+        {
+          volumeId: 'volume-2',
+          volumeName: 'Deferred',
+          revision: 4,
+          issueCount: 1,
+          repairableIssueCodes: ['MANIFEST_USAGE_MISMATCH'],
+          status: 'deferred',
+          reason: 'Deferred by --limit 1.',
+        },
+      ],
+    };
+
+    expect(formatStorageRepairBatchResult(result)).toBe(
+      [
+        'Safe repair batch: COMPLETED',
+        `Generated at: ${formatDateTime(result.generatedAt)}`,
+        'Integrity depth: deep',
+        'Checked volumes: 4',
+        'Repairable volumes: 3',
+        'Planned volumes: 2',
+        'Blocked volumes: 1',
+        'Deferred volumes: 1',
+        'Skipped volumes: 1',
+        'Repaired volumes: 1',
+        'Failed volumes: 0',
+        'Actions applied: 2',
+        '',
+        '  - BLOCKED Blocked (volume-9) revision=12 issues=2 repairable=BLOB_SIZE_MISMATCH blocking=BLOB_CONTENT_REF_MISMATCH reason=Additional non-safe doctor findings must be cleared before batch repair can automate this volume.',
+        '  - REPAIRED Finance (volume-1) revision=9 before=1 after=0 actions=1 issues=1 repairable=BLOB_SIZE_MISMATCH',
+        '  - DEFERRED Deferred (volume-2) revision=4 issues=1 repairable=MANIFEST_USAGE_MISMATCH reason=Deferred by --limit 1.',
+      ].join('\n'),
+    );
+  });
+
+  it('evaluates strict safe repair batch policy failures', () => {
+    const status = evaluateStorageRepairBatchPolicy(
+      {
+        blockedVolumes: 1,
+        deferredVolumes: 2,
+        failedVolumes: 3,
+      },
+      {
+        strictPlan: true,
+      },
+    );
+
+    expect(status).toEqual({
+      strictPlan: true,
+      satisfied: false,
+      messages: [
+        '1 volume(s) still mix safe repair drifts with non-safe doctor findings.',
+        '2 volume(s) remain deferred outside the current batch limit.',
+        '3 volume(s) did not finish healthy after repair execution.',
+      ],
+    });
+    expect(formatStorageRepairBatchPolicyStatus(status)).toBe(
+      [
+        'Strict plan gate: FAILED',
+        '- 1 volume(s) still mix safe repair drifts with non-safe doctor findings.',
+        '- 2 volume(s) remain deferred outside the current batch limit.',
+        '- 3 volume(s) did not finish healthy after repair execution.',
+      ].join('\n'),
+    );
+  });
+
+  it('formats safe repair batch output with no repairable volumes', () => {
+    const result: StorageRepairBatchResult = {
+      generatedAt: '2026-04-16T11:35:00.000Z',
+      dryRun: true,
+      checkedVolumes: 2,
+      integrityDepth: 'metadata',
+      repairableVolumes: 0,
+      plannedVolumes: 0,
+      blockedVolumes: 0,
+      deferredVolumes: 0,
+      skippedVolumes: 2,
+      repairedVolumes: 0,
+      failedVolumes: 0,
+      actionsApplied: 0,
+      volumes: [],
+    };
+
+    expect(formatStorageRepairBatchResult(result)).toBe(
+      [
+        'Safe repair batch: DRY RUN',
+        `Generated at: ${formatDateTime(result.generatedAt)}`,
+        'Integrity depth: metadata',
+        'Checked volumes: 2',
+        'Repairable volumes: 0',
+        'Planned volumes: 0',
+        'Blocked volumes: 0',
+        'Deferred volumes: 0',
+        'Skipped volumes: 2',
+        'Repaired volumes: 0',
+        'Failed volumes: 0',
+        'Actions applied: 0',
+        'No volumes currently require safe batch repair.',
+      ].join('\n'),
     );
   });
 });
