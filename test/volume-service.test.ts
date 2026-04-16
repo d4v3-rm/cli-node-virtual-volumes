@@ -236,6 +236,82 @@ describe('VolumeService', () => {
     expect(preview.content).toContain('beta');
   });
 
+  it('deletes stale SQLite rows incrementally without recreating untouched entries', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Incremental Delete' });
+
+    await runtime.volumeService.writeTextFile(volume.id, '/alpha.txt', 'alpha');
+    await runtime.volumeService.writeTextFile(volume.id, '/beta.txt', 'beta');
+
+    const betaRowIdBefore = await getEntryRowId(
+      runtime.config.dataDir,
+      volume.id,
+      'beta.txt',
+    );
+
+    await runtime.volumeService.deleteEntry(volume.id, '/alpha.txt');
+
+    const alphaRowIdAfter = await getEntryRowId(
+      runtime.config.dataDir,
+      volume.id,
+      'alpha.txt',
+    );
+    const betaRowIdAfter = await getEntryRowId(
+      runtime.config.dataDir,
+      volume.id,
+      'beta.txt',
+    );
+    const preview = await runtime.volumeService.previewFile(volume.id, '/beta.txt');
+
+    expect(alphaRowIdAfter).toBeNull();
+    expect(betaRowIdAfter).toBe(betaRowIdBefore);
+    expect(preview.content).toContain('beta');
+  });
+
+  it('moves entries incrementally while preserving their SQLite row identity', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Incremental Move' });
+
+    await runtime.volumeService.createDirectory(volume.id, '/', 'source');
+    await runtime.volumeService.createDirectory(volume.id, '/', 'archive');
+    await runtime.volumeService.writeTextFile(
+      volume.id,
+      '/source/relocate.txt',
+      'move me',
+    );
+
+    const rowIdBefore = await getEntryRowId(
+      runtime.config.dataDir,
+      volume.id,
+      'relocate.txt',
+    );
+
+    await runtime.volumeService.moveEntry(volume.id, {
+      sourcePath: '/source/relocate.txt',
+      destinationDirectoryPath: '/archive',
+      newName: 'relocate-moved.txt',
+    });
+
+    const oldRowIdAfter = await getEntryRowId(
+      runtime.config.dataDir,
+      volume.id,
+      'relocate.txt',
+    );
+    const newRowIdAfter = await getEntryRowId(
+      runtime.config.dataDir,
+      volume.id,
+      'relocate-moved.txt',
+    );
+    const preview = await runtime.volumeService.previewFile(
+      volume.id,
+      '/archive/relocate-moved.txt',
+    );
+
+    expect(oldRowIdAfter).toBeNull();
+    expect(newRowIdAfter).toBe(rowIdBefore);
+    expect(preview.content).toContain('move me');
+  });
+
   it('rolls writeTextFile back when file entry creation fails after blob storage', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Write Rollback' });
