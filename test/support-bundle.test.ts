@@ -474,6 +474,55 @@ describe('support bundle', () => {
     expect(inspection.doctorIntegrityDepth).toBe('metadata');
   });
 
+  it('reports content profile mismatches when the declared sharing profile diverges from included artifacts', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Profile Drift Bundle' });
+    const bundlePath = path.join(runtime.config.dataDir, '..', 'profile-drift-support-bundle');
+    const currentLogPath = resolveAppLogFilePath(runtime.config);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/hello.txt', 'profile drift');
+    await fs.mkdir(path.dirname(currentLogPath), { recursive: true });
+    await fs.writeFile(currentLogPath, 'profile drift log\n', 'utf8');
+
+    const bundle = await createSupportBundle(runtime, {
+      destinationPath: bundlePath,
+      volumeId: volume.id,
+    });
+    const manifest = JSON.parse(
+      await fs.readFile(bundle.manifestPath, 'utf8'),
+    ) as Record<string, unknown>;
+    const contentProfile = manifest.contentProfile as Record<string, unknown>;
+
+    contentProfile.redacted = true;
+    contentProfile.includesAppLogSnapshot = false;
+    contentProfile.includesAuditLogSnapshot = false;
+    contentProfile.sensitivity = 'sanitized';
+    contentProfile.sharingRecommendation = 'external-shareable';
+    contentProfile.recommendedRetentionDays = 30;
+    contentProfile.sharingNotes = [
+      'Bundle metadata is redacted and log snapshots are excluded, which is suitable for broader sharing.',
+    ];
+    contentProfile.disposalNotes = [
+      'Delete this bundle when the diagnostic handoff or review window ends.',
+    ];
+
+    await rewriteBundleFileAndRefreshChecksum(
+      bundlePath,
+      'manifest.json',
+      JSON.stringify(manifest, null, 2),
+    );
+
+    const inspection = await inspectSupportBundle(bundlePath);
+
+    expect(inspection.healthy).toBe(false);
+    expect(inspection.issues).toContainEqual(
+      expect.objectContaining({
+        code: 'CONTENT_PROFILE_MISMATCH',
+        role: 'manifest',
+      }),
+    );
+  });
+
   it('rejects existing bundle destinations without overwrite', async () => {
     const runtime = await createIsolatedRuntime();
     const bundlePath = path.join(runtime.config.dataDir, '..', 'existing-support-bundle');
