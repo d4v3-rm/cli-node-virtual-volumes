@@ -24,6 +24,7 @@ import type {
   RestoreVolumeBackupOptions,
   StorageDoctorOptions,
   StorageDoctorReport,
+  StorageRepairOptions,
   StorageRepairReport,
   VolumeCompactionBatchResult,
   VolumeCompactionBatchItem,
@@ -541,18 +542,22 @@ export class VolumeService {
     );
   }
 
-  public async runRepair(volumeId?: string): Promise<StorageRepairReport> {
+  public async runRepair(
+    volumeId?: string,
+    options: StorageRepairOptions = {},
+  ): Promise<StorageRepairReport> {
     return this.runAuditedOperation(
       {
         eventType: 'storage.repair',
         resourceType: 'storage',
         volumeId,
       },
-      () => this.repository.runRepair(volumeId),
+      () => this.repository.runRepair(volumeId, options),
       (report) => ({
         checkedVolumes: report.checkedVolumes,
         actionsApplied: report.actionsApplied,
         healthy: report.healthy,
+        integrityDepth: report.integrityDepth ?? 'metadata',
       }),
     );
   }

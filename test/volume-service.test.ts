@@ -2574,6 +2574,49 @@ describe('VolumeService', () => {
     expect(driftIssue?.message).toContain('hashes to');
   });
 
+  it('verifies blob payload hashes during deep repair runs', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Blob Payload Repair Verification' });
+    const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/payload.txt', 'stable bytes');
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      const fileRow = await database.get<{ content_ref: string }>(
+        `SELECT content_ref
+           FROM entries
+          WHERE name = 'payload.txt'
+          LIMIT 1`,
+      );
+
+      await database.run(
+        `UPDATE blob_chunks
+            SET content = ?
+          WHERE content_ref = ?
+            AND chunk_index = 0`,
+        Buffer.from('tamper data!'),
+        fileRow?.content_ref ?? '',
+      );
+    });
+
+    const metadataRepair = await runtime.volumeService.runRepair(volume.id);
+    expect(metadataRepair.integrityDepth).toBe('metadata');
+    expect(metadataRepair.healthy).toBe(true);
+    expect(metadataRepair.repairedVolumes).toBe(0);
+
+    const deepRepair = await runtime.volumeService.runRepair(volume.id, {
+      verifyBlobPayloads: true,
+    });
+    const remainingIssue = deepRepair.volumes[0]?.remainingIssues.find(
+      (issue) => issue.code === 'BLOB_CONTENT_REF_MISMATCH',
+    );
+
+    expect(deepRepair.integrityDepth).toBe('deep');
+    expect(deepRepair.healthy).toBe(false);
+    expect(deepRepair.repairedVolumes).toBe(0);
+    expect(remainingIssue?.message).toContain('hashes to');
+  });
+
   it('deletes directory subtrees recursively', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Cleanup' });

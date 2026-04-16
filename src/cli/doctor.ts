@@ -111,6 +111,7 @@ export const formatRepairReport = (report: StorageRepairReport): string => {
   const lines = [
     `Storage repair: ${report.healthy ? 'HEALTHY' : 'ISSUES REMAIN'}`,
     `Generated at: ${report.generatedAt}`,
+    `Integrity depth: ${report.integrityDepth ?? 'metadata'}`,
     `Checked volumes: ${report.checkedVolumes}`,
     `Repaired volumes: ${report.repairedVolumes}`,
     `Actions applied: ${report.actionsApplied}`,

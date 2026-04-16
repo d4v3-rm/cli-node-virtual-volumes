@@ -156,6 +156,7 @@ describe('doctor cli formatters', () => {
       [
         'Storage repair: ISSUES REMAIN',
         'Generated at: 2026-04-15T10:05:00.000Z',
+        'Integrity depth: metadata',
         'Checked volumes: 1',
         'Repaired volumes: 1',
         'Actions applied: 2',
