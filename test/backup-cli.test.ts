@@ -190,6 +190,12 @@ describe('backup cli formatters', () => {
         healthy: true,
         checkedVolumes: 1,
         issueCount: 0,
+        maintenanceSummary: {
+          volumesWithStats: 1,
+          recommendedCompactions: 0,
+          totalArtifactBytes: 16384,
+          totalFreeBytes: 0,
+        },
         volumes: [],
       },
     };
