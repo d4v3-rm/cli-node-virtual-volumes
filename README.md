@@ -379,6 +379,7 @@ Use `virtual-volumes support-bundle ... --verify-blobs` when you want the embedd
 - `doctor-report.json` structure and consistency with the bundle manifest and scope
 - manifest path consistency
 - `action-plan.json` structure and consistency with the bundle manifest
+- `backup-inspection.json` and copied backup manifest consistency when a backup artifact is bundled
 - checksum inventory structure
 - file size and SHA-256 integrity for the tracked files
 - bundle sensitivity, sharing, and handling metadata so operators can see whether the artifact is external-shareable or internal-only and how long it should be retained

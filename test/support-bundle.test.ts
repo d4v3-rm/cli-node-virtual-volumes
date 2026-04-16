@@ -756,6 +756,95 @@ describe('support bundle', () => {
     );
   });
 
+  it('reports invalid backup inspection reports even when the checksum inventory matches the tampered file', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Broken Backup Inspection' });
+    const bundlePath = path.join(runtime.config.dataDir, '..', 'broken-backup-inspection');
+    const backupPath = path.join(runtime.config.dataDir, '..', 'broken-backup-inspection.sqlite');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/hello.txt', 'tamper backup');
+    await runtime.volumeService.backupVolume(volume.id, backupPath);
+
+    await createSupportBundle(runtime, {
+      destinationPath: bundlePath,
+      volumeId: volume.id,
+      backupPath,
+      includeLogs: false,
+    });
+
+    await rewriteBundleFileAndRefreshChecksum(
+      bundlePath,
+      'backup-inspection.json',
+      JSON.stringify(
+        {
+          volumeId: volume.id,
+          volumeName: 'Broken Backup Inspection',
+          revision: 1,
+          schemaVersion: 5,
+          backupPath: path.resolve(backupPath),
+          manifestPath: null,
+          formatVersion: 'invalid',
+          createdWithVersion: APP_VERSION,
+          checksumSha256: 'deadbeef',
+          bytesWritten: 1,
+          createdAt: new Date().toISOString(),
+          validatedWithManifest: true,
+        },
+        null,
+        2,
+      ),
+    );
+
+    const inspection = await inspectSupportBundle(bundlePath);
+
+    expect(inspection.healthy).toBe(false);
+    expect(inspection.issues).toContainEqual(
+      expect.objectContaining({
+        code: 'INVALID_BACKUP_INSPECTION',
+        role: 'backup-inspection',
+      }),
+    );
+  });
+
+  it('reports backup manifest copy mismatches even when the checksum inventory matches', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Mismatched Backup Manifest' });
+    const bundlePath = path.join(runtime.config.dataDir, '..', 'mismatched-backup-manifest');
+    const backupPath = path.join(runtime.config.dataDir, '..', 'mismatched-backup-manifest.sqlite');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/hello.txt', 'tamper backup');
+    await runtime.volumeService.backupVolume(volume.id, backupPath);
+
+    await createSupportBundle(runtime, {
+      destinationPath: bundlePath,
+      volumeId: volume.id,
+      backupPath,
+      includeLogs: false,
+    });
+
+    const backupManifestCopy = JSON.parse(
+      await fs.readFile(path.join(bundlePath, 'backup-artifact.manifest.json'), 'utf8'),
+    ) as Record<string, unknown>;
+
+    backupManifestCopy.revision = Number(backupManifestCopy.revision) + 1;
+
+    await rewriteBundleFileAndRefreshChecksum(
+      bundlePath,
+      'backup-artifact.manifest.json',
+      JSON.stringify(backupManifestCopy, null, 2),
+    );
+
+    const inspection = await inspectSupportBundle(bundlePath);
+
+    expect(inspection.healthy).toBe(false);
+    expect(inspection.issues).toContainEqual(
+      expect.objectContaining({
+        code: 'BACKUP_MANIFEST_COPY_MISMATCH',
+        role: 'backup-manifest',
+      }),
+    );
+  });
+
   it('flags support bundles that exceed their recommended retention window', async () => {
     const runtime = await createIsolatedRuntime({
       redactSensitiveDetails: true,
