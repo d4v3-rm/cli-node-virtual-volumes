@@ -81,6 +81,7 @@ export const formatVolumeCompactionBatchResult = (
     `Failed volumes: ${result.failedVolumes}`,
     `Minimum free bytes: ${result.minimumFreeBytes === null ? 'none' : formatBytes(result.minimumFreeBytes)}`,
     `Minimum free ratio: ${result.minimumFreeRatio === null ? 'none' : `${(result.minimumFreeRatio * 100).toFixed(1)}%`}`,
+    `Maximum planned reclaimable bytes: ${result.maximumReclaimableBytes === null ? 'none' : formatBytes(result.maximumReclaimableBytes)}`,
     `Total reclaimed: ${formatBytes(result.totalReclaimedBytes)}`,
   ];
 
@@ -127,7 +128,7 @@ export const evaluateVolumeCompactionBatchPolicy = (
 
   if (result.deferredVolumes > 0) {
     messages.push(
-      `${result.deferredVolumes} volume(s) remain deferred outside the current --limit budget.`,
+      `${result.deferredVolumes} volume(s) remain deferred outside the current batch budget.`,
     );
   }
 

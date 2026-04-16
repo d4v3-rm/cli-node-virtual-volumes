@@ -61,6 +61,7 @@ describe('maintenance cli formatter', () => {
       filteredReclaimableBytes: 0,
       minimumFreeBytes: null,
       minimumFreeRatio: null,
+      maximumReclaimableBytes: null,
       compactedVolumes: 1,
       failedVolumes: 1,
       totalReclaimedBytes: 1048576,
@@ -122,6 +123,7 @@ describe('maintenance cli formatter', () => {
         'Failed volumes: 1',
         'Minimum free bytes: none',
         'Minimum free ratio: none',
+        'Maximum planned reclaimable bytes: none',
         'Total reclaimed: 1.0 MB',
         '',
         '  - COMPACTED Finance (volume-1) revision=9 reclaimed=1.0 MB before=8.0 MB after=7.0 MB free=2.0 MB (25.0%) artifacts=8.0 MB issues=1',
@@ -152,6 +154,7 @@ describe('maintenance cli formatter', () => {
       deferredReclaimableBytes: 0,
       minimumFreeBytes: null,
       minimumFreeRatio: null,
+      maximumReclaimableBytes: null,
       totalReclaimedBytes: 0,
       volumes: [
         {
@@ -191,6 +194,7 @@ describe('maintenance cli formatter', () => {
         'Failed volumes: 0',
         'Minimum free bytes: none',
         'Minimum free ratio: none',
+        'Maximum planned reclaimable bytes: none',
         'Total reclaimed: 0 B',
         '',
         '  - BLOCKED Broken (volume-9) revision=12 free=2.0 MB (50.0%) artifacts=4.0 MB issues=2 blocking=MISSING_BLOB reason=Additional doctor findings must be cleared before batch compaction.',
@@ -220,6 +224,7 @@ describe('maintenance cli formatter', () => {
       deferredReclaimableBytes: 1572864,
       minimumFreeBytes: 1048576,
       minimumFreeRatio: 0.25,
+      maximumReclaimableBytes: null,
       totalReclaimedBytes: 0,
       volumes: [
         {
@@ -279,6 +284,7 @@ describe('maintenance cli formatter', () => {
         'Failed volumes: 0',
         'Minimum free bytes: 1.0 MB',
         'Minimum free ratio: 25.0%',
+        'Maximum planned reclaimable bytes: none',
         'Total reclaimed: 0 B',
         '',
         '  - PLANNED Planned (volume-2) revision=1 free=1.0 MB (25.0%) artifacts=4.0 MB issues=1',
@@ -307,7 +313,7 @@ describe('maintenance cli formatter', () => {
       messages: [
         '1 blocked volume(s) still require doctor cleanup before the batch is automation-safe.',
         '2 volume(s) were filtered out by the current free-space thresholds.',
-        '3 volume(s) remain deferred outside the current --limit budget.',
+        '3 volume(s) remain deferred outside the current batch budget.',
         '4 volume(s) failed during compaction execution.',
       ],
     });
@@ -316,8 +322,89 @@ describe('maintenance cli formatter', () => {
         'Strict plan gate: FAILED',
         '- 1 blocked volume(s) still require doctor cleanup before the batch is automation-safe.',
         '- 2 volume(s) were filtered out by the current free-space thresholds.',
-        '- 3 volume(s) remain deferred outside the current --limit budget.',
+        '- 3 volume(s) remain deferred outside the current batch budget.',
         '- 4 volume(s) failed during compaction execution.',
+      ].join('\n'),
+    );
+  });
+
+  it('formats reclaim-budget settings and budget-based deferred reasons', () => {
+    const result: VolumeCompactionBatchResult = {
+      generatedAt: '2026-04-16T11:25:00.000Z',
+      dryRun: true,
+      includeUnsafe: false,
+      checkedVolumes: 3,
+      recommendedVolumes: 2,
+      eligibleVolumes: 2,
+      eligibleReclaimableBytes: 3670016,
+      plannedVolumes: 1,
+      plannedReclaimableBytes: 2097152,
+      blockedVolumes: 0,
+      blockedReclaimableBytes: 0,
+      compactedVolumes: 0,
+      failedVolumes: 0,
+      skippedVolumes: 1,
+      filteredVolumes: 0,
+      filteredReclaimableBytes: 0,
+      deferredVolumes: 1,
+      deferredReclaimableBytes: 1572864,
+      minimumFreeBytes: null,
+      minimumFreeRatio: null,
+      maximumReclaimableBytes: 2097152,
+      totalReclaimedBytes: 0,
+      volumes: [
+        {
+          volumeId: 'volume-2',
+          volumeName: 'Planned',
+          revision: 1,
+          issueCount: 1,
+          artifactBytes: 8388608,
+          freeBytes: 2097152,
+          freeRatio: 0.25,
+          status: 'planned',
+        },
+        {
+          volumeId: 'volume-3',
+          volumeName: 'Deferred',
+          revision: 2,
+          issueCount: 1,
+          artifactBytes: 4194304,
+          freeBytes: 1572864,
+          freeRatio: 0.375,
+          status: 'deferred',
+          reason:
+            'Deferred by --max-reclaimable-bytes 2097152 because planning this volume would exceed the current reclaim budget.',
+        },
+      ],
+    };
+
+    expect(formatVolumeCompactionBatchResult(result)).toBe(
+      [
+        'Recommended compaction: DRY RUN',
+        `Generated at: ${formatDateTime(result.generatedAt)}`,
+        'Unsafe compaction allowed: no',
+        'Checked volumes: 3',
+        'Recommended volumes: 2',
+        'Eligible volumes: 2',
+        'Eligible reclaimable bytes: 3.5 MB',
+        'Planned volumes: 1',
+        'Planned reclaimable bytes: 2.0 MB',
+        'Blocked volumes: 0',
+        'Blocked reclaimable bytes: 0 B',
+        'Filtered volumes: 0',
+        'Filtered reclaimable bytes: 0 B',
+        'Deferred volumes: 1',
+        'Deferred reclaimable bytes: 1.5 MB',
+        'Skipped volumes: 1',
+        'Compacted volumes: 0',
+        'Failed volumes: 0',
+        'Minimum free bytes: none',
+        'Minimum free ratio: none',
+        'Maximum planned reclaimable bytes: 2.0 MB',
+        'Total reclaimed: 0 B',
+        '',
+        '  - PLANNED Planned (volume-2) revision=1 free=2.0 MB (25.0%) artifacts=8.0 MB issues=1',
+        '  - DEFERRED Deferred (volume-3) revision=2 free=1.5 MB (37.5%) artifacts=4.0 MB issues=1 reason=Deferred by --max-reclaimable-bytes 2097152 because planning this volume would exceed the current reclaim budget.',
       ].join('\n'),
     );
   });

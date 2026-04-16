@@ -1310,6 +1310,86 @@ describe('VolumeService', () => {
     ).toBe(true);
   });
 
+  it('caps recommended batch compaction by reclaimable-byte budget', async () => {
+    const runtime = await createIsolatedRuntime();
+    const largestVolume = await runtime.volumeService.createVolume({ name: 'Largest churn' });
+    const smallerVolume = await runtime.volumeService.createVolume({ name: 'Smaller churn' });
+
+    await runtime.volumeService.writeTextFile(
+      largestVolume.id,
+      '/large.txt',
+      'a'.repeat(2 * 1024 * 1024),
+    );
+    await runtime.volumeService.deleteEntry(largestVolume.id, '/large.txt');
+    await runtime.volumeService.writeTextFile(
+      smallerVolume.id,
+      '/small.txt',
+      'b'.repeat(Math.floor(1.25 * 1024 * 1024)),
+    );
+    await runtime.volumeService.deleteEntry(smallerVolume.id, '/small.txt');
+
+    const doctorReport = await runtime.volumeService.runDoctor();
+    const largestMaintenance = doctorReport.volumes.find(
+      (volumeReport) => volumeReport.volumeId === largestVolume.id,
+    )?.maintenance;
+    const smallerMaintenance = doctorReport.volumes.find(
+      (volumeReport) => volumeReport.volumeId === smallerVolume.id,
+    )?.maintenance;
+
+    expect(largestMaintenance?.compactionRecommended).toBe(true);
+    expect(smallerMaintenance?.compactionRecommended).toBe(true);
+
+    const maxReclaimableBytes = largestMaintenance?.freeBytes ?? 0;
+    const dryRun = await runtime.volumeService.compactRecommendedVolumes({
+      dryRun: true,
+      maxReclaimableBytes,
+    });
+    const batchResult = await runtime.volumeService.compactRecommendedVolumes({
+      maxReclaimableBytes,
+    });
+    const followUpDoctor = await runtime.volumeService.runDoctor();
+    const largestDoctor = followUpDoctor.volumes.find(
+      (volumeReport) => volumeReport.volumeId === largestVolume.id,
+    );
+    const smallerDoctor = followUpDoctor.volumes.find(
+      (volumeReport) => volumeReport.volumeId === smallerVolume.id,
+    );
+
+    expect(dryRun.maximumReclaimableBytes).toBe(maxReclaimableBytes);
+    expect(dryRun.recommendedVolumes).toBe(2);
+    expect(dryRun.plannedVolumes).toBe(1);
+    expect(dryRun.deferredVolumes).toBe(1);
+    expect(dryRun.plannedReclaimableBytes).toBe(maxReclaimableBytes);
+    expect(dryRun.deferredReclaimableBytes).toBe(smallerMaintenance?.freeBytes);
+    expect(dryRun.volumes.find((item) => item.status === 'planned')?.volumeId).toBe(
+      largestVolume.id,
+    );
+    expect(dryRun.volumes.find((item) => item.status === 'deferred')?.volumeId).toBe(
+      smallerVolume.id,
+    );
+    expect(
+      dryRun.volumes.find((item) => item.status === 'deferred')?.reason,
+    ).toContain('--max-reclaimable-bytes');
+
+    expect(batchResult.maximumReclaimableBytes).toBe(maxReclaimableBytes);
+    expect(batchResult.plannedVolumes).toBe(1);
+    expect(batchResult.compactedVolumes).toBe(1);
+    expect(batchResult.deferredVolumes).toBe(1);
+    expect(batchResult.plannedReclaimableBytes).toBe(maxReclaimableBytes);
+    expect(batchResult.volumes.find((item) => item.status === 'compacted')?.volumeId).toBe(
+      largestVolume.id,
+    );
+    expect(batchResult.volumes.find((item) => item.status === 'deferred')?.volumeId).toBe(
+      smallerVolume.id,
+    );
+    expect(
+      largestDoctor?.issues.some((issue) => issue.code === 'COMPACTION_RECOMMENDED'),
+    ).toBe(false);
+    expect(
+      smallerDoctor?.issues.some((issue) => issue.code === 'COMPACTION_RECOMMENDED'),
+    ).toBe(true);
+  });
+
   it('summarizes top compaction candidates in doctor maintenance posture', async () => {
     const runtime = await createIsolatedRuntime();
     const largestVolume = await runtime.volumeService.createVolume({ name: 'Largest churn' });
