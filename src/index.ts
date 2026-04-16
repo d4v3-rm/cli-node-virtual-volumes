@@ -293,16 +293,29 @@ const main = async (): Promise<void> => {
       'Compact all managed volumes currently flagged by doctor as needing SQLite compaction.',
     )
     .option('--dry-run', 'Report which volumes would be compacted without mutating them')
+    .option(
+      '--limit <count>',
+      'Only process the top N recommended volumes, ordered by reclaimable free bytes',
+      (value: string) => {
+        const parsed = Number.parseInt(value, 10);
+        if (!Number.isInteger(parsed) || parsed <= 0) {
+          throw new Error('--limit must be a positive integer');
+        }
+
+        return parsed;
+      },
+    )
     .option('--json', 'Output the batch result as JSON')
     .option('--output <path>', 'Write the structured JSON result to this file')
     .action(
       async (
-        options: { dryRun?: boolean; json?: boolean; output?: string },
+        options: { dryRun?: boolean; json?: boolean; limit?: number; output?: string },
       ) => {
         await withRuntime(async (runtime) => {
           const correlationId = runtime.correlationId;
           const result = await runtime.volumeService.compactRecommendedVolumes({
             dryRun: options.dryRun,
+            limit: options.limit,
           });
           const artifactPath = options.output
             ? await writeCliJsonArtifact(
