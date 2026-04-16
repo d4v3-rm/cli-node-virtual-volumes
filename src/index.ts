@@ -11,8 +11,11 @@ import {
 import { formatDoctorReport, formatRepairReport } from './cli/doctor.js';
 import { renderCliResult, writeCliJsonArtifact } from './cli/output.js';
 import {
+  evaluateSupportBundleIntegrityRequirement,
   evaluateSupportBundleSharingRequirement,
+  formatSupportBundleIntegrityRequirementStatus,
   formatSupportBundleSharingRequirementStatus,
+  parseSupportBundleIntegrityDepth,
   parseSupportBundleSharingRecommendation,
   formatSupportBundleInspectionResult,
   formatSupportBundleResult,
@@ -650,6 +653,11 @@ const main = async (): Promise<void> => {
       'Require the bundle to be suitable for this sharing audience (internal-only or external-shareable)',
       parseSupportBundleSharingRecommendation,
     )
+    .option(
+      '--require-integrity-depth <depth>',
+      'Require the bundle to have been generated with at least this doctor integrity depth (metadata or deep)',
+      parseSupportBundleIntegrityDepth,
+    )
     .option('--json', 'Output the inspection result as JSON')
     .option('--output <path>', 'Write the structured JSON result to this file')
     .action(
@@ -659,6 +667,7 @@ const main = async (): Promise<void> => {
           json?: boolean;
           output?: string;
           requireSharing?: 'external-shareable' | 'internal-only';
+          requireIntegrityDepth?: 'metadata' | 'deep';
         },
       ) => {
         const correlationId = createCorrelationId();
@@ -666,6 +675,12 @@ const main = async (): Promise<void> => {
         const result = await inspectSupportBundle(bundlePath);
         const sharingRequirement = options.requireSharing
           ? evaluateSupportBundleSharingRequirement(result, options.requireSharing)
+          : null;
+        const integrityRequirement = options.requireIntegrityDepth
+          ? evaluateSupportBundleIntegrityRequirement(
+              result,
+              options.requireIntegrityDepth,
+            )
           : null;
         const artifactPath = options.output
           ? await writeCliJsonArtifact(
@@ -683,11 +698,17 @@ const main = async (): Promise<void> => {
             result,
             (inspectionResult) => {
               const renderedInspection = formatSupportBundleInspectionResult(inspectionResult);
+              const requirementStatuses = [
+                sharingRequirement
+                  ? formatSupportBundleSharingRequirementStatus(sharingRequirement)
+                  : null,
+                integrityRequirement
+                  ? formatSupportBundleIntegrityRequirementStatus(integrityRequirement)
+                  : null,
+              ].filter((entry): entry is string => entry !== null);
 
-              return sharingRequirement
-                ? `${renderedInspection}\n${formatSupportBundleSharingRequirementStatus(
-                    sharingRequirement,
-                  )}`
+              return requirementStatuses.length > 0
+                ? `${renderedInspection}\n${requirementStatuses.join('\n')}`
                 : renderedInspection;
             },
             {
@@ -698,7 +719,11 @@ const main = async (): Promise<void> => {
           ),
         );
 
-        if (!result.healthy || (sharingRequirement && !sharingRequirement.satisfied)) {
+        if (
+          !result.healthy ||
+          (sharingRequirement && !sharingRequirement.satisfied) ||
+          (integrityRequirement && !integrityRequirement.satisfied)
+        ) {
           process.exitCode = 1;
         }
       },

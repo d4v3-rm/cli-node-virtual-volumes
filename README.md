@@ -264,7 +264,7 @@ The CLI exposes a full recovery workflow:
 | `virtual-volumes doctor [volumeId]` | Run metadata-level consistency checks after restore |
 | `virtual-volumes doctor [volumeId] --verify-blobs` | Run a deeper doctor pass that hashes referenced blob payloads |
 | `virtual-volumes support-bundle <destinationPath> [volumeId]` | Export doctor data, checksum inventory, runtime metadata, and log snapshot for support |
-| `virtual-volumes inspect-support-bundle <bundlePath>` | Verify support bundle metadata, required files, checksums, and sharing suitability |
+| `virtual-volumes inspect-support-bundle <bundlePath>` | Verify support bundle metadata, required files, checksums, sharing suitability, and required integrity depth |
 
 Recommended flow:
 
@@ -286,7 +286,7 @@ virtual-volumes doctor vol_finance_01
 virtual-volumes doctor vol_finance_01 --verify-blobs
 virtual-volumes support-bundle ./reports/finance-support vol_finance_01 --verify-blobs
 virtual-volumes support-bundle ./reports/finance-support vol_finance_01 --backup-path ./backups/finance.sqlite
-virtual-volumes inspect-support-bundle ./reports/finance-support --require-sharing internal-only
+virtual-volumes inspect-support-bundle ./reports/finance-support --require-sharing internal-only --require-integrity-depth deep
 ```
 
 For audit and automation, operational commands also support `--output <path>` to persist a structured JSON artifact with `command`, `cliVersion`, `correlationId`, `generatedAt`, and `payload`, while keeping the normal CLI output on stdout.
@@ -364,6 +364,7 @@ Each support bundle includes:
 - `doctorIntegrityDepth` in the manifest so the handoff knows whether the embedded doctor report was metadata-only or deep
 - `checksums.json` with SHA-256 inventory for the generated files
 - `doctor-report.json`
+- `action-plan.json` with machine-readable next steps and policy-aware handoff commands
 - `handoff-report.md` with operator-friendly scope, fleet posture, next actions, sharing, and retention guidance
 - optional `backup-inspection.json`
 - optional `backup-artifact.manifest.json` when `--backup-path` points to a manifest-backed backup
@@ -380,8 +381,9 @@ Use `virtual-volumes support-bundle ... --verify-blobs` when you want the embedd
 - file size and SHA-256 integrity for the tracked files
 - bundle sensitivity, sharing, and handling metadata so operators can see whether the artifact is external-shareable or internal-only and how long it should be retained
 - retention window compliance, so stale bundles can be flagged before a handoff
+- requested integrity depth, so handoff automation can require metadata-only or deep bundle verification explicitly
 
-Use `virtual-volumes inspect-support-bundle ... --require-sharing external-shareable` before an external handoff, or `--require-sharing internal-only` to ensure the bundle is at least safe for internal escalation.
+Use `virtual-volumes inspect-support-bundle ... --require-sharing external-shareable --require-integrity-depth deep` before an external or high-confidence handoff, or `--require-sharing internal-only --require-integrity-depth metadata` to enforce a lighter internal escalation baseline.
 
 ## Node.js API
 

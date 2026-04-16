@@ -169,6 +169,13 @@ describe('support bundle', () => {
       kind: 'no-op',
       command: null,
     });
+    expect(
+      actionPlan.steps.some(
+        (step) =>
+          step.kind === 'inspect-support-bundle' &&
+          step.command?.includes('--require-integrity-depth metadata') === true,
+      ),
+    ).toBe(true);
     expect(manifest).toEqual(result);
     expect(doctorReport).toMatchObject({
       healthy: true,
@@ -329,6 +336,11 @@ describe('support bundle', () => {
         recommendedCompactions: number;
       };
     };
+    const actionPlan = JSON.parse(
+      await fs.readFile(result.actionPlanPath!, 'utf8'),
+    ) as {
+      steps: { kind: string; command: string | null }[];
+    };
     const handoffReport = await fs.readFile(result.handoffReportPath!, 'utf8');
 
     expect(result.doctorIntegrityDepth).toBe('deep');
@@ -346,6 +358,14 @@ describe('support bundle', () => {
     expect(handoffReport).toContain(
       '[MEDIUM] Preview SQLite maintenance batch: One or more managed volumes are fragmented enough to justify compaction. Command: virtual-volumes compact-recommended --dry-run',
     );
+    expect(
+      actionPlan.steps.some(
+        (step) =>
+          step.kind === 'inspect-support-bundle' &&
+          step.command?.includes('--require-integrity-depth deep') === true,
+      ),
+    ).toBe(true);
+    expect(handoffReport).toContain('--require-integrity-depth deep');
   });
 
   it('omits log snapshots when support bundle creation disables them explicitly', async () => {

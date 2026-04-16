@@ -6,10 +6,13 @@ import type {
   SupportBundleResult,
 } from '../src/domain/types.js';
 import {
+  evaluateSupportBundleIntegrityRequirement,
   evaluateSupportBundleSharingRequirement,
+  formatSupportBundleIntegrityRequirementStatus,
   formatSupportBundleSharingRequirementStatus,
   formatSupportBundleInspectionResult,
   formatSupportBundleResult,
+  parseSupportBundleIntegrityDepth,
   parseSupportBundleSharingRecommendation,
 } from '../src/cli/support-bundle.js';
 import { formatDateTime } from '../src/utils/formatters.js';
@@ -360,6 +363,14 @@ describe('support bundle cli formatter', () => {
     );
   });
 
+  it('parses valid support bundle integrity depths', () => {
+    expect(parseSupportBundleIntegrityDepth('metadata')).toBe('metadata');
+    expect(parseSupportBundleIntegrityDepth('deep')).toBe('deep');
+    expect(() => parseSupportBundleIntegrityDepth('payload')).toThrow(
+      'Unsupported support bundle integrity depth "payload".',
+    );
+  });
+
   it('accepts bundles that are shareable to a broader audience than required', () => {
     const status = evaluateSupportBundleSharingRequirement(
       {
@@ -435,6 +446,62 @@ describe('support bundle cli formatter', () => {
       satisfied: false,
       message:
         'Support bundle sharing guidance is unknown, so the required sharing policy cannot be verified.',
+    });
+  });
+
+  it('accepts bundles that satisfy the requested integrity depth', () => {
+    const status = evaluateSupportBundleIntegrityRequirement(
+      {
+        doctorIntegrityDepth: 'deep',
+      },
+      'metadata',
+    );
+
+    expect(status).toEqual({
+      required: 'metadata',
+      satisfied: true,
+      message: null,
+    });
+    expect(formatSupportBundleIntegrityRequirementStatus(status)).toBe(
+      ['Required integrity depth: metadata', 'Policy gate: PASSED'].join('\n'),
+    );
+  });
+
+  it('fails the integrity depth gate when the bundle was not deeply verified enough', () => {
+    const status = evaluateSupportBundleIntegrityRequirement(
+      {
+        doctorIntegrityDepth: 'metadata',
+      },
+      'deep',
+    );
+
+    expect(status).toEqual({
+      required: 'deep',
+      satisfied: false,
+      message:
+        'Support bundle was generated with metadata integrity depth, but deep was required.',
+    });
+    expect(formatSupportBundleIntegrityRequirementStatus(status)).toContain(
+      'Policy gate: FAILED',
+    );
+    expect(formatSupportBundleIntegrityRequirementStatus(status)).toContain(
+      'Policy note: Support bundle was generated with metadata integrity depth, but deep was required.',
+    );
+  });
+
+  it('fails the integrity depth gate when the bundle depth is unknown', () => {
+    const status = evaluateSupportBundleIntegrityRequirement(
+      {
+        doctorIntegrityDepth: null,
+      },
+      'metadata',
+    );
+
+    expect(status).toEqual({
+      required: 'metadata',
+      satisfied: false,
+      message:
+        'Support bundle integrity depth is unknown, so the required verification depth cannot be verified.',
     });
   });
 });

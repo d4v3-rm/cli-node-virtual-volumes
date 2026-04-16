@@ -189,13 +189,13 @@ Per escalation o handoff verso supporto tecnico:
 3. Se stai lavorando su un restore o un backup sospetto, aggiungi `--backup-path <backupPath>`.
 4. Se il bundle deve essere piu' facile da condividere, usa `--no-logs` per escludere gli snapshot app e audit.
 5. Esegui `virtual-volumes inspect-support-bundle <destinationPath>` per verificare integrita' e checksum del bundle.
-6. Se il bundle deve uscire dall'organizzazione, usa `virtual-volumes inspect-support-bundle <destinationPath> --require-sharing external-shareable`.
-7. Se l'handoff resta interno, puoi comunque imporre `--require-sharing internal-only` per bloccare bundle senza guidance valida.
+6. Se il bundle deve uscire dall'organizzazione o vuoi un handoff ad alta confidenza, usa `virtual-volumes inspect-support-bundle <destinationPath> --require-sharing external-shareable --require-integrity-depth deep`.
+7. Se l'handoff resta interno, puoi comunque imporre `--require-sharing internal-only --require-integrity-depth metadata` per bloccare bundle senza guidance valida o con verification depth insufficiente.
 8. Condividi la cartella generata, che include `manifest.json`, `checksums.json`, `doctor-report.json`, `handoff-report.md`, eventuale `backup-inspection.json`, eventuale copia del manifest del backup e, se non esclusi, tail snapshot del log corrente.
 9. Se usi `VOLUME_REDACT_SENSITIVE_DETAILS=true`, anche i report JSON interni del bundle vengono redatti prima della condivisione.
 10. Controlla il `contentProfile` del bundle o l'output di `inspect-support-bundle` per capire se l'artifact e' `external-shareable` oppure `internal-only`.
 11. Segui anche `recommendedRetentionDays` e le `disposalNotes` del bundle per evitare che artifact diagnostici restino in giro oltre il necessario.
-12. Usa `handoff-report.md` come punto di partenza operativo: ora include integrity depth, postura fleet di compaction/repair-safe e next actions suggerite.
+12. Usa `handoff-report.md` e `action-plan.json` come punto di partenza operativo: ora includono integrity depth, postura fleet di compaction/repair-safe e next actions suggerite.
 13. Se `inspect-support-bundle` segnala che la retention e' stata superata, rigenera il bundle prima dell'handoff invece di condividere un artifact stantio.
 
 ## Restore drill periodico
