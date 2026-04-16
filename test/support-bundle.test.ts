@@ -845,6 +845,69 @@ describe('support bundle', () => {
     );
   });
 
+  it('reports invalid handoff reports even when the checksum inventory matches the tampered file', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Broken Handoff Report' });
+    const bundlePath = path.join(runtime.config.dataDir, '..', 'broken-handoff-report');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/hello.txt', 'tamper handoff');
+
+    await createSupportBundle(runtime, {
+      destinationPath: bundlePath,
+      volumeId: volume.id,
+      includeLogs: false,
+    });
+
+    await rewriteBundleFileAndRefreshChecksum(
+      bundlePath,
+      'handoff-report.md',
+      '# Not a handoff report\n\nMissing every required section.\n',
+    );
+
+    const inspection = await inspectSupportBundle(bundlePath);
+
+    expect(inspection.healthy).toBe(false);
+    expect(inspection.issues).toContainEqual(
+      expect.objectContaining({
+        code: 'INVALID_HANDOFF_REPORT',
+        role: 'handoff-report',
+      }),
+    );
+  });
+
+  it('reports handoff report mismatches even when the checksum inventory matches', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Mismatched Handoff Report' });
+    const bundlePath = path.join(runtime.config.dataDir, '..', 'mismatched-handoff-report');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/hello.txt', 'tamper handoff');
+
+    await createSupportBundle(runtime, {
+      destinationPath: bundlePath,
+      volumeId: volume.id,
+      includeLogs: false,
+    });
+
+    const handoffReportPath = path.join(bundlePath, 'handoff-report.md');
+    const handoffReport = await fs.readFile(handoffReportPath, 'utf8');
+
+    await rewriteBundleFileAndRefreshChecksum(
+      bundlePath,
+      'handoff-report.md',
+      handoffReport.replace('- Retention: 7 days', '- Retention: 30 days'),
+    );
+
+    const inspection = await inspectSupportBundle(bundlePath);
+
+    expect(inspection.healthy).toBe(false);
+    expect(inspection.issues).toContainEqual(
+      expect.objectContaining({
+        code: 'HANDOFF_REPORT_MISMATCH',
+        role: 'handoff-report',
+      }),
+    );
+  });
+
   it('flags support bundles that exceed their recommended retention window', async () => {
     const runtime = await createIsolatedRuntime({
       redactSensitiveDetails: true,
