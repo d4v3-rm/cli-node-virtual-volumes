@@ -18,6 +18,7 @@ import type {
   FileEntry,
   RestoreVolumeBackupOptions,
   StorageDoctorIssue,
+  StorageDoctorMaintenanceSummary,
   StorageDoctorMaintenanceStats,
   StorageDoctorReport,
   StorageDoctorVolumeReport,
@@ -86,6 +87,7 @@ interface VolumeBackupArtifactMetadata {
 const escapeSqliteStringLiteral = (value: string): string => value.replaceAll("'", "''");
 const BACKUP_MANIFEST_SUFFIX = '.manifest.json';
 const BACKUP_MANIFEST_FORMAT_VERSION = 1 as const;
+const MAINTENANCE_SUMMARY_TOP_CANDIDATE_LIMIT = 5;
 
 export class VolumeRepository {
   private readonly volumeCache = new Map<string, VolumeRecord>();
@@ -480,7 +482,7 @@ export class VolumeRepository {
       (total, report) => total + report.issueCount,
       0,
     );
-    const maintenanceSummary = volumeReports.reduce(
+    const maintenanceSummary = volumeReports.reduce<StorageDoctorMaintenanceSummary>(
       (summary, report) => {
         if (!report.maintenance) {
           return summary;
@@ -499,8 +501,25 @@ export class VolumeRepository {
         recommendedCompactions: 0,
         totalArtifactBytes: 0,
         totalFreeBytes: 0,
+        topCompactionCandidates: [],
       },
     );
+    maintenanceSummary.topCompactionCandidates = volumeReports
+      .filter((report) => report.maintenance?.compactionRecommended)
+      .sort(
+        (left, right) =>
+          (right.maintenance?.freeBytes ?? 0) - (left.maintenance?.freeBytes ?? 0),
+      )
+      .slice(0, MAINTENANCE_SUMMARY_TOP_CANDIDATE_LIMIT)
+      .map((report) => ({
+        volumeId: report.volumeId,
+        volumeName: report.volumeName,
+        revision: report.revision,
+        issueCount: report.issueCount,
+        artifactBytes: report.maintenance?.artifactBytes ?? 0,
+        freeBytes: report.maintenance?.freeBytes ?? 0,
+        freeRatio: report.maintenance?.freeRatio ?? 0,
+      }));
 
     return {
       generatedAt: new Date().toISOString(),

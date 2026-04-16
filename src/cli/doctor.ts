@@ -27,6 +27,12 @@ const formatMaintenance = (maintenance: StorageDoctorMaintenanceStats): string =
     `compact=${maintenance.compactionRecommended ? 'recommended' : 'not-needed'}`,
   ].join(' ');
 
+const formatMaintenanceCandidate = (
+  index: number,
+  candidate: StorageDoctorReport['maintenanceSummary']['topCompactionCandidates'][number],
+): string =>
+  `  ${index}. ${candidate.volumeName} (${candidate.volumeId}) free=${formatBytes(candidate.freeBytes)} (${(candidate.freeRatio * 100).toFixed(1)}%) artifacts=${formatBytes(candidate.artifactBytes)} issues=${candidate.issueCount}`;
+
 const formatVolumeReport = (report: StorageDoctorVolumeReport): string => {
   const lines = [
     `${report.healthy ? 'OK' : 'FAIL'} ${report.volumeName} (${report.volumeId}) revision=${report.revision} issues=${report.issueCount}`,
@@ -59,6 +65,15 @@ export const formatDoctorReport = (report: StorageDoctorReport): string => {
     `Total SQLite artifacts: ${formatBytes(report.maintenanceSummary.totalArtifactBytes)}`,
     `Total reclaimable free bytes: ${formatBytes(report.maintenanceSummary.totalFreeBytes)}`,
   ];
+
+  if (report.maintenanceSummary.topCompactionCandidates.length > 0) {
+    lines.push('Top compaction candidates:');
+    lines.push(
+      ...report.maintenanceSummary.topCompactionCandidates.map((candidate, index) =>
+        formatMaintenanceCandidate(index + 1, candidate),
+      ),
+    );
+  }
 
   if (report.volumes.length > 0) {
     lines.push('');

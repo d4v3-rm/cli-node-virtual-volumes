@@ -306,6 +306,16 @@ export interface StorageDoctorMaintenanceStats {
   compactionRecommended: boolean;
 }
 
+export interface StorageDoctorMaintenanceCandidate {
+  volumeId: string;
+  volumeName: string;
+  revision: number;
+  issueCount: number;
+  artifactBytes: number;
+  freeBytes: number;
+  freeRatio: number;
+}
+
 export interface StorageDoctorVolumeReport {
   volumeId: string;
   volumeName: string;
@@ -321,6 +331,7 @@ export interface StorageDoctorMaintenanceSummary {
   recommendedCompactions: number;
   totalArtifactBytes: number;
   totalFreeBytes: number;
+  topCompactionCandidates: StorageDoctorMaintenanceCandidate[];
 }
 
 export interface StorageDoctorReport {
