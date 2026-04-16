@@ -101,6 +101,12 @@ describe('support bundle', () => {
     const checksumManifest = JSON.parse(
       await fs.readFile(result.checksumsPath, 'utf8'),
     ) as SupportBundleChecksumManifest;
+    const actionPlan = JSON.parse(
+      await fs.readFile(result.actionPlanPath!, 'utf8'),
+    ) as {
+      doctorIntegrityDepth: 'metadata' | 'deep';
+      steps: { kind: string; command: string | null }[];
+    };
     const handoffReport = await fs.readFile(result.handoffReportPath!, 'utf8');
     const copiedBackupManifest = JSON.parse(
       await fs.readFile(result.backupManifestCopyPath!, 'utf8'),
@@ -122,6 +128,9 @@ describe('support bundle', () => {
     expect(result.issueCount).toBe(0);
     expect(result.backupInspectionReportPath).not.toBeNull();
     expect(result.backupManifestCopyPath).not.toBeNull();
+    expect(result.actionPlanPath).toBe(
+      path.join(path.resolve(bundlePath), 'action-plan.json'),
+    );
     expect(result.handoffReportPath).toBe(
       path.join(path.resolve(bundlePath), 'handoff-report.md'),
     );
@@ -151,7 +160,15 @@ describe('support bundle', () => {
     expect(handoffReport).toContain('- Sharing: internal-only');
     expect(handoffReport).toContain('- Retention: 7 days');
     expect(handoffReport).toContain('- Doctor report: doctor-report.json');
-    expect(handoffReport).toContain('- No immediate storage remediation is recommended from this snapshot.');
+    expect(handoffReport).toContain('- Action plan: action-plan.json');
+    expect(handoffReport).toContain(
+      '[LOW] No immediate remediation required: This snapshot is healthy and does not currently require repair-safe or compaction follow-up.',
+    );
+    expect(actionPlan.doctorIntegrityDepth).toBe('metadata');
+    expect(actionPlan.steps[0]).toMatchObject({
+      kind: 'no-op',
+      command: null,
+    });
     expect(manifest).toEqual(result);
     expect(doctorReport).toMatchObject({
       healthy: true,
@@ -169,9 +186,10 @@ describe('support bundle', () => {
       checksumSha256: backupResult.checksumSha256,
     });
     expect(checksumManifest.bundlePath).toBe(path.resolve(bundlePath));
-    expect(checksumManifest.files).toHaveLength(7);
+    expect(checksumManifest.files).toHaveLength(8);
     const manifestRecord = findBundleFileRecord(checksumManifest.files, 'manifest');
     const doctorRecord = findBundleFileRecord(checksumManifest.files, 'doctor-report');
+    const actionPlanRecord = findBundleFileRecord(checksumManifest.files, 'action-plan');
     const handoffRecord = findBundleFileRecord(checksumManifest.files, 'handoff-report');
     const inspectionRecord = findBundleFileRecord(
       checksumManifest.files,
@@ -195,6 +213,10 @@ describe('support bundle', () => {
       relativePath: 'doctor-report.json',
     });
     expect(doctorRecord?.checksumSha256).toMatch(/^[0-9a-f]{64}$/u);
+    expect(actionPlanRecord).toMatchObject({
+      relativePath: 'action-plan.json',
+    });
+    expect(actionPlanRecord?.checksumSha256).toMatch(/^[0-9a-f]{64}$/u);
     expect(handoffRecord).toMatchObject({
       relativePath: 'handoff-report.md',
     });
@@ -319,10 +341,10 @@ describe('support bundle', () => {
     expect(handoffReport).toContain('## Top Compaction Candidates');
     expect(handoffReport).toContain('## Top Repair Candidates');
     expect(handoffReport).toContain(
-      '- Run virtual-volumes repair-safe --verify-blobs --dry-run to preview safe fleet repairs before execution.',
+      '[HIGH] Preview safe batch repairs: One or more volumes are ready for automated repair-safe remediation. Command: virtual-volumes repair-safe --verify-blobs --dry-run',
     );
     expect(handoffReport).toContain(
-      '- Run virtual-volumes compact-recommended --dry-run to size the current SQLite maintenance batch.',
+      '[MEDIUM] Preview SQLite maintenance batch: One or more managed volumes are fragmented enough to justify compaction. Command: virtual-volumes compact-recommended --dry-run',
     );
   });
 
@@ -350,6 +372,7 @@ describe('support bundle', () => {
 
     expect(result.logSnapshotPath).toBeNull();
     expect(result.auditLogSnapshotPath).toBeNull();
+    expect(result.actionPlanPath).not.toBeNull();
     expect(result.contentProfile).toMatchObject({
       includesAppLogSnapshot: false,
       includesAuditLogSnapshot: false,
@@ -462,10 +485,11 @@ describe('support bundle', () => {
       bundleCorrelationId: runtime.correlationId,
       doctorIntegrityDepth: 'metadata',
       volumeId: volume.id,
+      actionPlanPath: path.join(path.resolve(bundlePath), 'action-plan.json'),
       handoffReportPath: path.join(path.resolve(bundlePath), 'handoff-report.md'),
       issueCount: 0,
-      expectedFiles: 7,
-      verifiedFiles: 7,
+      expectedFiles: 8,
+      verifiedFiles: 8,
       contentProfile: {
         redacted: false,
         includesAppLogSnapshot: true,
@@ -516,8 +540,8 @@ describe('support bundle', () => {
     );
 
     expect(inspection.healthy).toBe(false);
-    expect(inspection.expectedFiles).toBe(5);
-    expect(inspection.verifiedFiles).toBe(4);
+    expect(inspection.expectedFiles).toBe(6);
+    expect(inspection.verifiedFiles).toBe(5);
     expect(issueCodes).toContain('CHECKSUM_MISMATCH');
     expect(issueCodes).toContain('MISSING_BUNDLE_FILE');
   });
@@ -622,6 +646,9 @@ describe('support bundle', () => {
 
     expect(inspection.healthy).toBe(true);
     expect(inspection.doctorIntegrityDepth).toBe('metadata');
+    expect(inspection.actionPlanPath).toBe(
+      path.join(path.resolve(bundlePath), 'action-plan.json'),
+    );
     expect(inspection.contentProfile).toMatchObject({
       redacted: true,
       includesAppLogSnapshot: false,

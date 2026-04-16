@@ -151,16 +151,6 @@ const resolveTarballPath = async () => {
     return path.resolve(explicitPath);
   }
 
-  const entries = await fs.readdir(rootDir, { withFileTypes: true });
-  const tarballs = entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.tgz'))
-    .map((entry) => path.join(rootDir, entry.name));
-
-  if (tarballs.length > 0) {
-    tarballs.sort();
-    return tarballs[tarballs.length - 1];
-  }
-
   const packRun = runCommand(npmCommand, ['pack', '--json']);
   const packResults = parseTrailingJson(packRun.stdout);
   const packedFile = packResults.at(0)?.filename;
@@ -532,6 +522,9 @@ try {
   const supportBundleManifest = await readJson(
     path.join(supportBundlePath, 'manifest.json'),
   );
+  const supportBundleActionPlan = await readJson(
+    path.join(supportBundlePath, 'action-plan.json'),
+  );
   const checksumManifest = await readJson(supportBundleManifest.checksumsPath);
 
   assert(
@@ -561,6 +554,11 @@ try {
     'Installed CLI support bundle should include a doctor report path.',
   );
   assert(
+    supportBundleManifest.actionPlanPath ===
+      path.join(path.resolve(supportBundlePath), 'action-plan.json'),
+    'Installed CLI support bundle should include an action plan path.',
+  );
+  assert(
     supportBundleManifest.handoffReportPath ===
       path.join(path.resolve(supportBundlePath), 'handoff-report.md'),
     'Installed CLI support bundle should include a handoff report path.',
@@ -586,6 +584,15 @@ try {
   assert(
     await pathExists(supportBundleManifest.handoffReportPath),
     'Installed CLI support bundle should include a handoff report.',
+  );
+  assert(
+    await pathExists(supportBundleManifest.actionPlanPath),
+    'Installed CLI support bundle should include an action plan.',
+  );
+  assert(
+    Array.isArray(supportBundleActionPlan.steps) &&
+      supportBundleActionPlan.steps.length >= 1,
+    'Installed CLI support bundle action plan should include at least one step.',
   );
   assert(
     supportBundleManifest.backupManifestCopyPath === null,
@@ -624,6 +631,10 @@ try {
     'Installed CLI inspect-support-bundle should expose the expected sharing recommendation.',
   );
   assert(
+    supportBundleInspection.actionPlanPath === supportBundleManifest.actionPlanPath,
+    'Installed CLI inspect-support-bundle should expose the action plan path.',
+  );
+  assert(
     supportBundleInspectionArtifact.command === 'inspect-support-bundle',
     'Installed CLI support-bundle inspection artifact should include the command metadata.',
   );
@@ -640,6 +651,11 @@ try {
     supportBundleInspectionArtifact.payload.bundleCorrelationId ===
       supportBundleManifest.correlationId,
     'Installed CLI support-bundle inspection should expose the bundle correlation id.',
+  );
+  assert(
+    supportBundleInspectionArtifact.payload.actionPlanPath ===
+      supportBundleManifest.actionPlanPath,
+    'Installed CLI support-bundle inspection artifact should expose the action plan path.',
   );
 
   process.stdout.write(

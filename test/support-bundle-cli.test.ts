@@ -32,6 +32,7 @@ describe('support bundle cli formatter', () => {
       manifestPath: 'C:\\reports\\support-bundle\\manifest.json',
       checksumsPath: 'C:\\reports\\support-bundle\\checksums.json',
       doctorReportPath: 'C:\\reports\\support-bundle\\doctor-report.json',
+      actionPlanPath: 'C:\\reports\\support-bundle\\action-plan.json',
       handoffReportPath: 'C:\\reports\\support-bundle\\handoff-report.md',
       backupInspectionReportPath:
         'C:\\reports\\support-bundle\\backup-inspection.json',
@@ -98,6 +99,7 @@ describe('support bundle cli formatter', () => {
         'Volumes checked: 1',
         'Issues detected: 0',
         'Doctor report: C:\\reports\\support-bundle\\doctor-report.json',
+        'Action plan: C:\\reports\\support-bundle\\action-plan.json',
         'Handoff report: C:\\reports\\support-bundle\\handoff-report.md',
         'Backup inspection: C:\\reports\\support-bundle\\backup-inspection.json',
         'Backup manifest copy: C:\\reports\\support-bundle\\backup-artifact.manifest.json',
@@ -135,6 +137,7 @@ describe('support bundle cli formatter', () => {
       manifestPath: '/tmp/support-bundle/manifest.json',
       checksumsPath: '/tmp/support-bundle/checksums.json',
       doctorReportPath: '/tmp/support-bundle/doctor-report.json',
+      actionPlanPath: '/tmp/support-bundle/action-plan.json',
       handoffReportPath: '/tmp/support-bundle/handoff-report.md',
       backupInspectionReportPath: null,
       backupManifestCopyPath: null,
@@ -195,6 +198,9 @@ describe('support bundle cli formatter', () => {
       'Backup inspection: not included',
     );
     expect(formatSupportBundleResult(result)).toContain(
+      'Action plan: /tmp/support-bundle/action-plan.json',
+    );
+    expect(formatSupportBundleResult(result)).toContain(
       'Handoff report: /tmp/support-bundle/handoff-report.md',
     );
     expect(formatSupportBundleResult(result)).toContain(
@@ -219,6 +225,7 @@ describe('support bundle cli formatter', () => {
       bundleCreatedAt: '2026-04-15T21:20:00.000Z',
       doctorIntegrityDepth: 'deep',
       volumeId: 'volume-1',
+      actionPlanPath: 'C:\\reports\\support-bundle\\action-plan.json',
       handoffReportPath: 'C:\\reports\\support-bundle\\handoff-report.md',
       issueCount: 0,
       expectedFiles: 5,
@@ -258,6 +265,7 @@ describe('support bundle cli formatter', () => {
         'Retention: 30 days',
         `Bundle created at: ${formatDateTime(result.bundleCreatedAt!)}`,
         'Scope: volume-1',
+        'Action plan: C:\\reports\\support-bundle\\action-plan.json',
         'Handoff report: C:\\reports\\support-bundle\\handoff-report.md',
         'Verified files: 5/5',
         'Issues: 0',
@@ -284,6 +292,7 @@ describe('support bundle cli formatter', () => {
       bundleCreatedAt: null,
       doctorIntegrityDepth: null,
       volumeId: null,
+      actionPlanPath: null,
       handoffReportPath: null,
       issueCount: 2,
       expectedFiles: 4,
@@ -324,6 +333,9 @@ describe('support bundle cli formatter', () => {
     expect(formatSupportBundleInspectionResult(result)).toContain('Retention: unknown');
     expect(formatSupportBundleInspectionResult(result)).toContain(
       'Bundle created at: unknown',
+    );
+    expect(formatSupportBundleInspectionResult(result)).toContain(
+      'Action plan: unknown',
     );
     expect(formatSupportBundleInspectionResult(result)).toContain(
       'Handoff report: unknown',

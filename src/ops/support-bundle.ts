@@ -7,6 +7,7 @@ import path from 'node:path';
 import { APP_VERSION } from '../config/app-metadata.js';
 import { VolumeError } from '../domain/errors.js';
 import type {
+  SupportBundleActionPlan,
   StorageDoctorReport,
   CreateSupportBundleInput,
   SupportBundleChecksumManifest,
@@ -30,6 +31,7 @@ import { SUPPORTED_VOLUME_SCHEMA_VERSION } from '../storage/sqlite-volume.js';
 const SUPPORT_BUNDLE_VERSION = 1 as const;
 const LOG_TAIL_READ_CHUNK_BYTES = 64 * 1024;
 const SUPPORT_BUNDLE_FILE_ROLES: SupportBundleFileRole[] = [
+  'action-plan',
   'audit-log-snapshot',
   'backup-inspection',
   'backup-manifest',
@@ -151,6 +153,9 @@ const isSupportBundleResultLike = (
     typeof value.bundlePath === 'string' &&
     typeof value.manifestPath === 'string' &&
     typeof value.doctorReportPath === 'string' &&
+    (typeof value.actionPlanPath === 'string' ||
+      value.actionPlanPath === null ||
+      typeof value.actionPlanPath === 'undefined') &&
     (typeof value.handoffReportPath === 'string' ||
       value.handoffReportPath === null ||
       typeof value.handoffReportPath === 'undefined') &&
@@ -262,6 +267,7 @@ const coerceSupportBundleResult = (value: unknown): SupportBundleResult | null =
 
   return {
     ...value,
+    actionPlanPath: isStringOrNull(value.actionPlanPath) ? value.actionPlanPath : null,
     handoffReportPath: isStringOrNull(value.handoffReportPath)
       ? value.handoffReportPath
       : null,
@@ -344,6 +350,13 @@ const getExpectedBundleFiles = (
     { path: manifest.doctorReportPath, role: 'doctor-report' },
   ];
 
+  if (manifest.actionPlanPath) {
+    files.push({
+      path: manifest.actionPlanPath,
+      role: 'action-plan',
+    });
+  }
+
   if (manifest.handoffReportPath) {
     files.push({
       path: manifest.handoffReportPath,
@@ -393,12 +406,89 @@ const toBundleRelativePath = (
   return path.relative(bundlePath, filePath).replace(/\\/g, '/');
 };
 
+const buildSupportBundleActionPlan = (
+  result: SupportBundleResult,
+  doctorReport: StorageDoctorReport,
+): SupportBundleActionPlan => {
+  const deepVerificationFlag =
+    doctorReport.integrityDepth === 'deep' ? ' --verify-blobs' : '';
+  const steps: SupportBundleActionPlan['steps'] = [];
+
+  if (doctorReport.repairSummary.readyBatchRepairVolumes > 0) {
+    steps.push({
+      kind: 'repair-safe',
+      priority: 'high',
+      title: 'Preview safe batch repairs',
+      reason:
+        'One or more volumes are ready for automated repair-safe remediation.',
+      command: `virtual-volumes repair-safe${deepVerificationFlag} --dry-run`,
+    });
+  }
+
+  if (doctorReport.repairSummary.blockedBatchRepairVolumes > 0) {
+    steps.push({
+      kind: 'manual-investigation',
+      priority: 'high',
+      title: 'Investigate blocked repair candidates',
+      reason:
+        'Some repairable volumes still mix safe drifts with non-safe findings and require manual review.',
+      command: `virtual-volumes doctor${deepVerificationFlag}`,
+    });
+  }
+
+  if (doctorReport.maintenanceSummary.recommendedCompactions > 0) {
+    steps.push({
+      kind: 'compact-recommended',
+      priority: 'medium',
+      title: 'Preview SQLite maintenance batch',
+      reason:
+        'One or more managed volumes are fragmented enough to justify compaction.',
+      command: 'virtual-volumes compact-recommended --dry-run',
+    });
+  }
+
+  steps.push({
+    kind: 'inspect-support-bundle',
+    priority: 'low',
+    title: 'Validate bundle before handoff',
+    reason:
+      'Re-run bundle inspection with the intended sharing policy before handing it to another team.',
+    command: `virtual-volumes inspect-support-bundle "${result.bundlePath}" --require-sharing ${result.contentProfile.sharingRecommendation}`,
+  });
+
+  if (
+    doctorReport.issueCount === 0 &&
+    doctorReport.maintenanceSummary.recommendedCompactions === 0 &&
+    doctorReport.repairSummary.repairableVolumes === 0
+  ) {
+    steps.unshift({
+      kind: 'no-op',
+      priority: 'low',
+      title: 'No immediate remediation required',
+      reason: 'This snapshot is healthy and does not currently require repair-safe or compaction follow-up.',
+      command: null,
+    });
+  }
+
+  return {
+    bundleVersion: SUPPORT_BUNDLE_VERSION,
+    generatedAt: result.generatedAt,
+    doctorIntegrityDepth: doctorReport.integrityDepth ?? 'metadata',
+    healthy: doctorReport.healthy,
+    issueCount: doctorReport.issueCount,
+    recommendedCompactions: doctorReport.maintenanceSummary.recommendedCompactions,
+    repairableVolumes: doctorReport.repairSummary.repairableVolumes,
+    readyBatchRepairVolumes: doctorReport.repairSummary.readyBatchRepairVolumes,
+    blockedBatchRepairVolumes: doctorReport.repairSummary.blockedBatchRepairVolumes,
+    steps,
+  };
+};
+
 const buildSupportBundleHandoffReport = (
   result: SupportBundleResult,
   doctorReport: StorageDoctorReport,
 ): string => {
-  const deepVerificationFlag =
-    doctorReport.integrityDepth === 'deep' ? ' --verify-blobs' : '';
+  const actionPlan = buildSupportBundleActionPlan(result, doctorReport);
   const lines = [
     '# Support Bundle Handoff Report',
     '',
@@ -416,6 +506,7 @@ const buildSupportBundleHandoffReport = (
     '',
     '## Included Artifacts',
     `- Doctor report: ${toBundleRelativePath(result.bundlePath, result.doctorReportPath) ?? 'not included'}`,
+    `- Action plan: ${toBundleRelativePath(result.bundlePath, result.actionPlanPath) ?? 'not included'}`,
     `- Backup inspection: ${toBundleRelativePath(result.bundlePath, result.backupInspectionReportPath) ?? 'not included'}`,
     `- Backup manifest copy: ${toBundleRelativePath(result.bundlePath, result.backupManifestCopyPath) ?? 'not included'}`,
     `- App log snapshot: ${toBundleRelativePath(result.bundlePath, result.logSnapshotPath) ?? 'not included'}`,
@@ -475,39 +566,19 @@ const buildSupportBundleHandoffReport = (
   lines.push('', '## Disposal Notes');
   lines.push(...result.contentProfile.disposalNotes.map((note) => `- ${note}`));
   lines.push('', '## Recommended Next Actions');
-
-  if (doctorReport.repairSummary.readyBatchRepairVolumes > 0) {
-    lines.push(
-      `- Run virtual-volumes repair-safe${deepVerificationFlag} --dry-run to preview safe fleet repairs before execution.`,
-    );
+  for (const step of actionPlan.steps) {
+    const prefix = `[${step.priority.toUpperCase()}] ${step.title}: ${step.reason}`;
+    if (step.command) {
+      lines.push(`- ${prefix} Command: ${step.command}`);
+    } else {
+      lines.push(`- ${prefix}`);
+    }
   }
-
-  if (doctorReport.repairSummary.blockedBatchRepairVolumes > 0) {
-    lines.push(
-      '- Review blocked repair candidates in doctor-report.json before automating remediation.',
-    );
-  }
-
-  if (doctorReport.maintenanceSummary.recommendedCompactions > 0) {
-    lines.push(
-      '- Run virtual-volumes compact-recommended --dry-run to size the current SQLite maintenance batch.',
-    );
-  }
-
-  if (
-    doctorReport.issueCount === 0 &&
-    doctorReport.maintenanceSummary.recommendedCompactions === 0 &&
-    doctorReport.repairSummary.repairableVolumes === 0
-  ) {
-    lines.push('- No immediate storage remediation is recommended from this snapshot.');
-  }
-
-  lines.push('- Run inspect-support-bundle before handoff to validate integrity.');
   lines.push(
-    `- Enforce the intended audience with --require-sharing ${result.contentProfile.sharingRecommendation}.`,
+    `- [LOW] Respect sharing policy: enforce --require-sharing ${result.contentProfile.sharingRecommendation} before externalizing the bundle.`,
   );
   lines.push(
-    '- Keep the bundle only for the recommended retention window, then remove it with its copied reports and snapshots.',
+    '- [LOW] Retention: remove the bundle after the recommended retention window together with copied reports and snapshots.',
   );
 
   return `${lines.join('\n')}\n`;
@@ -658,6 +729,7 @@ export const createSupportBundle = async (
       : null;
     const generatedAt = new Date().toISOString();
     const doctorReportPath = path.join(destinationPath, 'doctor-report.json');
+    const actionPlanPath = path.join(destinationPath, 'action-plan.json');
     const handoffReportPath = path.join(destinationPath, 'handoff-report.md');
     const backupInspectionReportPath = backupInspection
       ? path.join(destinationPath, 'backup-inspection.json')
@@ -741,6 +813,7 @@ export const createSupportBundle = async (
       bundlePath: destinationPath,
       manifestPath: path.join(destinationPath, 'manifest.json'),
       doctorReportPath,
+      actionPlanPath,
       handoffReportPath,
       backupInspectionReportPath,
       backupManifestCopyPath,
@@ -790,6 +863,15 @@ export const createSupportBundle = async (
           : process.cwd(),
       },
     };
+    const sanitizedActionPlan = sanitizeObservabilityValue(
+      buildSupportBundleActionPlan(result, sanitizedDoctorReport),
+      runtime.config.redactSensitiveDetails,
+    );
+
+    await writeJsonAtomic(
+      path.join(temporaryBundlePath, 'action-plan.json'),
+      sanitizedActionPlan,
+    );
 
     await fs.writeFile(
       path.join(temporaryBundlePath, 'handoff-report.md'),
@@ -819,6 +901,14 @@ export const createSupportBundle = async (
         temporaryBundlePath,
         path.join(temporaryBundlePath, 'doctor-report.json'),
         'doctor-report',
+        null,
+        runtime.config.redactSensitiveDetails,
+      ),
+      await buildBundleFileRecord(
+        destinationPath,
+        temporaryBundlePath,
+        path.join(temporaryBundlePath, 'action-plan.json'),
+        'action-plan',
         null,
         runtime.config.redactSensitiveDetails,
       ),
@@ -1153,6 +1243,7 @@ export const inspectSupportBundle = async (
     doctorIntegrityDepth: manifest?.doctorIntegrityDepth ?? null,
     volumeId: manifest?.volumeId ?? null,
     handoffReportPath: manifest?.handoffReportPath ?? null,
+    actionPlanPath: manifest?.actionPlanPath ?? null,
     issueCount: issues.length,
     expectedFiles: checksumManifest?.files.length ?? 0,
     verifiedFiles,
