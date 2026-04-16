@@ -1729,6 +1729,9 @@ describe('VolumeService', () => {
       );
     });
 
+    const doctorBefore = await runtime.volumeService.runDoctor(undefined, {
+      verifyBlobPayloads: true,
+    });
     const dryRun = await runtime.volumeService.repairSafeVolumes({
       dryRun: true,
       limit: 1,
@@ -1737,7 +1740,25 @@ describe('VolumeService', () => {
     const alphaPlan = dryRun.volumes.find((item) => item.volumeId === alphaVolume.id);
     const betaPlan = dryRun.volumes.find((item) => item.volumeId === betaVolume.id);
     const blockedPlan = dryRun.volumes.find((item) => item.volumeId === blockedVolume.id);
+    const topRepairCandidate = doctorBefore.repairSummary.topRepairCandidates[0];
 
+    expect(doctorBefore.repairSummary.repairableVolumes).toBe(3);
+    expect(doctorBefore.repairSummary.readyBatchRepairVolumes).toBe(2);
+    expect(doctorBefore.repairSummary.blockedBatchRepairVolumes).toBe(1);
+    expect(doctorBefore.repairSummary.totalRepairableIssues).toBe(3);
+    expect(topRepairCandidate).toMatchObject({
+      volumeId: alphaVolume.id,
+      readyForBatchRepair: true,
+      repairableIssueCount: 1,
+    });
+    const blockedRepairCandidate = doctorBefore.repairSummary.topRepairCandidates.find(
+      (candidate) => candidate.volumeId === blockedVolume.id,
+    );
+
+    expect(blockedRepairCandidate?.readyForBatchRepair).toBe(false);
+    expect(blockedRepairCandidate?.blockingIssueCodes).toContain(
+      'BLOB_CONTENT_REF_MISMATCH',
+    );
     expect(dryRun.integrityDepth).toBe('deep');
     expect(dryRun.checkedVolumes).toBe(4);
     expect(dryRun.repairableVolumes).toBe(3);
@@ -1778,6 +1799,9 @@ describe('VolumeService', () => {
       followUpDoctor.volumes.find((volumeReport) => volumeReport.volumeId === cleanVolume.id)
         ?.issues ?? [];
 
+    expect(followUpDoctor.repairSummary.repairableVolumes).toBe(2);
+    expect(followUpDoctor.repairSummary.readyBatchRepairVolumes).toBe(1);
+    expect(followUpDoctor.repairSummary.blockedBatchRepairVolumes).toBe(1);
     expect(batchResult.integrityDepth).toBe('deep');
     expect(batchResult.repairableVolumes).toBe(3);
     expect(batchResult.plannedVolumes).toBe(1);

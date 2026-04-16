@@ -337,6 +337,7 @@ Each standard backup produces:
 - database, WAL, and total artifact bytes
 - free-page bytes and free-page ratio
 - top compaction candidates in descending reclaimable-byte order
+- fleet-wide safe-repair posture, including repairable volumes, blocked repair candidates, and top repair candidates
 - blob reference-count mismatches when blob liveness metadata drifts from actual file references
 - safe blob layout drifts such as `size` or `chunk_count` mismatches against the current SQLite payload layout
 - `COMPACTION_RECOMMENDED` when a volume is fragmented enough to justify running `compact`
