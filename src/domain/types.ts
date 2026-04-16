@@ -251,11 +251,15 @@ export interface VolumeCompactionBatchResult {
   dryRun: boolean;
   checkedVolumes: number;
   recommendedVolumes: number;
+  eligibleVolumes: number;
   plannedVolumes: number;
   compactedVolumes: number;
   failedVolumes: number;
   skippedVolumes: number;
+  filteredVolumes: number;
   deferredVolumes: number;
+  minimumFreeBytes: number | null;
+  minimumFreeRatio: number | null;
   totalReclaimedBytes: number;
   volumes: VolumeCompactionBatchItem[];
 }

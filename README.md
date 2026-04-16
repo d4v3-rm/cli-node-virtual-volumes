@@ -273,6 +273,7 @@ virtual-volumes restore-drill ./backups/finance.sqlite
 virtual-volumes restore ./backups/finance.sqlite
 virtual-volumes compact-recommended --dry-run
 virtual-volumes compact-recommended --limit 5
+virtual-volumes compact-recommended --min-free-bytes 1048576 --min-free-ratio 0.25
 virtual-volumes compact vol_finance_01
 virtual-volumes doctor vol_finance_01
 virtual-volumes support-bundle ./reports/finance-support vol_finance_01 --backup-path ./backups/finance.sqlite
@@ -315,6 +316,7 @@ Each standard backup produces:
 - compacts only volumes currently marked with `COMPACTION_RECOMMENDED`
 - supports `--dry-run` to preview the plan before mutating anything
 - supports `--limit <n>` to process only the top N recommended volumes by reclaimable free bytes
+- supports `--min-free-bytes` and `--min-free-ratio` to tighten the batch to only the volumes that exceed explicit operator thresholds
 
 `doctor` now also reports SQLite maintenance stats for each volume:
 

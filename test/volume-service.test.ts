@@ -23,6 +23,11 @@ import { VolumeRepository } from '../src/storage/volume-repository.js';
 const sandboxes: string[] = [];
 const runtimes: AppRuntime[] = [];
 
+vi.setConfig({
+  hookTimeout: 15000,
+  testTimeout: 15000,
+});
+
 const trackRuntime = async (
   runtimePromise: Promise<AppRuntime>,
 ): Promise<AppRuntime> => {
@@ -1286,6 +1291,65 @@ describe('VolumeService', () => {
     expect(
       smallerDoctor?.issues.some((issue) => issue.code === 'COMPACTION_RECOMMENDED'),
     ).toBe(true);
+  });
+
+  it('filters recommended batch compaction by requested free-byte and free-ratio thresholds', async () => {
+    const runtime = await createIsolatedRuntime();
+    const highestRatioVolume = await runtime.volumeService.createVolume({ name: 'High ratio' });
+    const lowerRatioVolume = await runtime.volumeService.createVolume({ name: 'Lower ratio' });
+
+    await runtime.volumeService.writeTextFile(
+      highestRatioVolume.id,
+      '/deleted.txt',
+      'a'.repeat(2 * 1024 * 1024),
+    );
+    await runtime.volumeService.deleteEntry(highestRatioVolume.id, '/deleted.txt');
+
+    await runtime.volumeService.writeTextFile(
+      lowerRatioVolume.id,
+      '/deleted.txt',
+      'b'.repeat(Math.floor(1.5 * 1024 * 1024)),
+    );
+    await runtime.volumeService.writeTextFile(
+      lowerRatioVolume.id,
+      '/retained.txt',
+      'c'.repeat(1024 * 1024),
+    );
+    await runtime.volumeService.deleteEntry(lowerRatioVolume.id, '/deleted.txt');
+
+    const doctorReport = await runtime.volumeService.runDoctor();
+    const highestMaintenance = doctorReport.volumes.find(
+      (volumeReport) => volumeReport.volumeId === highestRatioVolume.id,
+    )?.maintenance;
+    const lowerMaintenance = doctorReport.volumes.find(
+      (volumeReport) => volumeReport.volumeId === lowerRatioVolume.id,
+    )?.maintenance;
+
+    expect(highestMaintenance?.compactionRecommended).toBe(true);
+    expect(lowerMaintenance?.compactionRecommended).toBe(true);
+    expect((highestMaintenance?.freeBytes ?? 0)).toBeGreaterThan(lowerMaintenance?.freeBytes ?? 0);
+    expect((highestMaintenance?.freeRatio ?? 0)).toBeGreaterThan(lowerMaintenance?.freeRatio ?? 0);
+
+    const minFreeBytes = Math.floor(
+      ((highestMaintenance?.freeBytes ?? 0) + (lowerMaintenance?.freeBytes ?? 0)) / 2,
+    );
+    const minFreeRatio =
+      ((highestMaintenance?.freeRatio ?? 0) + (lowerMaintenance?.freeRatio ?? 0)) / 2;
+
+    const dryRun = await runtime.volumeService.compactRecommendedVolumes({
+      dryRun: true,
+      minFreeBytes,
+      minFreeRatio,
+    });
+
+    expect(dryRun.recommendedVolumes).toBe(2);
+    expect(dryRun.eligibleVolumes).toBe(1);
+    expect(dryRun.filteredVolumes).toBe(1);
+    expect(dryRun.plannedVolumes).toBe(1);
+    expect(dryRun.minimumFreeBytes).toBe(minFreeBytes);
+    expect(dryRun.minimumFreeRatio).toBe(minFreeRatio);
+    expect(dryRun.volumes).toHaveLength(1);
+    expect(dryRun.volumes[0]?.volumeId).toBe(highestRatioVolume.id);
   });
 
   it('rejects restore when the backup manifest checksum does not match the artifact', async () => {

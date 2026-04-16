@@ -48,11 +48,15 @@ export const formatVolumeCompactionBatchResult = (
     `Generated at: ${formatDateTime(result.generatedAt)}`,
     `Checked volumes: ${result.checkedVolumes}`,
     `Recommended volumes: ${result.recommendedVolumes}`,
+    `Eligible volumes: ${result.eligibleVolumes}`,
     `Planned volumes: ${result.plannedVolumes}`,
+    `Filtered volumes: ${result.filteredVolumes}`,
     `Deferred volumes: ${result.deferredVolumes}`,
     `Skipped volumes: ${result.skippedVolumes}`,
     `Compacted volumes: ${result.compactedVolumes}`,
     `Failed volumes: ${result.failedVolumes}`,
+    `Minimum free bytes: ${result.minimumFreeBytes === null ? 'none' : formatBytes(result.minimumFreeBytes)}`,
+    `Minimum free ratio: ${result.minimumFreeRatio === null ? 'none' : `${(result.minimumFreeRatio * 100).toFixed(1)}%`}`,
     `Total reclaimed: ${formatBytes(result.totalReclaimedBytes)}`,
   ];
 
