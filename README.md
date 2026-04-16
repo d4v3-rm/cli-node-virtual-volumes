@@ -284,6 +284,7 @@ virtual-volumes repair-safe --limit 5 --strict-plan
 virtual-volumes compact vol_finance_01
 virtual-volumes doctor vol_finance_01
 virtual-volumes doctor vol_finance_01 --verify-blobs
+virtual-volumes support-bundle ./reports/finance-support vol_finance_01 --verify-blobs
 virtual-volumes support-bundle ./reports/finance-support vol_finance_01 --backup-path ./backups/finance.sqlite
 virtual-volumes inspect-support-bundle ./reports/finance-support --require-sharing internal-only
 ```
@@ -360,13 +361,16 @@ Each support bundle includes:
 - `manifest.json` with runtime/config metadata
 - `contentProfile` in the manifest, with explicit sensitivity, sharing, retention, and disposal guidance
 - `correlationId` inside the support bundle manifest for log lookup
+- `doctorIntegrityDepth` in the manifest so the handoff knows whether the embedded doctor report was metadata-only or deep
 - `checksums.json` with SHA-256 inventory for the generated files
 - `doctor-report.json`
-- `handoff-report.md` with operator-friendly scope, risk, sharing, and retention guidance
+- `handoff-report.md` with operator-friendly scope, fleet posture, next actions, sharing, and retention guidance
 - optional `backup-inspection.json`
 - optional `backup-artifact.manifest.json` when `--backup-path` points to a manifest-backed backup
 - optional current audit log tail snapshot
 - optional current log tail snapshot
+
+Use `virtual-volumes support-bundle ... --verify-blobs` when you want the embedded doctor report and handoff recommendations to be based on deep payload verification instead of the default metadata-only pass.
 
 `inspect-support-bundle` validates:
 

@@ -587,6 +587,10 @@ const main = async (): Promise<void> => {
     .argument('[volumeId]', 'Limit the doctor report to a specific volume id')
     .option('--backup-path <path>', 'Inspect this backup and include the report')
     .option('--no-logs', 'Skip app and audit log snapshots inside the support bundle')
+    .option(
+      '--verify-blobs',
+      'Hash and verify referenced blob payloads while generating the embedded doctor report',
+    )
     .option('--json', 'Output the bundle summary as JSON')
     .option('--output <path>', 'Write the structured JSON result to this file')
     .option('--force', 'Overwrite an existing destination directory')
@@ -597,6 +601,7 @@ const main = async (): Promise<void> => {
         options: {
           backupPath?: string;
           noLogs?: boolean;
+          verifyBlobs?: boolean;
           json?: boolean;
           output?: string;
           force?: boolean;
@@ -609,6 +614,7 @@ const main = async (): Promise<void> => {
             volumeId,
             backupPath: options.backupPath,
             includeLogs: !options.noLogs,
+            verifyBlobPayloads: options.verifyBlobs,
             overwrite: options.force,
           });
           const artifactPath = options.output

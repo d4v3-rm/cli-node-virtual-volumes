@@ -139,6 +139,9 @@ const isSupportBundleResultLike = (
     typeof value.cliVersion === 'string' &&
     typeof value.correlationId === 'string' &&
     typeof value.generatedAt === 'string' &&
+    (value.doctorIntegrityDepth === 'metadata' ||
+      value.doctorIntegrityDepth === 'deep' ||
+      typeof value.doctorIntegrityDepth === 'undefined') &&
     isNonNegativeNumber(value.supportedVolumeSchemaVersion) &&
     isStringOrNull(value.volumeId) &&
     isStringOrNull(value.backupPath) &&
@@ -394,6 +397,8 @@ const buildSupportBundleHandoffReport = (
   result: SupportBundleResult,
   doctorReport: StorageDoctorReport,
 ): string => {
+  const deepVerificationFlag =
+    doctorReport.integrityDepth === 'deep' ? ' --verify-blobs' : '';
   const lines = [
     '# Support Bundle Handoff Report',
     '',
@@ -401,6 +406,7 @@ const buildSupportBundleHandoffReport = (
     `- Status: ${result.healthy ? 'HEALTHY' : 'UNHEALTHY'}`,
     `- Generated at: ${result.generatedAt}`,
     `- Correlation ID: ${result.correlationId}`,
+    `- Doctor integrity depth: ${doctorReport.integrityDepth ?? 'metadata'}`,
     `- Scope: ${result.volumeId ?? 'all volumes'}`,
     `- Volumes checked: ${result.checkedVolumes}`,
     `- Issues detected: ${result.issueCount}`,
@@ -414,6 +420,12 @@ const buildSupportBundleHandoffReport = (
     `- Backup manifest copy: ${toBundleRelativePath(result.bundlePath, result.backupManifestCopyPath) ?? 'not included'}`,
     `- App log snapshot: ${toBundleRelativePath(result.bundlePath, result.logSnapshotPath) ?? 'not included'}`,
     `- Audit log snapshot: ${toBundleRelativePath(result.bundlePath, result.auditLogSnapshotPath) ?? 'not included'}`,
+    '',
+    '## Fleet Posture',
+    `- Recommended compactions: ${doctorReport.maintenanceSummary.recommendedCompactions}`,
+    `- Repairable volumes: ${doctorReport.repairSummary.repairableVolumes}`,
+    `- Ready batch repairs: ${doctorReport.repairSummary.readyBatchRepairVolumes}`,
+    `- Blocked batch repairs: ${doctorReport.repairSummary.blockedBatchRepairVolumes}`,
     '',
     '## Findings',
   ];
@@ -435,11 +447,61 @@ const buildSupportBundleHandoffReport = (
     }
   }
 
+  if (doctorReport.maintenanceSummary.topCompactionCandidates.length > 0) {
+    lines.push('', '## Top Compaction Candidates');
+    lines.push(
+      ...doctorReport.maintenanceSummary.topCompactionCandidates.map(
+        (candidate, index) =>
+          `${index + 1}. ${candidate.volumeName} (${candidate.volumeId}) free=${candidate.freeBytes}B ratio=${(candidate.freeRatio * 100).toFixed(1)}% issues=${candidate.issueCount}`,
+      ),
+    );
+  }
+
+  if (doctorReport.repairSummary.topRepairCandidates.length > 0) {
+    lines.push('', '## Top Repair Candidates');
+    lines.push(
+      ...doctorReport.repairSummary.topRepairCandidates.map((candidate, index) => {
+        const blockingSummary =
+          candidate.blockingIssueCodes.length > 0
+            ? ` blocking=${candidate.blockingIssueCodes.join(',')}`
+            : '';
+        return `${index + 1}. ${candidate.volumeName} (${candidate.volumeId}) safe=${candidate.repairableIssueCount} ready=${candidate.readyForBatchRepair ? 'yes' : 'no'}${blockingSummary}`;
+      }),
+    );
+  }
+
   lines.push('', '## Sharing Notes');
   lines.push(...result.contentProfile.sharingNotes.map((note) => `- ${note}`));
   lines.push('', '## Disposal Notes');
   lines.push(...result.contentProfile.disposalNotes.map((note) => `- ${note}`));
   lines.push('', '## Recommended Next Actions');
+
+  if (doctorReport.repairSummary.readyBatchRepairVolumes > 0) {
+    lines.push(
+      `- Run virtual-volumes repair-safe${deepVerificationFlag} --dry-run to preview safe fleet repairs before execution.`,
+    );
+  }
+
+  if (doctorReport.repairSummary.blockedBatchRepairVolumes > 0) {
+    lines.push(
+      '- Review blocked repair candidates in doctor-report.json before automating remediation.',
+    );
+  }
+
+  if (doctorReport.maintenanceSummary.recommendedCompactions > 0) {
+    lines.push(
+      '- Run virtual-volumes compact-recommended --dry-run to size the current SQLite maintenance batch.',
+    );
+  }
+
+  if (
+    doctorReport.issueCount === 0 &&
+    doctorReport.maintenanceSummary.recommendedCompactions === 0 &&
+    doctorReport.repairSummary.repairableVolumes === 0
+  ) {
+    lines.push('- No immediate storage remediation is recommended from this snapshot.');
+  }
+
   lines.push('- Run inspect-support-bundle before handoff to validate integrity.');
   lines.push(
     `- Enforce the intended audience with --require-sharing ${result.contentProfile.sharingRecommendation}.`,
@@ -578,7 +640,9 @@ export const createSupportBundle = async (
       await fs.rm(destinationPath, { recursive: true, force: true });
     }
 
-    const doctorReport = await runtime.volumeService.runDoctor(input.volumeId);
+    const doctorReport = await runtime.volumeService.runDoctor(input.volumeId, {
+      verifyBlobPayloads: input.verifyBlobPayloads,
+    });
     const backupInspection = backupPath
       ? await runtime.volumeService.inspectVolumeBackup(backupPath)
       : null;
@@ -664,6 +728,7 @@ export const createSupportBundle = async (
       cliVersion: APP_VERSION,
       correlationId: runtime.correlationId,
       generatedAt,
+      doctorIntegrityDepth: doctorReport.integrityDepth ?? 'metadata',
       supportedVolumeSchemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
       volumeId: input.volumeId ?? null,
       backupPath:
@@ -1085,6 +1150,7 @@ export const inspectSupportBundle = async (
     bundleCliVersion: manifest?.cliVersion ?? null,
     bundleCorrelationId: manifest?.correlationId ?? null,
     bundleCreatedAt: manifest?.generatedAt ?? checksumManifest?.generatedAt ?? null,
+    doctorIntegrityDepth: manifest?.doctorIntegrityDepth ?? null,
     volumeId: manifest?.volumeId ?? null,
     handoffReportPath: manifest?.handoffReportPath ?? null,
     issueCount: issues.length,
