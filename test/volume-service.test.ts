@@ -1352,6 +1352,78 @@ describe('VolumeService', () => {
     expect(dryRun.volumes[0]?.volumeId).toBe(highestRatioVolume.id);
   });
 
+  it('blocks unsafe recommended batch compaction by default unless includeUnsafe is enabled', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Unsafe churn' });
+    const repository = new VolumeRepository(
+      runtime.config,
+      runtime.logger.child({ scope: 'unsafe-compaction-repository' }),
+    );
+
+    await runtime.volumeService.writeTextFile(
+      volume.id,
+      '/deleted.txt',
+      'z'.repeat(2 * 1024 * 1024),
+    );
+    await runtime.volumeService.deleteEntry(volume.id, '/deleted.txt');
+    await runtime.volumeService.writeTextFile(volume.id, '/broken.txt', 'broken payload');
+
+    const record = await repository.loadVolume(volume.id);
+    const brokenEntry = Object.values(record.state.entries).find(
+      (entry) => entry.kind === 'file' && entry.name === 'broken.txt',
+    );
+
+    expect(brokenEntry?.kind).toBe('file');
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, volume.id), async (database) => {
+      await database.exec('PRAGMA foreign_keys = OFF');
+      await database.run(
+        'DELETE FROM blob_chunks WHERE content_ref = ?',
+        brokenEntry?.kind === 'file' ? brokenEntry.contentRef : '',
+      );
+      await database.run(
+        'DELETE FROM blobs WHERE content_ref = ?',
+        brokenEntry?.kind === 'file' ? brokenEntry.contentRef : '',
+      );
+      await database.exec('PRAGMA foreign_keys = ON');
+    });
+
+    const doctorBefore = await runtime.volumeService.runDoctor(volume.id);
+    const blockedDryRun = await runtime.volumeService.compactRecommendedVolumes({
+      dryRun: true,
+    });
+    const unsafeBatch = await runtime.volumeService.compactRecommendedVolumes({
+      includeUnsafe: true,
+    });
+    const doctorAfter = await runtime.volumeService.runDoctor(volume.id);
+    const issueCodesAfter = doctorAfter.volumes[0]?.issues.map((issue) => issue.code) ?? [];
+
+    expect(
+      doctorBefore.volumes[0]?.issues.some((issue) => issue.code === 'COMPACTION_RECOMMENDED'),
+    ).toBe(true);
+    expect(
+      doctorBefore.volumes[0]?.issues.some((issue) => issue.code === 'MISSING_BLOB'),
+    ).toBe(true);
+    expect(blockedDryRun.recommendedVolumes).toBe(1);
+    expect(blockedDryRun.eligibleVolumes).toBe(1);
+    expect(blockedDryRun.blockedVolumes).toBe(1);
+    expect(blockedDryRun.plannedVolumes).toBe(0);
+    expect(blockedDryRun.volumes[0]).toMatchObject({
+      volumeId: volume.id,
+      status: 'blocked',
+    });
+    expect(blockedDryRun.volumes[0]?.blockingIssueCodes).toEqual(
+      expect.arrayContaining(['MISSING_BLOB']),
+    );
+    expect(unsafeBatch.includeUnsafe).toBe(true);
+    expect(unsafeBatch.blockedVolumes).toBe(0);
+    expect(unsafeBatch.plannedVolumes).toBe(1);
+    expect(unsafeBatch.compactedVolumes).toBe(1);
+    expect(unsafeBatch.volumes[0]?.status).toBe('compacted');
+    expect(issueCodesAfter).toContain('MISSING_BLOB');
+    expect(issueCodesAfter).not.toContain('COMPACTION_RECOMMENDED');
+  });
+
   it('rejects restore when the backup manifest checksum does not match the artifact', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'Tamper Detection' });

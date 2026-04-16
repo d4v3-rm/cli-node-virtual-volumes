@@ -294,6 +294,10 @@ const main = async (): Promise<void> => {
     )
     .option('--dry-run', 'Report which volumes would be compacted without mutating them')
     .option(
+      '--include-unsafe',
+      'Allow batch compaction even when a recommended volume also has non-compaction doctor issues',
+    )
+    .option(
       '--limit <count>',
       'Only process the top N recommended volumes, ordered by reclaimable free bytes',
       (value: string) => {
@@ -335,6 +339,7 @@ const main = async (): Promise<void> => {
       async (
         options: {
           dryRun?: boolean;
+          includeUnsafe?: boolean;
           json?: boolean;
           limit?: number;
           minFreeBytes?: number;
@@ -346,6 +351,7 @@ const main = async (): Promise<void> => {
           const correlationId = runtime.correlationId;
           const result = await runtime.volumeService.compactRecommendedVolumes({
             dryRun: options.dryRun,
+            includeUnsafe: options.includeUnsafe,
             limit: options.limit,
             minFreeBytes: options.minFreeBytes,
             minFreeRatio: options.minFreeRatio,

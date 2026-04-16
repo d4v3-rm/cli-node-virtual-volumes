@@ -250,7 +250,13 @@ export class VolumeService {
   }
 
   public async compactRecommendedVolumes(
-    options: { dryRun?: boolean; limit?: number; minFreeBytes?: number; minFreeRatio?: number } = {},
+    options: {
+      dryRun?: boolean;
+      includeUnsafe?: boolean;
+      limit?: number;
+      minFreeBytes?: number;
+      minFreeRatio?: number;
+    } = {},
   ): Promise<VolumeCompactionBatchResult> {
     return this.runAuditedOperation(
       {
@@ -258,6 +264,7 @@ export class VolumeService {
         resourceType: 'storage',
         details: {
           dryRun: options.dryRun === true,
+          includeUnsafe: options.includeUnsafe === true,
           limit: options.limit ?? null,
           minFreeBytes: options.minFreeBytes ?? null,
           minFreeRatio: options.minFreeRatio ?? null,
@@ -293,13 +300,42 @@ export class VolumeService {
 
           return true;
         });
+        const blockedVolumes = options.includeUnsafe
+          ? []
+          : eligibleVolumes.filter(
+              (report) => !this.isSafeForBatchCompaction(report.issues),
+            );
+        const safeEligibleVolumes = options.includeUnsafe
+          ? eligibleVolumes
+          : eligibleVolumes.filter((report) => this.isSafeForBatchCompaction(report.issues));
         const plannedVolumes = options.limit
-          ? eligibleVolumes.slice(0, options.limit)
-          : eligibleVolumes;
+          ? safeEligibleVolumes.slice(0, options.limit)
+          : safeEligibleVolumes;
         const volumes: VolumeCompactionBatchItem[] = [];
         let compactedVolumes = 0;
         let failedVolumes = 0;
         let totalReclaimedBytes = 0;
+
+        for (const report of blockedVolumes) {
+          const maintenance = report.maintenance;
+          if (!maintenance) {
+            continue;
+          }
+
+          volumes.push({
+            volumeId: report.volumeId,
+            volumeName: report.volumeName,
+            revision: report.revision,
+            issueCount: report.issueCount,
+            artifactBytes: maintenance.artifactBytes,
+            freeBytes: maintenance.freeBytes,
+            freeRatio: maintenance.freeRatio,
+            status: 'blocked',
+            blockingIssueCodes: report.issues
+              .filter((issue) => issue.code !== 'COMPACTION_RECOMMENDED')
+              .map((issue) => issue.code),
+          });
+        }
 
         for (const report of plannedVolumes) {
           const maintenance = report.maintenance;
@@ -355,15 +391,17 @@ export class VolumeService {
         return {
           generatedAt: new Date().toISOString(),
           dryRun: options.dryRun === true,
+          includeUnsafe: options.includeUnsafe === true,
           checkedVolumes: doctorReport.checkedVolumes,
           recommendedVolumes: recommendedVolumes.length,
           eligibleVolumes: eligibleVolumes.length,
           plannedVolumes: plannedVolumes.length,
+          blockedVolumes: blockedVolumes.length,
           compactedVolumes,
           failedVolumes,
           skippedVolumes: Math.max(0, doctorReport.checkedVolumes - recommendedVolumes.length),
           filteredVolumes: Math.max(0, recommendedVolumes.length - eligibleVolumes.length),
-          deferredVolumes: Math.max(0, eligibleVolumes.length - plannedVolumes.length),
+          deferredVolumes: Math.max(0, safeEligibleVolumes.length - plannedVolumes.length),
           minimumFreeBytes: options.minFreeBytes ?? null,
           minimumFreeRatio: options.minFreeRatio ?? null,
           totalReclaimedBytes,
@@ -375,9 +413,11 @@ export class VolumeService {
         recommendedVolumes: result.recommendedVolumes,
         eligibleVolumes: result.eligibleVolumes,
         plannedVolumes: result.plannedVolumes,
+        blockedVolumes: result.blockedVolumes,
         compactedVolumes: result.compactedVolumes,
         failedVolumes: result.failedVolumes,
         dryRun: result.dryRun,
+        includeUnsafe: result.includeUnsafe,
         filteredVolumes: result.filteredVolumes,
         deferredVolumes: result.deferredVolumes,
         minimumFreeBytes: result.minimumFreeBytes,
@@ -385,6 +425,12 @@ export class VolumeService {
         totalReclaimedBytes: result.totalReclaimedBytes,
       }),
     );
+  }
+
+  private isSafeForBatchCompaction(
+    issues: StorageDoctorReport['volumes'][number]['issues'],
+  ): boolean {
+    return issues.every((issue) => issue.code === 'COMPACTION_RECOMMENDED');
   }
 
   public async runDoctor(volumeId?: string): Promise<StorageDoctorReport> {

@@ -43,10 +43,12 @@ describe('maintenance cli formatter', () => {
     const result: VolumeCompactionBatchResult = {
       generatedAt: '2026-04-16T11:00:00.000Z',
       dryRun: false,
+      includeUnsafe: false,
       checkedVolumes: 3,
       recommendedVolumes: 2,
       eligibleVolumes: 2,
       plannedVolumes: 2,
+      blockedVolumes: 0,
       deferredVolumes: 0,
       skippedVolumes: 1,
       filteredVolumes: 0,
@@ -95,10 +97,12 @@ describe('maintenance cli formatter', () => {
       [
         'Recommended compaction: COMPLETED WITH FAILURES',
         `Generated at: ${formatDateTime(result.generatedAt)}`,
+        'Unsafe compaction allowed: no',
         'Checked volumes: 3',
         'Recommended volumes: 2',
         'Eligible volumes: 2',
         'Planned volumes: 2',
+        'Blocked volumes: 0',
         'Filtered volumes: 0',
         'Deferred volumes: 0',
         'Skipped volumes: 1',
@@ -110,6 +114,63 @@ describe('maintenance cli formatter', () => {
         '',
         '  - COMPACTED Finance (volume-1) revision=9 reclaimed=1.0 MB before=8.0 MB after=7.0 MB free=2.0 MB (25.0%) artifacts=8.0 MB issues=1',
         '  - FAILED Ops (volume-2) revision=4 free=1.5 MB (37.5%) artifacts=4.0 MB issues=2 error=disk busy',
+      ].join('\n'),
+    );
+  });
+
+  it('formats blocked batch compaction items with safety details', () => {
+    const result: VolumeCompactionBatchResult = {
+      generatedAt: '2026-04-16T11:10:00.000Z',
+      dryRun: true,
+      includeUnsafe: false,
+      checkedVolumes: 2,
+      recommendedVolumes: 1,
+      eligibleVolumes: 1,
+      plannedVolumes: 0,
+      blockedVolumes: 1,
+      compactedVolumes: 0,
+      failedVolumes: 0,
+      skippedVolumes: 1,
+      filteredVolumes: 0,
+      deferredVolumes: 0,
+      minimumFreeBytes: null,
+      minimumFreeRatio: null,
+      totalReclaimedBytes: 0,
+      volumes: [
+        {
+          volumeId: 'volume-9',
+          volumeName: 'Broken',
+          revision: 12,
+          issueCount: 2,
+          artifactBytes: 4194304,
+          freeBytes: 2097152,
+          freeRatio: 0.5,
+          status: 'blocked',
+          blockingIssueCodes: ['MISSING_BLOB'],
+        },
+      ],
+    };
+
+    expect(formatVolumeCompactionBatchResult(result)).toBe(
+      [
+        'Recommended compaction: DRY RUN',
+        `Generated at: ${formatDateTime(result.generatedAt)}`,
+        'Unsafe compaction allowed: no',
+        'Checked volumes: 2',
+        'Recommended volumes: 1',
+        'Eligible volumes: 1',
+        'Planned volumes: 0',
+        'Blocked volumes: 1',
+        'Filtered volumes: 0',
+        'Deferred volumes: 0',
+        'Skipped volumes: 1',
+        'Compacted volumes: 0',
+        'Failed volumes: 0',
+        'Minimum free bytes: none',
+        'Minimum free ratio: none',
+        'Total reclaimed: 0 B',
+        '',
+        '  - BLOCKED Broken (volume-9) revision=12 free=2.0 MB (50.0%) artifacts=4.0 MB issues=2 blocking=MISSING_BLOB',
       ].join('\n'),
     );
   });

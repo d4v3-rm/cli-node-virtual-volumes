@@ -24,6 +24,11 @@ const formatBatchItem = (item: VolumeCompactionBatchItem): string => {
   const prefix = `  - ${item.status.toUpperCase()} ${item.volumeName} (${item.volumeId}) revision=${item.revision}`;
   const maintenance = `free=${formatBytes(item.freeBytes)} (${(item.freeRatio * 100).toFixed(1)}%) artifacts=${formatBytes(item.artifactBytes)} issues=${item.issueCount}`;
 
+  if (item.status === 'blocked') {
+    const blockingIssues = item.blockingIssueCodes?.join(', ') ?? 'unknown';
+    return `${prefix} ${maintenance} blocking=${blockingIssues}`;
+  }
+
   if (item.status === 'compacted' && item.compaction) {
     return `${prefix} reclaimed=${formatBytes(item.compaction.reclaimedBytes)} before=${formatBytes(item.compaction.bytesBefore)} after=${formatBytes(item.compaction.bytesAfter)} ${maintenance}`;
   }
@@ -46,10 +51,12 @@ export const formatVolumeCompactionBatchResult = (
   const lines = [
     `Recommended compaction: ${status}`,
     `Generated at: ${formatDateTime(result.generatedAt)}`,
+    `Unsafe compaction allowed: ${result.includeUnsafe ? 'yes' : 'no'}`,
     `Checked volumes: ${result.checkedVolumes}`,
     `Recommended volumes: ${result.recommendedVolumes}`,
     `Eligible volumes: ${result.eligibleVolumes}`,
     `Planned volumes: ${result.plannedVolumes}`,
+    `Blocked volumes: ${result.blockedVolumes}`,
     `Filtered volumes: ${result.filteredVolumes}`,
     `Deferred volumes: ${result.deferredVolumes}`,
     `Skipped volumes: ${result.skippedVolumes}`,
