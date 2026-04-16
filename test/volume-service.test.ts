@@ -1789,7 +1789,7 @@ describe('VolumeService', () => {
     expect(doctorBefore.repairSummary.repairableVolumes).toBe(3);
     expect(doctorBefore.repairSummary.readyBatchRepairVolumes).toBe(2);
     expect(doctorBefore.repairSummary.blockedBatchRepairVolumes).toBe(1);
-    expect(doctorBefore.repairSummary.totalRepairableIssues).toBe(3);
+    expect(doctorBefore.repairSummary.totalRepairableIssues).toBe(4);
     expect(topRepairCandidate).toMatchObject({
       volumeId: alphaVolume.id,
       readyForBatchRepair: true,
@@ -2737,6 +2737,51 @@ describe('VolumeService', () => {
         (issue) => issue.code === 'BLOB_SIZE_MISMATCH',
       ),
     ).toBe(false);
+  });
+
+  it('reports and repairs file entry size drift against the referenced blob payload', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Entry Size Drift' });
+    const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/size.txt', 'sized payload');
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      await database.run(
+        `UPDATE entries
+            SET size = size + 11
+          WHERE name = 'size.txt'
+            AND kind = 'file'`,
+      );
+    });
+
+    const doctorReport = await runtime.volumeService.runDoctor(volume.id);
+    const driftIssue = doctorReport.volumes[0]?.issues.find(
+      (issue) => issue.code === 'ENTRY_SIZE_MISMATCH',
+    );
+
+    expect(doctorReport.healthy).toBe(false);
+    expect(driftIssue?.message).toContain('stores size=');
+    expect(driftIssue?.message).toContain('currently exposes');
+
+    const repairReport = await runtime.volumeService.runRepair(volume.id);
+    const repairedVolume = repairReport.volumes[0];
+
+    expect(repairReport.healthy).toBe(true);
+    expect(repairedVolume?.repaired).toBe(true);
+    expect(
+      repairedVolume?.actions.some((action) => action.code === 'SYNC_ENTRY_FILE_SIZE'),
+    ).toBe(true);
+    expect(repairedVolume?.issueCountAfter).toBe(0);
+    expect(
+      repairedVolume?.remainingIssues.some(
+        (issue) => issue.code === 'ENTRY_SIZE_MISMATCH',
+      ),
+    ).toBe(false);
+
+    const snapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+    expect(snapshot.entries[0]?.name).toBe('size.txt');
+    expect(snapshot.entries[0]?.size).toBe(Buffer.byteLength('sized payload', 'utf8'));
   });
 
   it('repairs non-contiguous blob chunk indexes when payload order is still sane', async () => {

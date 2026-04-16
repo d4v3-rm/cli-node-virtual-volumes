@@ -1664,6 +1664,22 @@ export class VolumeRepository {
               : []
           ),
         ];
+        let entrySizesSynchronized = false;
+        const entrySizeSyncTargets = new Set(
+          issuesBefore
+            .filter(
+              (
+                issue,
+              ): issue is StorageDoctorIssue & {
+                entryId: string;
+                contentRef: string;
+              } =>
+                issue.code === 'ENTRY_SIZE_MISMATCH' &&
+                issue.entryId !== undefined &&
+                issue.contentRef !== undefined,
+            )
+            .map((issue) => issue.entryId),
+        );
 
         if (pendingMutationJournals.length > 0) {
           for (const mutationJournal of pendingMutationJournals) {
@@ -1672,6 +1688,27 @@ export class VolumeRepository {
           actions.push({
             code: 'CLEAR_MUTATION_JOURNAL',
             message: `Cleared ${pendingMutationJournals.length} pending mutation journal entr${pendingMutationJournals.length === 1 ? 'y' : 'ies'} after an explicit repair verification run.`,
+          });
+        }
+
+        for (const entryId of entrySizeSyncTargets) {
+          const entry = record.state.entries[entryId];
+          if (entry?.kind !== 'file') {
+            continue;
+          }
+
+          const actualBlobSize = actualBlobSizes.get(entry.contentRef);
+          if (actualBlobSize === undefined || entry.size === actualBlobSize) {
+            continue;
+          }
+
+          entry.size = actualBlobSize;
+          entry.updatedAt = new Date().toISOString();
+          entrySizesSynchronized = true;
+          actions.push({
+            code: 'SYNC_ENTRY_FILE_SIZE',
+            message: `Synchronized file entry ${entry.id} size metadata from blob ${entry.contentRef}.`,
+            contentRef: entry.contentRef,
           });
         }
 
@@ -1765,31 +1802,30 @@ export class VolumeRepository {
           }
         }
 
-        if (
-          issuesBefore.some(
-            (issue) =>
-              issue.code === 'MANIFEST_USAGE_MISMATCH' ||
-              issue.code === 'MANIFEST_ENTRY_COUNT_MISMATCH',
-          )
-        ) {
+        const hasManifestMismatch = issuesBefore.some(
+          (issue) =>
+            issue.code === 'MANIFEST_USAGE_MISMATCH' ||
+            issue.code === 'MANIFEST_ENTRY_COUNT_MISMATCH',
+        );
+        const hasReferenceCountMismatch = issuesBefore.some(
+          (issue) => issue.code === 'BLOB_REFERENCE_COUNT_MISMATCH',
+        );
+
+        if (entrySizesSynchronized || hasManifestMismatch) {
           await this.persistVolumeToDatabase(database, record);
-          actions.push({
-            code: 'REBUILD_MANIFEST',
-            message: 'Rebuilt manifest counters and revision from the current volume state.',
-          });
-          if (
-            issuesBefore.some(
-              (issue) => issue.code === 'BLOB_REFERENCE_COUNT_MISMATCH',
-            )
-          ) {
+          if (hasManifestMismatch) {
+            actions.push({
+              code: 'REBUILD_MANIFEST',
+              message: 'Rebuilt manifest counters and revision from the current volume state.',
+            });
+          }
+          if (hasReferenceCountMismatch) {
             actions.push({
               code: 'SYNC_BLOB_REFERENCE_COUNTS',
               message: 'Synchronized blob reference counts from the current file entries.',
             });
           }
-        } else if (
-          issuesBefore.some((issue) => issue.code === 'BLOB_REFERENCE_COUNT_MISMATCH')
-        ) {
+        } else if (hasReferenceCountMismatch) {
           await this.syncBlobReferenceCounts(database);
           actions.push({
             code: 'SYNC_BLOB_REFERENCE_COUNTS',
@@ -2308,6 +2344,18 @@ export class VolumeRepository {
           code: 'MISSING_BLOB',
           severity: 'error',
           message: `File ${entry.id} (${entry.name}) references missing blob ${entry.contentRef}.`,
+          contentRef: entry.contentRef,
+          entryId: entry.id,
+        });
+        continue;
+      }
+
+      const actualBlobSize = actualBlobSizes.get(entry.contentRef);
+      if (actualBlobSize !== undefined && entry.size !== actualBlobSize) {
+        issues.push({
+          code: 'ENTRY_SIZE_MISMATCH',
+          severity: 'error',
+          message: `File ${entry.id} (${entry.name}) stores size=${entry.size}, but its referenced blob ${entry.contentRef} currently exposes ${actualBlobSize} byte(s).`,
           contentRef: entry.contentRef,
           entryId: entry.id,
         });
