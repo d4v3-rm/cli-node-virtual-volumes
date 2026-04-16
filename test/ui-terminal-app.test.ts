@@ -214,6 +214,7 @@ interface RuntimeTestContext {
   closeMock: ReturnType<typeof vi.fn>;
   getExplorerSnapshotMock: ReturnType<typeof vi.fn>;
   listVolumesMock: ReturnType<typeof vi.fn>;
+  loggerErrorMock: ReturnType<typeof vi.fn>;
   runtime: AppRuntime;
 }
 
@@ -227,6 +228,7 @@ interface TerminalAppTestHandle {
   leftPane: FakeElement;
   loadVolumes: () => Promise<void>;
   mode: 'dashboard' | 'explorer';
+  openHostExportOverlay: (sourcePath: string) => Promise<string | null>;
   openHostImportOverlay: (destinationPath: string) => Promise<string[] | null>;
   openHelpOverlay: () => Promise<void>;
   openVolume: (volumeId: string) => Promise<void>;
@@ -263,6 +265,7 @@ const createRuntime = (options: {
   const volumes = options.volumes ?? [];
   const closeMock = vi.fn(() => Promise.resolve());
   const listVolumesMock = vi.fn(() => Promise.resolve(volumes));
+  const loggerErrorMock = vi.fn();
   const getExplorerSnapshotMock = vi.fn(() => {
     if (!options.explorerSnapshot) {
       return Promise.reject(new Error('Explorer snapshot not configured for test.'));
@@ -275,6 +278,7 @@ const createRuntime = (options: {
     closeMock,
     getExplorerSnapshotMock,
     listVolumesMock,
+    loggerErrorMock,
     runtime: {
       auditLogger: { info: vi.fn() } as never,
       close: closeMock,
@@ -295,7 +299,7 @@ const createRuntime = (options: {
       } as never,
       correlationId: 'corr_terminal-app-test',
       logger: {
-        error: vi.fn(),
+        error: loggerErrorMock,
       } as never,
       volumeService: {
         getExplorerSnapshot: getExplorerSnapshotMock,
@@ -580,5 +584,53 @@ describe('ui terminal app runtime', () => {
     await expect(importPromise).resolves.toEqual(['/host/report.txt']);
     expect(testApp.overlayMode).toBeNull();
     expect(testApp.overlayBackdrop.hidden).toBe(true);
+  });
+
+  it('resolves host export overlays to the active destination folder', async () => {
+    getDefaultHostPathMock.mockResolvedValue('/host');
+    listHostBrowserSnapshotMock.mockResolvedValue(sampleHostSnapshot);
+
+    const ui = createFakeUiFactory();
+    const runtime = createRuntime({
+      volumes: [sampleVolume],
+    });
+    const app = new TerminalApp(runtime.runtime, ui.factory);
+    const testApp = asTestApp(app);
+
+    await testApp.loadVolumes();
+
+    const exportPromise = testApp.openHostExportOverlay('/reports/report.txt');
+    await flushUi();
+
+    expect(testApp.overlayMode).toBe('hostBrowser');
+    expect(testApp.overlayContainer.label).toBe(' Host Export ');
+
+    const browserPane = testApp.overlayContainer.children[1]!;
+    const browserList = browserPane.children[0]!;
+    expect(browserList.items[0]).toContain('report.txt');
+
+    browserList.triggerKey('enter');
+
+    await expect(exportPromise).resolves.toBe('/host');
+    expect(testApp.overlayMode).toBeNull();
+  });
+
+  it('surfaces task failures in status feedback without crashing the shell', async () => {
+    const ui = createFakeUiFactory();
+    const runtime = createRuntime({
+      volumes: [sampleVolume],
+    });
+    runtime.listVolumesMock.mockRejectedValueOnce(new Error('Storage offline.'));
+
+    const app = new TerminalApp(runtime.runtime, ui.factory);
+    const testApp = asTestApp(app);
+
+    await testApp.loadVolumes();
+
+    expect(runtime.loggerErrorMock).toHaveBeenCalledTimes(1);
+    expect(testApp.statusBox.content).toContain('Storage offline.');
+    expect(testApp.statusBox.content).toContain('Operation failed: Loading volumes.');
+    expect(testApp.mode).toBe('dashboard');
+    expect(ui.screen.destroyCount).toBe(0);
   });
 });
