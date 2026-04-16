@@ -651,12 +651,14 @@ export class BlobStore {
     await database.run(
       `INSERT INTO blobs (
          content_ref,
+         reference_count,
          size,
          chunk_count,
          content,
          created_at
-       ) VALUES (?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?)`,
       contentRef,
+      0,
       size,
       chunkCount,
       Buffer.alloc(0),

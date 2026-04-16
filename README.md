@@ -332,6 +332,7 @@ Each standard backup produces:
 - database, WAL, and total artifact bytes
 - free-page bytes and free-page ratio
 - top compaction candidates in descending reclaimable-byte order
+- blob reference-count mismatches when blob liveness metadata drifts from actual file references
 - `COMPACTION_RECOMMENDED` when a volume is fragmented enough to justify running `compact`
 
 For the full operational procedure, drills, and audit checklist, see [docs/BACKUP-RESTORE-RUNBOOK.md](./docs/BACKUP-RESTORE-RUNBOOK.md).

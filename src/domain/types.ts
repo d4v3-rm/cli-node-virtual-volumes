@@ -276,6 +276,7 @@ export interface VolumeCompactionBatchResult {
 
 export interface StorageDoctorIssue {
   code:
+    | 'BLOB_REFERENCE_COUNT_MISMATCH'
     | 'DATABASE_OPEN_FAILED'
     | 'BROKEN_ROOT'
     | 'COMPACTION_RECOMMENDED'
@@ -345,7 +346,7 @@ export interface StorageDoctorReport {
 }
 
 export interface StorageRepairAction {
-  code: 'DELETE_ORPHAN_BLOB' | 'REBUILD_MANIFEST';
+  code: 'DELETE_ORPHAN_BLOB' | 'REBUILD_MANIFEST' | 'SYNC_BLOB_REFERENCE_COUNTS';
   message: string;
   contentRef?: string;
 }

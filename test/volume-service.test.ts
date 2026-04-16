@@ -1007,7 +1007,7 @@ describe('VolumeService', () => {
       backupPath: path.resolve(backupPath),
       manifestPath: `${path.resolve(backupPath)}.manifest.json`,
       revision: 3,
-      schemaVersion: 3,
+      schemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
       createdWithVersion: APP_VERSION,
     });
     expect(backupResult.checksumSha256).toHaveLength(64);
@@ -1017,7 +1017,7 @@ describe('VolumeService', () => {
       volumeId: volume.id,
       volumeName: 'Recovery Drill',
       revision: 3,
-      schemaVersion: 3,
+      schemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
       createdWithVersion: APP_VERSION,
       bytesWritten: backupResult.bytesWritten,
       checksumSha256: backupResult.checksumSha256,
@@ -1028,7 +1028,7 @@ describe('VolumeService', () => {
       backupPath: path.resolve(backupPath),
       manifestPath: `${path.resolve(backupPath)}.manifest.json`,
       revision: 3,
-      schemaVersion: 3,
+      schemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
       createdWithVersion: APP_VERSION,
       checksumSha256: backupResult.checksumSha256,
       validatedWithManifest: true,
@@ -1059,7 +1059,7 @@ describe('VolumeService', () => {
       volumeId: volume.id,
       volumeName: 'Inspection Drill',
       revision: backupResult.revision,
-      schemaVersion: 3,
+      schemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
       backupPath: path.resolve(backupPath),
       manifestPath: backupResult.manifestPath,
       formatVersion: 1,
@@ -1094,7 +1094,7 @@ describe('VolumeService', () => {
       manifestPath: null,
       createdWithVersion: null,
       validatedWithManifest: false,
-      schemaVersion: 3,
+      schemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
     });
     expect(restoreResult.checksumSha256).toBe(backupResult.checksumSha256);
     expect(preview.content).toContain('legacy snapshot');
@@ -1123,7 +1123,7 @@ describe('VolumeService', () => {
       createdWithVersion: null,
       checksumSha256: backupResult.checksumSha256,
       validatedWithManifest: false,
-      schemaVersion: 3,
+      schemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
     });
     expect(inspection.createdAt).toBeNull();
   });
@@ -1170,7 +1170,7 @@ describe('VolumeService', () => {
       volumeId: volume.id,
       volumeName: 'Compaction Drill',
       revision: 3,
-      schemaVersion: 3,
+      schemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
       databasePath: getVolumeDatabasePath(runtime.config.dataDir, volume.id),
     });
     expect(result.bytesBefore).toBe(bytesBefore);
@@ -1920,6 +1920,61 @@ describe('VolumeService', () => {
     ).toBe(true);
   });
 
+  it('reports and repairs blob reference-count mismatches safely', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Blob Refcount Repair' });
+    const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/tracked.txt', 'tracked content');
+
+    const beforeReport = await runtime.volumeService.runDoctor(volume.id);
+    const trackedBlobRef = beforeReport.volumes[0]?.issues.find(
+      (issue) => issue.code === 'MISSING_BLOB',
+    )?.contentRef;
+
+    expect(beforeReport.healthy).toBe(true);
+    expect(trackedBlobRef).toBeUndefined();
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      const trackedEntry = await database.get<{ content_ref: string }>(
+        `SELECT content_ref
+           FROM entries
+          WHERE kind = 'file'
+            AND name = 'tracked.txt'
+          LIMIT 1`,
+      );
+
+      await database.run(
+        `UPDATE blobs
+            SET reference_count = 0
+          WHERE content_ref = ?`,
+        trackedEntry?.content_ref ?? '',
+      );
+    });
+
+    const mismatchReport = await runtime.volumeService.runDoctor(volume.id);
+    const mismatchIssue = mismatchReport.volumes[0]?.issues.find(
+      (issue) => issue.code === 'BLOB_REFERENCE_COUNT_MISMATCH',
+    );
+
+    expect(mismatchReport.healthy).toBe(false);
+    expect(mismatchIssue?.message).toContain('reference_count=0');
+
+    const repairReport = await runtime.volumeService.runRepair(volume.id);
+    const repairedVolume = repairReport.volumes[0];
+
+    expect(repairReport.healthy).toBe(true);
+    expect(
+      repairedVolume?.actions.some(
+        (action) => action.code === 'SYNC_BLOB_REFERENCE_COUNTS',
+      ),
+    ).toBe(true);
+    expect(repairedVolume?.issueCountAfter).toBe(0);
+
+    const finalReport = await runtime.volumeService.runDoctor(volume.id);
+    expect(finalReport.healthy).toBe(true);
+  });
+
   it('reports sqlite foreign key violations alongside logical storage issues', async () => {
     const runtime = await createIsolatedRuntime();
     const volume = await runtime.volumeService.createVolume({ name: 'SQLite FK Doctor' });
@@ -2144,6 +2199,28 @@ describe('VolumeService', () => {
       } finally {
         await database.exec('ROLLBACK').catch(() => undefined);
       }
+    });
+  });
+
+  it('tracks blob reference counts at the SQLite level', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Blob Reference Counts' });
+
+    await runtime.volumeService.writeTextFile(volume.id, '/a.txt', 'shared payload');
+    await runtime.volumeService.writeTextFile(volume.id, '/b.txt', 'shared payload');
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, volume.id), async (database) => {
+      const blobColumns = await database.all<{ name: string }[]>(
+        'PRAGMA table_info(blobs)',
+      );
+      const blobRow = await database.get<{ reference_count: number }>(
+        `SELECT reference_count
+           FROM blobs
+          LIMIT 1`,
+      );
+
+      expect(blobColumns.some((column) => column.name === 'reference_count')).toBe(true);
+      expect(blobRow?.reference_count).toBe(2);
     });
   });
 
