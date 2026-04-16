@@ -51,6 +51,38 @@ const findBundleFileRecord = (
 ): SupportBundleFileRecord | undefined =>
   files.find((file) => file.role === role);
 
+const rewriteBundleFileAndRefreshChecksum = async (
+  bundlePath: string,
+  relativePath: string,
+  serializedContent: string,
+): Promise<void> => {
+  const filePath = path.join(bundlePath, relativePath);
+  const checksumManifestPath = path.join(bundlePath, 'checksums.json');
+  const checksumManifest = JSON.parse(
+    await fs.readFile(checksumManifestPath, 'utf8'),
+  ) as SupportBundleChecksumManifest;
+  const checksumRecord = checksumManifest.files.find(
+    (file) => file.relativePath === relativePath,
+  );
+
+  expect(checksumRecord).toBeDefined();
+
+  await fs.writeFile(filePath, serializedContent, 'utf8');
+
+  if (checksumRecord) {
+    checksumRecord.bytes = Buffer.byteLength(serializedContent, 'utf8');
+    checksumRecord.checksumSha256 = createHash('sha256')
+      .update(serializedContent)
+      .digest('hex');
+  }
+
+  await fs.writeFile(
+    checksumManifestPath,
+    JSON.stringify(checksumManifest, null, 2),
+    'utf8',
+  );
+};
+
 afterEach(async () => {
   await Promise.all(runtimes.splice(0, runtimes.length).map((runtime) => runtime.close()));
   await Promise.all(
@@ -564,6 +596,86 @@ describe('support bundle', () => {
     expect(inspection.verifiedFiles).toBe(5);
     expect(issueCodes).toContain('CHECKSUM_MISMATCH');
     expect(issueCodes).toContain('MISSING_BUNDLE_FILE');
+  });
+
+  it('reports invalid action plans even when the checksum inventory matches the tampered file', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Broken Action Plan' });
+    const bundlePath = path.join(runtime.config.dataDir, '..', 'broken-action-plan');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/hello.txt', 'tamper plan');
+
+    const bundle = await createSupportBundle(runtime, {
+      destinationPath: bundlePath,
+      volumeId: volume.id,
+      includeLogs: false,
+    });
+
+    await rewriteBundleFileAndRefreshChecksum(
+      bundlePath,
+      'action-plan.json',
+      JSON.stringify(
+        {
+          bundleVersion: 1,
+          generatedAt: bundle.generatedAt,
+          doctorIntegrityDepth: 'metadata',
+          healthy: true,
+          issueCount: 0,
+          recommendedCompactions: 0,
+          repairableVolumes: 0,
+          readyBatchRepairVolumes: 0,
+          blockedBatchRepairVolumes: 0,
+          steps: 'not-an-array',
+        },
+        null,
+        2,
+      ),
+    );
+
+    const inspection = await inspectSupportBundle(bundlePath);
+
+    expect(inspection.healthy).toBe(false);
+    expect(inspection.issues).toContainEqual(
+      expect.objectContaining({
+        code: 'INVALID_ACTION_PLAN',
+        role: 'action-plan',
+      }),
+    );
+  });
+
+  it('reports action plan integrity-depth mismatches even when the checksum inventory matches', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Mismatched Action Plan' });
+    const bundlePath = path.join(runtime.config.dataDir, '..', 'mismatched-action-plan');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/hello.txt', 'tamper plan');
+
+    const bundle = await createSupportBundle(runtime, {
+      destinationPath: bundlePath,
+      volumeId: volume.id,
+      includeLogs: false,
+    });
+    const actionPlan = JSON.parse(
+      await fs.readFile(bundle.actionPlanPath!, 'utf8'),
+    ) as Record<string, unknown>;
+
+    actionPlan.doctorIntegrityDepth = 'deep';
+
+    await rewriteBundleFileAndRefreshChecksum(
+      bundlePath,
+      'action-plan.json',
+      JSON.stringify(actionPlan, null, 2),
+    );
+
+    const inspection = await inspectSupportBundle(bundlePath);
+
+    expect(inspection.healthy).toBe(false);
+    expect(inspection.issues).toContainEqual(
+      expect.objectContaining({
+        code: 'ACTION_PLAN_MISMATCH',
+        role: 'action-plan',
+      }),
+    );
   });
 
   it('flags support bundles that exceed their recommended retention window', async () => {
