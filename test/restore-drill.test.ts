@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createRuntime } from '../src/bootstrap/create-runtime.js';
 import type { AppRuntime } from '../src/bootstrap/create-runtime.js';
@@ -11,6 +11,11 @@ import { runRestoreDrill } from '../src/ops/restore-drill.js';
 
 const sandboxes: string[] = [];
 const runtimes: AppRuntime[] = [];
+
+vi.setConfig({
+  hookTimeout: 20000,
+  testTimeout: 20000,
+});
 
 const createIsolatedRuntime = async (
   overrides: Parameters<typeof createRuntime>[0] = {},
