@@ -12,21 +12,27 @@
   <img alt="Interface" src="https://img.shields.io/badge/interface-terminal-000000.svg" />
 </p>
 
-## Screenshots
-
-<p align="center">
-  <img alt="CLI Node Virtual Volumes TUI - Screenshot 1" src="./assets/Screenshot 2026-04-17 104737.png" width="100%" />
-</p>
-
-<p align="center">
-  <img alt="CLI Node Virtual Volumes TUI - Screenshot 2" src="./assets/Screenshot 2026-04-17 104823.png" width="100%" />
-</p>
-
-<p align="center">
-  <img alt="CLI Node Virtual Volumes TUI - Screenshot 3" src="./assets/Screenshot 2026-04-17 104915.png" width="100%" />
-</p>
-
-`./assets/Screenshot 2026-04-17 104737.png`, `./assets/Screenshot 2026-04-17 104823.png`, `./assets/Screenshot 2026-04-17 104915.png`
+<table align="center">
+  <tr>
+    <td align="center" width="50%">
+      <img alt="CLI Node Virtual Volumes TUI - Preview 1" src="./assets/Screenshot 2026-04-17 104737.png" width="100%" />
+      <br />
+      <sub><strong>Preview 01</strong></sub>
+    </td>
+    <td align="center" width="50%">
+      <img alt="CLI Node Virtual Volumes TUI - Preview 2" src="./assets/Screenshot 2026-04-17 104823.png" width="100%" />
+      <br />
+      <sub><strong>Preview 02</strong></sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <img alt="CLI Node Virtual Volumes TUI - Preview 3" src="./assets/Screenshot 2026-04-17 104915.png" width="100%" />
+      <br />
+      <sub><strong>Preview 03</strong></sub>
+    </td>
+  </tr>
+</table>
 
 `cli-node-virtual-volumes` is a persistent, Node-only virtual filesystem designed to keep logical volumes isolated from the host OS while exposing a rich TUI and a programmable TypeScript API.
 
