@@ -8,6 +8,14 @@
   "bin": {
     "virtual-volumes": "./dist/index.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/d4v3-rm/cli-node-virtual-volumes.git"
+  },
+  "homepage": "https://github.com/d4v3-rm/cli-node-virtual-volumes#readme",
+  "bugs": {
+    "url": "https://github.com/d4v3-rm/cli-node-virtual-volumes/issues"
+  },
   "main": "./dist/lib.js",
   "types": "./dist/lib.d.ts",
   "exports": {
