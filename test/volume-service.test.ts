@@ -1,0 +1,3344 @@
+import { createHash } from 'node:crypto';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
+import { open } from 'sqlite';
+import sqlite3 from 'sqlite3';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { createRuntime } from '../src/bootstrap/create-runtime.js';
+import type { AppRuntime } from '../src/bootstrap/create-runtime.js';
+import { APP_VERSION } from '../src/config/app-metadata.js';
+import type { RuntimeOverrides } from '../src/config/env.js';
+import type { VolumeBackupManifest } from '../src/domain/types.js';
+import { BlobStore } from '../src/storage/blob-store.js';
+import {
+  getVolumeDatabasePath,
+  SUPPORTED_VOLUME_SCHEMA_VERSION,
+  withVolumeDatabase,
+} from '../src/storage/sqlite-volume.js';
+import { VolumeRepository } from '../src/storage/volume-repository.js';
+
+const sandboxes: string[] = [];
+const runtimes: AppRuntime[] = [];
+
+vi.setConfig({
+  hookTimeout: 30000,
+  testTimeout: 30000,
+});
+
+const trackRuntime = async (
+  runtimePromise: Promise<AppRuntime>,
+): Promise<AppRuntime> => {
+  const runtime = await runtimePromise;
+  runtimes.push(runtime);
+  return runtime;
+};
+
+const createIsolatedRuntime = async (overrides: RuntimeOverrides = {}) => {
+  const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cli-node-virtual-volumes-'));
+  sandboxes.push(sandboxRoot);
+
+  return trackRuntime(
+    createRuntime({
+      dataDir: path.join(sandboxRoot, 'data'),
+      logDir: path.join(sandboxRoot, 'logs'),
+      logLevel: 'silent',
+      logToStdout: false,
+      ...overrides,
+    }),
+  );
+};
+
+const countPersistedBlobs = async (
+  dataDir: string,
+  volumeId: string,
+): Promise<number> =>
+  withVolumeDatabase(getVolumeDatabasePath(dataDir, volumeId), async (database) => {
+    const row = await database.get<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM blobs',
+    );
+
+    return row?.count ?? 0;
+  });
+
+const getPersistedVolumeRevision = async (
+  dataDir: string,
+  volumeId: string,
+): Promise<number> =>
+  withVolumeDatabase(getVolumeDatabasePath(dataDir, volumeId), async (database) => {
+    const row = await database.get<{ revision: number }>(
+      'SELECT revision FROM manifest LIMIT 1',
+    );
+
+    return row?.revision ?? 0;
+  });
+
+const hasPendingMutationJournal = async (
+  dataDir: string,
+  volumeId: string,
+): Promise<boolean> =>
+  withVolumeDatabase(getVolumeDatabasePath(dataDir, volumeId), async (database) => {
+    const row = await database.get<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM mutation_journal',
+    );
+
+    return (row?.count ?? 0) > 0;
+  });
+
+const seedPendingMutationJournal = async (
+  dataDir: string,
+  volumeId: string,
+  operation: string,
+  expectedRevision: number,
+): Promise<void> => {
+  await withVolumeDatabase(getVolumeDatabasePath(dataDir, volumeId), async (database) => {
+    await database.run(
+      `INSERT INTO mutation_journal (
+         operation,
+         expected_revision,
+         started_at
+       ) VALUES (?, ?, ?)`,
+      operation,
+      expectedRevision,
+      '2026-04-16T10:00:00.000Z',
+    );
+  });
+};
+
+const getPersistedBlobChunkCount = async (
+  dataDir: string,
+  volumeId: string,
+  contentRef: string,
+): Promise<number> =>
+  withVolumeDatabase(getVolumeDatabasePath(dataDir, volumeId), async (database) => {
+    const row = await database.get<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM blob_chunks WHERE content_ref = ?',
+      contentRef,
+    );
+
+    return row?.count ?? 0;
+  });
+
+const getEntryRowId = async (
+  dataDir: string,
+  volumeId: string,
+  entryName: string,
+): Promise<number | null> =>
+  withVolumeDatabase(getVolumeDatabasePath(dataDir, volumeId), async (database) => {
+    const row = await database.get<{ rowid: number }>(
+      `SELECT rowid
+         FROM entries
+        WHERE name = ?
+        LIMIT 1`,
+      entryName,
+    );
+
+    return row?.rowid ?? null;
+  });
+
+const getPersistedDatabaseArtifactBytes = async (
+  dataDir: string,
+  volumeId: string,
+): Promise<number> => {
+  const databasePath = getVolumeDatabasePath(dataDir, volumeId);
+  const artifactPaths = [
+    databasePath,
+    `${databasePath}-journal`,
+    `${databasePath}-wal`,
+    `${databasePath}-shm`,
+  ];
+  const sizes = await Promise.all(
+    artifactPaths.map(async (artifactPath) => {
+      try {
+        const stats = await fs.stat(artifactPath);
+        return stats.size;
+      } catch {
+        return 0;
+      }
+    }),
+  );
+
+  return sizes.reduce((total, size) => total + size, 0);
+};
+
+afterEach(async () => {
+  await Promise.all(runtimes.splice(0, runtimes.length).map((runtime) => runtime.close()));
+  await Promise.all(
+    sandboxes.splice(0, sandboxes.length).map((sandboxRoot) =>
+      fs.rm(sandboxRoot, { recursive: true, force: true }),
+    ),
+  );
+});
+
+describe('VolumeService', () => {
+  it('creates volumes, directories and explorer snapshots', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({
+      name: 'Contracts',
+      description: 'Legal docs',
+    });
+
+    await runtime.volumeService.createDirectory(volume.id, '/', 'contracts');
+
+    const snapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+
+    expect(snapshot.volume.name).toBe('Contracts');
+    expect(snapshot.entries.map((entry) => entry.name)).toEqual(['contracts']);
+    expect(snapshot.volume.entryCount).toBe(2);
+  });
+
+  it('updates volume metadata and rejects empty names', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({
+      name: 'Contracts',
+      description: 'Legal docs',
+    });
+
+    const updatedVolume = await runtime.volumeService.updateVolumeMetadata(volume.id, {
+      name: 'Contracts FY26',
+      description: 'Renewed legal archive',
+    });
+    const volumes = await runtime.volumeService.listVolumes();
+
+    expect(updatedVolume.name).toBe('Contracts FY26');
+    expect(updatedVolume.description).toBe('Renewed legal archive');
+    expect(updatedVolume.revision).toBeGreaterThan(volume.revision);
+    expect(volumes[0]).toMatchObject({
+      id: volume.id,
+      name: 'Contracts FY26',
+      description: 'Renewed legal archive',
+    });
+
+    await expect(
+      runtime.volumeService.updateVolumeMetadata(volume.id, {
+        name: '   ',
+        description: 'still invalid',
+      }),
+    ).rejects.toMatchObject({
+      code: 'INVALID_NAME',
+      message: 'Volume name cannot be empty.',
+    });
+  });
+
+  it('writes text files through the Node API and previews them', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Notes' });
+
+    await runtime.volumeService.writeTextFile(volume.id, '/todo.txt', 'hello world');
+    await runtime.volumeService.writeTextFile(
+      volume.id,
+      '/todo.txt',
+      'updated from node api',
+    );
+
+    const preview = await runtime.volumeService.previewFile(volume.id, '/todo.txt');
+    const snapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+
+    expect(preview.kind).toBe('text');
+    expect(preview.content).toContain('updated from node api');
+    expect(snapshot.entries).toHaveLength(1);
+    expect(snapshot.entries[0]?.name).toBe('todo.txt');
+  });
+
+  it('persists untouched entries incrementally without recreating their SQLite rows', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Incremental Persist' });
+
+    await runtime.volumeService.writeTextFile(volume.id, '/alpha.txt', 'alpha');
+    await runtime.volumeService.writeTextFile(volume.id, '/beta.txt', 'beta');
+
+    const betaRowIdBefore = await getEntryRowId(
+      runtime.config.dataDir,
+      volume.id,
+      'beta.txt',
+    );
+
+    await runtime.volumeService.writeTextFile(volume.id, '/alpha.txt', 'alpha updated');
+
+    const betaRowIdAfter = await getEntryRowId(
+      runtime.config.dataDir,
+      volume.id,
+      'beta.txt',
+    );
+    const preview = await runtime.volumeService.previewFile(volume.id, '/beta.txt');
+
+    expect(betaRowIdBefore).not.toBeNull();
+    expect(betaRowIdAfter).toBe(betaRowIdBefore);
+    expect(preview.content).toContain('beta');
+  });
+
+  it('persists very large entry sets without exhausting SQLite bind limits or the JS stack', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Large Persist' });
+    const repository = (
+      runtime.volumeService as unknown as {
+        repository: VolumeRepository;
+      }
+    ).repository;
+    const record = await repository.loadVolume(volume.id);
+    const rootEntry = record.state.entries[record.state.rootId];
+    const now = '2026-04-16T10:30:00.000Z';
+    const additionalDirectoryCount = 50_000;
+
+    if (rootEntry?.kind !== 'directory') {
+      throw new Error('Expected the volume root entry to be a directory.');
+    }
+
+    for (let index = 0; index < additionalDirectoryCount; index += 1) {
+      const entryId = `dir_bulk_${index}`;
+      record.state.entries[entryId] = {
+        id: entryId,
+        kind: 'directory',
+        name: `bulk-${index}`,
+        parentId: rootEntry.id,
+        childIds: [],
+        createdAt: now,
+        updatedAt: now,
+      };
+      rootEntry.childIds.push(entryId);
+    }
+
+    rootEntry.updatedAt = now;
+    record.manifest.entryCount = additionalDirectoryCount + 1;
+    record.manifest.updatedAt = now;
+
+    await expect(repository.saveVolume(record)).resolves.toBeUndefined();
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, volume.id), async (database) => {
+      const row = await database.get<{ count: number }>(
+        'SELECT COUNT(*) AS count FROM entries',
+      );
+
+      expect(row?.count).toBe(additionalDirectoryCount + 1);
+    });
+  });
+
+  it('deletes stale SQLite rows incrementally without recreating untouched entries', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Incremental Delete' });
+
+    await runtime.volumeService.writeTextFile(volume.id, '/alpha.txt', 'alpha');
+    await runtime.volumeService.writeTextFile(volume.id, '/beta.txt', 'beta');
+
+    const betaRowIdBefore = await getEntryRowId(
+      runtime.config.dataDir,
+      volume.id,
+      'beta.txt',
+    );
+
+    await runtime.volumeService.deleteEntry(volume.id, '/alpha.txt');
+
+    const alphaRowIdAfter = await getEntryRowId(
+      runtime.config.dataDir,
+      volume.id,
+      'alpha.txt',
+    );
+    const betaRowIdAfter = await getEntryRowId(
+      runtime.config.dataDir,
+      volume.id,
+      'beta.txt',
+    );
+    const preview = await runtime.volumeService.previewFile(volume.id, '/beta.txt');
+
+    expect(alphaRowIdAfter).toBeNull();
+    expect(betaRowIdAfter).toBe(betaRowIdBefore);
+    expect(preview.content).toContain('beta');
+  });
+
+  it('moves entries incrementally while preserving their SQLite row identity', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Incremental Move' });
+
+    await runtime.volumeService.createDirectory(volume.id, '/', 'source');
+    await runtime.volumeService.createDirectory(volume.id, '/', 'archive');
+    await runtime.volumeService.writeTextFile(
+      volume.id,
+      '/source/relocate.txt',
+      'move me',
+    );
+
+    const rowIdBefore = await getEntryRowId(
+      runtime.config.dataDir,
+      volume.id,
+      'relocate.txt',
+    );
+
+    await runtime.volumeService.moveEntry(volume.id, {
+      sourcePath: '/source/relocate.txt',
+      destinationDirectoryPath: '/archive',
+      newName: 'relocate-moved.txt',
+    });
+
+    const oldRowIdAfter = await getEntryRowId(
+      runtime.config.dataDir,
+      volume.id,
+      'relocate.txt',
+    );
+    const newRowIdAfter = await getEntryRowId(
+      runtime.config.dataDir,
+      volume.id,
+      'relocate-moved.txt',
+    );
+    const preview = await runtime.volumeService.previewFile(
+      volume.id,
+      '/archive/relocate-moved.txt',
+    );
+
+    expect(oldRowIdAfter).toBeNull();
+    expect(newRowIdAfter).toBe(rowIdBefore);
+    expect(preview.content).toContain('move me');
+  });
+
+  it('rolls writeTextFile back when file entry creation fails after blob storage', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Write Rollback' });
+
+    const createFileEntrySpy = vi
+      .spyOn(
+        runtime.volumeService as unknown as {
+          createFileEntry: (...args: unknown[]) => unknown;
+        },
+        'createFileEntry',
+      )
+      .mockImplementation(() => {
+        throw new Error('Simulated file entry creation failure.');
+      });
+
+    await expect(
+      runtime.volumeService.writeTextFile(volume.id, '/failed.txt', 'should roll back'),
+    ).rejects.toThrow('Simulated file entry creation failure.');
+
+    createFileEntrySpy.mockRestore();
+
+    const snapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+
+    expect(snapshot.entries).toHaveLength(0);
+    await expect(countPersistedBlobs(runtime.config.dataDir, volume.id)).resolves.toBe(0);
+  });
+
+  it('rolls writeTextFile overwrites back when orphan cleanup fails after metadata mutation', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Overwrite Rollback' });
+
+    await runtime.volumeService.writeTextFile(volume.id, '/tracked.txt', 'baseline content');
+
+    const cleanupSpy = vi
+      .spyOn(
+        runtime.volumeService as unknown as {
+          deleteOrphanedBlobsInDatabase: (...args: unknown[]) => Promise<void>;
+        },
+        'deleteOrphanedBlobsInDatabase',
+      )
+      .mockImplementation(
+        () => Promise.reject(new Error('Simulated orphan cleanup failure.')),
+      );
+
+    await expect(
+      runtime.volumeService.writeTextFile(volume.id, '/tracked.txt', 'new content'),
+    ).rejects.toThrow('Simulated orphan cleanup failure.');
+
+    cleanupSpy.mockRestore();
+
+    const preview = await runtime.volumeService.previewFile(volume.id, '/tracked.txt');
+    const snapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+
+    expect(preview.content).toContain('baseline content');
+    expect(snapshot.entries.map((entry) => entry.name)).toEqual(['tracked.txt']);
+    await expect(countPersistedBlobs(runtime.config.dataDir, volume.id)).resolves.toBe(1);
+  });
+
+  it('removes orphaned blobs after overwriting and deleting files', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Blob Cleanup' });
+
+    await runtime.volumeService.writeTextFile(volume.id, '/cleanup.txt', 'one');
+    await runtime.volumeService.writeTextFile(volume.id, '/cleanup.txt', 'two');
+    await runtime.volumeService.deleteEntry(volume.id, '/cleanup.txt');
+
+    await expect(countPersistedBlobs(runtime.config.dataDir, volume.id)).resolves.toBe(0);
+  });
+
+  it('stores each volume in a single sqlite file', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Single File' });
+    const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+    const legacyDirectoryPath = path.join(runtime.config.dataDir, 'volumes', volume.id);
+
+    const databaseStats = await fs.stat(databasePath);
+
+    expect(databaseStats.isFile()).toBe(true);
+    await expect(fs.stat(legacyDirectoryPath)).rejects.toBeTruthy();
+  });
+
+  it('migrates legacy directory-based volumes into sqlite files', async () => {
+    const sandboxRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'cli-node-virtual-volumes-legacy-'),
+    );
+    sandboxes.push(sandboxRoot);
+
+    const dataDir = path.join(sandboxRoot, 'data');
+    const logDir = path.join(sandboxRoot, 'logs');
+    const legacyVolumeId = 'vol_legacy001';
+    const legacyDirectoryPath = path.join(dataDir, 'volumes', legacyVolumeId);
+    const legacyContent = Buffer.from('legacy content', 'utf8');
+    const legacyContentRef = createHash('sha256').update(legacyContent).digest('hex');
+    const timestamp = new Date().toISOString();
+
+    await fs.mkdir(
+      path.join(
+        legacyDirectoryPath,
+        'blobs',
+        legacyContentRef.slice(0, 2),
+      ),
+      { recursive: true },
+    );
+    await fs.writeFile(
+      path.join(
+        legacyDirectoryPath,
+        'blobs',
+        legacyContentRef.slice(0, 2),
+        legacyContentRef.slice(2),
+      ),
+      legacyContent,
+    );
+    await fs.writeFile(
+      path.join(legacyDirectoryPath, 'manifest.json'),
+      JSON.stringify(
+        {
+          id: legacyVolumeId,
+          name: 'Legacy Volume',
+          description: 'Directory-based volume',
+          quotaBytes: 1024 * 1024,
+          logicalUsedBytes: legacyContent.byteLength,
+          entryCount: 2,
+          revision: 0,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+    await fs.writeFile(
+      path.join(legacyDirectoryPath, 'state.json'),
+      JSON.stringify(
+        {
+          version: 1,
+          rootId: 'root',
+          entries: {
+            root: {
+              id: 'root',
+              kind: 'directory',
+              name: '/',
+              parentId: null,
+              childIds: ['file_legacy'],
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            },
+            file_legacy: {
+              id: 'file_legacy',
+              kind: 'file',
+              name: 'legacy.txt',
+              parentId: 'root',
+              createdAt: timestamp,
+              updatedAt: timestamp,
+              size: legacyContent.byteLength,
+              contentRef: legacyContentRef,
+              importedFromHostPath: null,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+
+    const runtime = await trackRuntime(
+      createRuntime({
+        dataDir,
+        logDir,
+        logLevel: 'silent',
+        logToStdout: false,
+      }),
+    );
+
+    const volumes = await runtime.volumeService.listVolumes();
+    const preview = await runtime.volumeService.previewFile(legacyVolumeId, '/legacy.txt');
+    const migratedDatabasePath = getVolumeDatabasePath(dataDir, legacyVolumeId);
+    const migratedDatabaseStats = await fs.stat(migratedDatabasePath);
+
+    expect(volumes.map((volume) => volume.id)).toContain(legacyVolumeId);
+    expect(preview.content).toContain('legacy content');
+    expect(migratedDatabaseStats.isFile()).toBe(true);
+    await expect(fs.stat(legacyDirectoryPath)).rejects.toBeTruthy();
+  });
+
+  it('rolls legacy blob imports back when metadata migration fails', async () => {
+    const sandboxRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'cli-node-virtual-volumes-legacy-failure-'),
+    );
+    sandboxes.push(sandboxRoot);
+
+    const dataDir = path.join(sandboxRoot, 'data');
+    const logDir = path.join(sandboxRoot, 'logs');
+    const legacyVolumeId = 'vol_legacy_fail01';
+    const legacyDirectoryPath = path.join(dataDir, 'volumes', legacyVolumeId);
+    const firstContent = Buffer.from('first legacy payload', 'utf8');
+    const secondContent = Buffer.from('second legacy payload', 'utf8');
+    const firstContentRef = createHash('sha256').update(firstContent).digest('hex');
+    const secondContentRef = createHash('sha256').update(secondContent).digest('hex');
+    const timestamp = new Date().toISOString();
+
+    await fs.mkdir(
+      path.join(
+        legacyDirectoryPath,
+        'blobs',
+        firstContentRef.slice(0, 2),
+      ),
+      { recursive: true },
+    );
+    await fs.mkdir(
+      path.join(
+        legacyDirectoryPath,
+        'blobs',
+        secondContentRef.slice(0, 2),
+      ),
+      { recursive: true },
+    );
+    await fs.writeFile(
+      path.join(
+        legacyDirectoryPath,
+        'blobs',
+        firstContentRef.slice(0, 2),
+        firstContentRef.slice(2),
+      ),
+      firstContent,
+    );
+    await fs.writeFile(
+      path.join(
+        legacyDirectoryPath,
+        'blobs',
+        secondContentRef.slice(0, 2),
+        secondContentRef.slice(2),
+      ),
+      secondContent,
+    );
+    await fs.writeFile(
+      path.join(legacyDirectoryPath, 'manifest.json'),
+      JSON.stringify(
+        {
+          id: legacyVolumeId,
+          name: 'Broken Legacy Volume',
+          description: 'Should roll back on migration failure',
+          quotaBytes: 1024 * 1024,
+          logicalUsedBytes: firstContent.byteLength + secondContent.byteLength,
+          entryCount: 3,
+          revision: 0,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+    await fs.writeFile(
+      path.join(legacyDirectoryPath, 'state.json'),
+      JSON.stringify(
+        {
+          version: 1,
+          rootId: 'root',
+          entries: {
+            root: {
+              id: 'root',
+              kind: 'directory',
+              name: '/',
+              parentId: null,
+              childIds: ['file_a', 'file_b'],
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            },
+            file_a: {
+              id: 'file_a',
+              kind: 'file',
+              name: 'duplicate.txt',
+              parentId: 'root',
+              createdAt: timestamp,
+              updatedAt: timestamp,
+              size: firstContent.byteLength,
+              contentRef: firstContentRef,
+              importedFromHostPath: null,
+            },
+            file_b: {
+              id: 'file_b',
+              kind: 'file',
+              name: 'duplicate.txt',
+              parentId: 'root',
+              createdAt: timestamp,
+              updatedAt: timestamp,
+              size: secondContent.byteLength,
+              contentRef: secondContentRef,
+              importedFromHostPath: null,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+
+    const runtime = await trackRuntime(
+      createRuntime({
+        dataDir,
+        logDir,
+        logLevel: 'silent',
+        logToStdout: false,
+      }),
+    );
+
+    const volumes = await runtime.volumeService.listVolumes();
+    const migratedDatabasePath = getVolumeDatabasePath(dataDir, legacyVolumeId);
+    const legacyDirectoryStats = await fs.stat(legacyDirectoryPath);
+
+    expect(volumes.map((volume) => volume.id)).not.toContain(legacyVolumeId);
+    await expect(fs.stat(migratedDatabasePath)).rejects.toBeTruthy();
+    expect(legacyDirectoryStats.isDirectory()).toBe(true);
+  });
+
+  it('rolls batched host imports back when a later file fails after earlier blobs were staged', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Import Rollback' });
+    const hostRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-import-rollback-'));
+    sandboxes.push(hostRoot);
+
+    await fs.writeFile(path.join(hostRoot, 'alpha.txt'), 'alpha');
+    await fs.writeFile(path.join(hostRoot, 'beta.txt'), 'beta');
+
+    const originalCreateFileEntry = (
+      runtime.volumeService as unknown as {
+        createFileEntry: (...args: unknown[]) => unknown;
+      }
+    ).createFileEntry.bind(runtime.volumeService);
+
+    const createFileEntrySpy = vi
+      .spyOn(
+        runtime.volumeService as unknown as {
+          createFileEntry: (...args: unknown[]) => unknown;
+        },
+        'createFileEntry',
+      )
+      .mockImplementation((...args: unknown[]) => {
+        const [, , name] = args;
+        if (name === 'beta.txt') {
+          throw new Error('Simulated batched import failure.');
+        }
+
+        return originalCreateFileEntry(...args);
+      });
+
+    await expect(
+      runtime.volumeService.importHostPaths(volume.id, {
+        destinationPath: '/',
+        hostPaths: [path.join(hostRoot, 'alpha.txt'), path.join(hostRoot, 'beta.txt')],
+      }),
+    ).rejects.toThrow('Simulated batched import failure.');
+
+    createFileEntrySpy.mockRestore();
+
+    const snapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+
+    expect(snapshot.entries).toHaveLength(0);
+    await expect(countPersistedBlobs(runtime.config.dataDir, volume.id)).resolves.toBe(0);
+  });
+
+  it('imports host files and directories in batch and resolves name conflicts', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Imports' });
+    const hostRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-host-'));
+    sandboxes.push(hostRoot);
+
+    const bundleRoot = path.join(hostRoot, 'bundle');
+    await fs.mkdir(bundleRoot, { recursive: true });
+    await fs.writeFile(path.join(hostRoot, 'alpha.txt'), 'alpha');
+    await fs.writeFile(path.join(bundleRoot, 'nested.txt'), 'nested');
+    await runtime.volumeService.createDirectory(volume.id, '/', 'imports');
+
+    const summary = await runtime.volumeService.importHostPaths(volume.id, {
+      destinationPath: '/imports',
+      hostPaths: [
+        path.join(hostRoot, 'alpha.txt'),
+        bundleRoot,
+        path.join(hostRoot, 'alpha.txt'),
+      ],
+    });
+
+    const snapshot = await runtime.volumeService.getExplorerSnapshot(
+      volume.id,
+      '/imports',
+    );
+
+    expect(summary.filesImported).toBe(3);
+    expect(summary.directoriesImported).toBe(1);
+    expect(summary.conflictsResolved).toBe(1);
+    expect(summary.integrityChecksPassed).toBe(3);
+    expect(snapshot.entries.map((entry) => entry.name)).toEqual([
+      'bundle',
+      'alpha (2).txt',
+      'alpha.txt',
+    ]);
+  });
+
+  it('reports import progress while host paths are being ingested', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Progress Import' });
+    const hostRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-progress-'));
+    sandboxes.push(hostRoot);
+
+    await fs.mkdir(path.join(hostRoot, 'batch'), { recursive: true });
+    await fs.writeFile(path.join(hostRoot, 'batch', 'one.txt'), 'one');
+    await fs.writeFile(path.join(hostRoot, 'batch', 'two.txt'), 'two');
+
+    const progressEvents: {
+      phase: 'file' | 'directory' | 'integrity';
+      currentHostPath: string;
+      filesImported: number;
+      directoriesImported: number;
+      totalFiles: number;
+      totalDirectories: number;
+      totalBytes: number;
+      transferredBytes: number;
+    }[] = [];
+
+    await runtime.volumeService.importHostPaths(volume.id, {
+      destinationPath: '/',
+      hostPaths: [path.join(hostRoot, 'batch')],
+      onProgress: (progress) => {
+        progressEvents.push({
+          phase: progress.phase,
+          currentHostPath: progress.currentHostPath,
+          filesImported: progress.summary.filesImported,
+          directoriesImported: progress.summary.directoriesImported,
+          totalFiles: progress.metrics.totalFiles,
+          totalDirectories: progress.metrics.totalDirectories,
+          totalBytes: progress.metrics.totalBytes,
+          transferredBytes: progress.metrics.transferredBytes,
+        });
+      },
+    });
+
+    expect(progressEvents[0]).toMatchObject({
+      phase: 'directory',
+      directoriesImported: 1,
+      totalFiles: 2,
+      totalDirectories: 1,
+      totalBytes: 6,
+      transferredBytes: 0,
+    });
+    expect(
+      progressEvents.some((event) => event.phase === 'file' && event.transferredBytes > 0),
+    ).toBe(true);
+    expect(progressEvents.some((event) => event.phase === 'integrity')).toBe(true);
+    expect(progressEvents.at(-1)).toMatchObject({
+      phase: 'integrity',
+      filesImported: 2,
+      directoriesImported: 1,
+      totalFiles: 2,
+      totalDirectories: 1,
+      totalBytes: 6,
+      transferredBytes: 6,
+    });
+  });
+
+  it('rejects symbolic-link host imports before staging metadata or blobs', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Symlink Guard' });
+    const fakeSymlinkPath = path.join(runtime.config.dataDir, 'host-link');
+    const realLstat = fs.lstat.bind(fs);
+
+    const lstatSpy = vi
+      .spyOn(fs, 'lstat')
+      .mockImplementation(async (targetPath: Parameters<typeof fs.lstat>[0]) => {
+        const targetPathText =
+          typeof targetPath === 'string' ? targetPath : targetPath.toString();
+        if (path.resolve(targetPathText) === path.resolve(fakeSymlinkPath)) {
+          return {
+            isSymbolicLink: () => true,
+            isDirectory: () => false,
+            isFile: () => false,
+            size: 0,
+          } as Awaited<ReturnType<typeof fs.lstat>>;
+        }
+
+        return realLstat(targetPath);
+      });
+
+    await expect(
+      runtime.volumeService.importHostPaths(volume.id, {
+        destinationPath: '/',
+        hostPaths: [fakeSymlinkPath],
+      }),
+    ).rejects.toMatchObject({
+      code: 'UNSUPPORTED_HOST_ENTRY',
+      message: `Symbolic links are not supported: ${path.resolve(fakeSymlinkPath)}`,
+    });
+
+    lstatSpy.mockRestore();
+
+    const snapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+
+    expect(snapshot.entries).toHaveLength(0);
+    await expect(countPersistedBlobs(runtime.config.dataDir, volume.id)).resolves.toBe(0);
+  });
+
+  it('enforces configured host path allowlist and denylist for import and export', async () => {
+    const hostRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-host-policy-'));
+    sandboxes.push(hostRoot);
+
+    const allowedRoot = path.join(hostRoot, 'allowed');
+    const deniedRoot = path.join(hostRoot, 'denied');
+    const outsideRoot = path.join(hostRoot, 'outside');
+    const allowedImportPath = path.join(allowedRoot, 'inside.txt');
+    const deniedImportPath = path.join(deniedRoot, 'blocked.txt');
+    const exportOutsideRoot = path.join(outsideRoot, 'exports');
+    await fs.mkdir(allowedRoot, { recursive: true });
+    await fs.mkdir(deniedRoot, { recursive: true });
+    await fs.writeFile(allowedImportPath, 'allowed import');
+    await fs.writeFile(deniedImportPath, 'denied import');
+
+    const runtime = await createIsolatedRuntime({
+      hostAllowPaths: [allowedRoot],
+      hostDenyPaths: [deniedRoot],
+    });
+    const volume = await runtime.volumeService.createVolume({ name: 'Host Policy' });
+
+    const importSummary = await runtime.volumeService.importHostPaths(volume.id, {
+      destinationPath: '/',
+      hostPaths: [allowedImportPath],
+    });
+
+    expect(importSummary).toMatchObject({
+      filesImported: 1,
+      directoriesImported: 0,
+    });
+
+    await expect(
+      runtime.volumeService.importHostPaths(volume.id, {
+        destinationPath: '/',
+        hostPaths: [deniedImportPath],
+      }),
+    ).rejects.toMatchObject({
+      code: 'INVALID_OPERATION',
+      message: `Import path is blocked by configured host denylist: ${path.resolve(deniedImportPath)}`,
+    });
+
+    await runtime.volumeService.writeTextFile(volume.id, '/export.txt', 'policy export');
+
+    await expect(
+      runtime.volumeService.exportEntryToHost(volume.id, {
+        sourcePath: '/export.txt',
+        destinationHostDirectory: exportOutsideRoot,
+      }),
+    ).rejects.toMatchObject({
+      code: 'INVALID_OPERATION',
+      message: `Export path is outside the configured host allowlist: ${path.resolve(exportOutsideRoot)}`,
+    });
+  });
+
+  it('exports virtual files and directories to the host and resolves name conflicts', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Exports' });
+    const hostRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-export-'));
+    sandboxes.push(hostRoot);
+
+    await runtime.volumeService.createDirectory(volume.id, '/', 'docs');
+    await runtime.volumeService.writeTextFile(volume.id, '/docs/readme.txt', 'documentation');
+    await runtime.volumeService.writeTextFile(volume.id, '/alpha.txt', 'alpha');
+
+    await fs.mkdir(path.join(hostRoot, 'docs'), { recursive: true });
+    await fs.writeFile(path.join(hostRoot, 'alpha.txt'), 'existing');
+
+    const directorySummary = await runtime.volumeService.exportEntryToHost(volume.id, {
+      sourcePath: '/docs',
+      destinationHostDirectory: hostRoot,
+    });
+    const fileSummary = await runtime.volumeService.exportEntryToHost(volume.id, {
+      sourcePath: '/alpha.txt',
+      destinationHostDirectory: hostRoot,
+    });
+
+    expect(directorySummary).toMatchObject({
+      directoriesExported: 1,
+      filesExported: 1,
+      conflictsResolved: 1,
+      integrityChecksPassed: 1,
+    });
+    expect(fileSummary).toMatchObject({
+      directoriesExported: 0,
+      filesExported: 1,
+      conflictsResolved: 1,
+      integrityChecksPassed: 1,
+    });
+    await expect(
+      fs.readFile(path.join(hostRoot, 'docs (2)', 'readme.txt'), 'utf8'),
+    ).resolves.toBe('documentation');
+    await expect(
+      fs.readFile(path.join(hostRoot, 'alpha (2).txt'), 'utf8'),
+    ).resolves.toBe('alpha');
+  });
+
+  it('rejects export destinations that already exist as host files', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Export Guard' });
+    const hostRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-export-guard-'));
+    sandboxes.push(hostRoot);
+    const hostFilePath = path.join(hostRoot, 'not-a-directory.txt');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/report.txt', 'export me');
+    await fs.writeFile(hostFilePath, 'existing host file');
+
+    await expect(
+      runtime.volumeService.exportEntryToHost(volume.id, {
+        sourcePath: '/report.txt',
+        destinationHostDirectory: hostFilePath,
+      }),
+    ).rejects.toMatchObject({
+      code: 'INVALID_OPERATION',
+      message: `The host destination must be a directory: ${path.resolve(hostFilePath)}`,
+    });
+
+    await expect(fs.readFile(hostFilePath, 'utf8')).resolves.toBe('existing host file');
+  });
+
+  it('reports export progress while virtual files are being written to the host', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Progress Export' });
+    const hostRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-export-progress-'));
+    sandboxes.push(hostRoot);
+
+    const content = 'x'.repeat(512 * 1024);
+    await runtime.volumeService.writeTextFile(volume.id, '/big.txt', content);
+
+    const progressEvents: {
+      phase: 'file' | 'directory' | 'integrity';
+      currentVirtualPath: string;
+      destinationHostPath: string;
+      bytesExported: number;
+      currentBytes: number;
+      currentTotalBytes: number | null;
+      totalFiles: number;
+      totalDirectories: number;
+      totalBytes: number;
+      transferredBytes: number;
+    }[] = [];
+
+    const summary = await runtime.volumeService.exportEntryToHost(volume.id, {
+      sourcePath: '/big.txt',
+      destinationHostDirectory: hostRoot,
+      onProgress: (progress) => {
+        progressEvents.push({
+          phase: progress.phase,
+          currentVirtualPath: progress.currentVirtualPath,
+          destinationHostPath: progress.destinationHostPath,
+          bytesExported: progress.summary.bytesExported,
+          currentBytes: progress.currentBytes,
+          currentTotalBytes: progress.currentTotalBytes,
+          totalFiles: progress.metrics.totalFiles,
+          totalDirectories: progress.metrics.totalDirectories,
+          totalBytes: progress.metrics.totalBytes,
+          transferredBytes: progress.metrics.transferredBytes,
+        });
+      },
+    });
+
+    expect(progressEvents.some((event) => event.phase === 'file' && event.currentBytes > 0)).toBe(
+      true,
+    );
+    expect(progressEvents.some((event) => event.phase === 'integrity')).toBe(true);
+    expect(progressEvents.at(-1)).toMatchObject({
+      phase: 'integrity',
+      currentVirtualPath: '/big.txt',
+      bytesExported: Buffer.byteLength(content, 'utf8'),
+      currentBytes: Buffer.byteLength(content, 'utf8'),
+      currentTotalBytes: Buffer.byteLength(content, 'utf8'),
+      totalFiles: 1,
+      totalDirectories: 0,
+      totalBytes: Buffer.byteLength(content, 'utf8'),
+      transferredBytes: Buffer.byteLength(content, 'utf8'),
+    });
+    expect(summary).toMatchObject({
+      filesExported: 1,
+      directoriesExported: 0,
+      bytesExported: Buffer.byteLength(content, 'utf8'),
+      integrityChecksPassed: 1,
+    });
+    await expect(fs.readFile(path.join(hostRoot, 'big.txt'), 'utf8')).resolves.toHaveLength(
+      content.length,
+    );
+  });
+
+  it('imports and exports large files through chunked sqlite blobs with integrity verification', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Large Files' });
+    const hostRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-large-file-'));
+    sandboxes.push(hostRoot);
+
+    const largeContent = Buffer.alloc(1024 * 1024 + 333, 0);
+    const largeHostPath = path.join(hostRoot, 'large.bin');
+    await fs.writeFile(largeHostPath, largeContent);
+
+    const importSummary = await runtime.volumeService.importHostPaths(volume.id, {
+      destinationPath: '/',
+      hostPaths: [largeHostPath],
+    });
+    const snapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+    const importedEntry = snapshot.entries.find((entry) => entry.name === 'large.bin');
+
+    expect(importSummary).toMatchObject({
+      filesImported: 1,
+      directoriesImported: 0,
+      bytesImported: largeContent.byteLength,
+      integrityChecksPassed: 1,
+    });
+    expect(importedEntry?.kind).toBe('file');
+
+    const preview = await runtime.volumeService.previewFile(volume.id, '/large.bin');
+    expect(preview.kind).toBe('binary');
+
+    const entryPath = path.join(hostRoot, 'exports');
+    await fs.mkdir(entryPath, { recursive: true });
+
+    const exportSummary = await runtime.volumeService.exportEntryToHost(volume.id, {
+      sourcePath: '/large.bin',
+      destinationHostDirectory: entryPath,
+    });
+    const exportedPath = path.join(entryPath, 'large.bin');
+    const exportedContent = await fs.readFile(exportedPath);
+    const expectedContentRef = createHash('sha256').update(largeContent).digest('hex');
+
+    expect(exportSummary).toMatchObject({
+      filesExported: 1,
+      directoriesExported: 0,
+      bytesExported: largeContent.byteLength,
+      integrityChecksPassed: 1,
+    });
+    await expect(
+      getPersistedBlobChunkCount(runtime.config.dataDir, volume.id, expectedContentRef),
+    ).resolves.toBeGreaterThan(1);
+    expect(createHash('sha256').update(exportedContent).digest('hex')).toBe(expectedContentRef);
+  });
+
+  it('prevents moving a directory into one of its descendants', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Move Guard' });
+
+    await runtime.volumeService.createDirectory(volume.id, '/', 'a');
+    await runtime.volumeService.createDirectory(volume.id, '/a', 'b');
+
+    await expect(
+      runtime.volumeService.moveEntry(volume.id, {
+        sourcePath: '/a',
+        destinationDirectoryPath: '/a/b',
+      }),
+    ).rejects.toMatchObject({
+      code: 'INVALID_OPERATION',
+    });
+  });
+
+  it('returns paged explorer snapshots for large directories', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Paged Explorer' });
+
+    for (let index = 0; index < 24; index += 1) {
+      await runtime.volumeService.createDirectory(
+        volume.id,
+        '/',
+        `dir-${String(index).padStart(2, '0')}`,
+      );
+    }
+
+    const snapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/', {
+      offset: 12,
+      limit: 5,
+    });
+
+    expect(snapshot.totalEntries).toBe(24);
+    expect(snapshot.windowOffset).toBe(12);
+    expect(snapshot.windowSize).toBe(5);
+    expect(snapshot.entries.map((entry) => entry.name)).toEqual([
+      'dir-12',
+      'dir-13',
+      'dir-14',
+      'dir-15',
+      'dir-16',
+    ]);
+  });
+
+  it('reads fresh explorer snapshots across runtimes sharing the same data directory', async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-shared-'));
+    sandboxes.push(sandboxRoot);
+
+    const sharedDataDir = path.join(sandboxRoot, 'data');
+    const runtimeA = await trackRuntime(
+      createRuntime({
+        dataDir: sharedDataDir,
+        logDir: path.join(sandboxRoot, 'logs-a'),
+        logLevel: 'silent',
+        logToStdout: false,
+      }),
+    );
+    const runtimeB = await trackRuntime(
+      createRuntime({
+        dataDir: sharedDataDir,
+        logDir: path.join(sandboxRoot, 'logs-b'),
+        logLevel: 'silent',
+        logToStdout: false,
+      }),
+    );
+
+    const volume = await runtimeA.volumeService.createVolume({ name: 'Shared View' });
+
+    const before = await runtimeA.volumeService.getExplorerSnapshot(volume.id, '/');
+    await runtimeB.volumeService.createDirectory(volume.id, '/', 'external');
+    const after = await runtimeA.volumeService.getExplorerSnapshot(volume.id, '/');
+
+    expect(before.entries).toHaveLength(0);
+    expect(after.entries.map((entry) => entry.name)).toEqual(['external']);
+  });
+
+  it('rejects stale repository saves after a concurrent update bumps the volume revision', async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-concurrency-'));
+    sandboxes.push(sandboxRoot);
+
+    const runtime = await trackRuntime(
+      createRuntime({
+        dataDir: path.join(sandboxRoot, 'data'),
+        logDir: path.join(sandboxRoot, 'logs'),
+        logLevel: 'silent',
+        logToStdout: false,
+      }),
+    );
+    const volume = await runtime.volumeService.createVolume({ name: 'Concurrent Save' });
+    const repositoryA = new VolumeRepository(
+      runtime.config,
+      runtime.logger.child({ scope: 'repo-a' }),
+    );
+    const repositoryB = new VolumeRepository(
+      runtime.config,
+      runtime.logger.child({ scope: 'repo-b' }),
+    );
+
+    await Promise.all([repositoryA.initialize(), repositoryB.initialize()]);
+
+    const recordA = await repositoryA.loadVolume(volume.id);
+    const recordB = await repositoryB.loadVolume(volume.id);
+
+    recordA.manifest.description = 'saved by repository A';
+    await repositoryA.saveVolume(recordA);
+
+    recordB.manifest.description = 'stale write from repository B';
+
+    await expect(repositoryB.saveVolume(recordB)).rejects.toMatchObject({
+      code: 'CONCURRENT_MODIFICATION',
+    });
+
+    const refreshed = await repositoryA.loadVolume(volume.id);
+    expect(refreshed.manifest.description).toBe('saved by repository A');
+    expect(refreshed.manifest.revision).toBe(2);
+  });
+
+  it('creates consistent SQLite backups and restores them after volume deletion', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Recovery Drill' });
+    const backupRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-backup-'));
+    sandboxes.push(backupRoot);
+    const backupPath = path.join(backupRoot, 'recovery-drill.sqlite');
+
+    await runtime.volumeService.createDirectory(volume.id, '/', 'docs');
+    await runtime.volumeService.writeTextFile(volume.id, '/docs/plan.txt', 'snapshot state');
+
+    const backupResult = await runtime.volumeService.backupVolume(volume.id, backupPath);
+    const backupManifest = JSON.parse(
+      await fs.readFile(backupResult.manifestPath, 'utf8'),
+    ) as VolumeBackupManifest;
+
+    await runtime.volumeService.writeTextFile(volume.id, '/docs/plan.txt', 'live change');
+    await runtime.volumeService.writeTextFile(volume.id, '/later.txt', 'created after backup');
+    await runtime.volumeService.deleteVolume(volume.id);
+
+    const restoreResult = await runtime.volumeService.restoreVolumeBackup(backupPath);
+    const rootSnapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+    const docsSnapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/docs');
+    const preview = await runtime.volumeService.previewFile(volume.id, '/docs/plan.txt');
+
+    expect(backupResult).toMatchObject({
+      volumeId: volume.id,
+      volumeName: 'Recovery Drill',
+      backupPath: path.resolve(backupPath),
+      manifestPath: `${path.resolve(backupPath)}.manifest.json`,
+      revision: 3,
+      schemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
+      createdWithVersion: APP_VERSION,
+    });
+    expect(backupResult.checksumSha256).toHaveLength(64);
+    expect(backupResult.bytesWritten).toBeGreaterThan(0);
+    expect(backupManifest).toMatchObject({
+      formatVersion: 1,
+      volumeId: volume.id,
+      volumeName: 'Recovery Drill',
+      revision: 3,
+      schemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
+      createdWithVersion: APP_VERSION,
+      bytesWritten: backupResult.bytesWritten,
+      checksumSha256: backupResult.checksumSha256,
+    });
+    expect(restoreResult).toMatchObject({
+      volumeId: volume.id,
+      volumeName: 'Recovery Drill',
+      backupPath: path.resolve(backupPath),
+      manifestPath: `${path.resolve(backupPath)}.manifest.json`,
+      revision: 3,
+      schemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
+      createdWithVersion: APP_VERSION,
+      checksumSha256: backupResult.checksumSha256,
+      validatedWithManifest: true,
+    });
+    expect(restoreResult.bytesRestored).toBeGreaterThan(0);
+    expect(rootSnapshot.entries.map((entry) => entry.name)).toEqual(['docs']);
+    expect(docsSnapshot.entries.map((entry) => entry.name)).toEqual(['plan.txt']);
+    expect(preview.content).toContain('snapshot state');
+    await expect(runtime.volumeService.previewFile(volume.id, '/later.txt')).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+  });
+
+  it('inspects backup artifacts without touching the live volume', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Inspection Drill' });
+    const backupRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-inspect-backup-'));
+    sandboxes.push(backupRoot);
+    const backupPath = path.join(backupRoot, 'inspection-drill.sqlite');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/report.txt', 'inspection payload');
+
+    const backupResult = await runtime.volumeService.backupVolume(volume.id, backupPath);
+    const inspection = await runtime.volumeService.inspectVolumeBackup(backupPath);
+    const preview = await runtime.volumeService.previewFile(volume.id, '/report.txt');
+
+    expect(inspection).toMatchObject({
+      volumeId: volume.id,
+      volumeName: 'Inspection Drill',
+      revision: backupResult.revision,
+      schemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
+      backupPath: path.resolve(backupPath),
+      manifestPath: backupResult.manifestPath,
+      formatVersion: 1,
+      createdWithVersion: APP_VERSION,
+      checksumSha256: backupResult.checksumSha256,
+      bytesWritten: backupResult.bytesWritten,
+      createdAt: backupResult.createdAt,
+      validatedWithManifest: true,
+    });
+    expect(preview.content).toContain('inspection payload');
+  });
+
+  it('restores legacy backups even when the backup manifest sidecar is missing', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Legacy Recovery' });
+    const backupRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-legacy-backup-'));
+    sandboxes.push(backupRoot);
+    const backupPath = path.join(backupRoot, 'legacy-recovery.sqlite');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/report.txt', 'legacy snapshot');
+
+    const backupResult = await runtime.volumeService.backupVolume(volume.id, backupPath);
+    await fs.rm(backupResult.manifestPath, { force: true });
+    await runtime.volumeService.deleteVolume(volume.id);
+
+    const restoreResult = await runtime.volumeService.restoreVolumeBackup(backupPath);
+    const preview = await runtime.volumeService.previewFile(volume.id, '/report.txt');
+
+    expect(restoreResult).toMatchObject({
+      volumeId: volume.id,
+      volumeName: 'Legacy Recovery',
+      manifestPath: null,
+      createdWithVersion: null,
+      validatedWithManifest: false,
+      schemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
+    });
+    expect(restoreResult.checksumSha256).toBe(backupResult.checksumSha256);
+    expect(preview.content).toContain('legacy snapshot');
+  });
+
+  it('inspects legacy backups without requiring a manifest sidecar', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Legacy Inspection' });
+    const backupRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-legacy-inspect-'));
+    sandboxes.push(backupRoot);
+    const backupPath = path.join(backupRoot, 'legacy-inspection.sqlite');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/report.txt', 'legacy inspection');
+
+    const backupResult = await runtime.volumeService.backupVolume(volume.id, backupPath);
+    await fs.rm(backupResult.manifestPath, { force: true });
+
+    const inspection = await runtime.volumeService.inspectVolumeBackup(backupPath);
+
+    expect(inspection).toMatchObject({
+      volumeId: volume.id,
+      volumeName: 'Legacy Inspection',
+      backupPath: path.resolve(backupPath),
+      manifestPath: null,
+      formatVersion: null,
+      createdWithVersion: null,
+      checksumSha256: backupResult.checksumSha256,
+      validatedWithManifest: false,
+      schemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
+    });
+    expect(inspection.createdAt).toBeNull();
+  });
+
+  it('rejects backups that target the live managed database path', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Backup Safety' });
+    const liveDatabasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/safe.txt', 'must survive');
+
+    await expect(runtime.volumeService.backupVolume(volume.id, liveDatabasePath)).rejects.toMatchObject({
+      code: 'INVALID_OPERATION',
+      details: {
+        volumeId: volume.id,
+        destinationPath: path.resolve(liveDatabasePath),
+      },
+    });
+
+    await expect(runtime.volumeService.previewFile(volume.id, '/safe.txt')).resolves.toMatchObject({
+      kind: 'text',
+      content: 'must survive',
+    });
+  });
+
+  it('compacts volume databases and reclaims free SQLite pages after churn', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Compaction Drill' });
+    const largePayload = 'x'.repeat(2 * 1024 * 1024);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/large.txt', largePayload);
+    await runtime.volumeService.deleteEntry(volume.id, '/large.txt');
+
+    const doctorBefore = await runtime.volumeService.runDoctor(volume.id);
+    const bytesBefore = await getPersistedDatabaseArtifactBytes(runtime.config.dataDir, volume.id);
+    const result = await runtime.volumeService.compactVolume(volume.id);
+    const doctorAfter = await runtime.volumeService.runDoctor(volume.id);
+    const bytesAfter = await getPersistedDatabaseArtifactBytes(runtime.config.dataDir, volume.id);
+    const rootSnapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+    const issueCodesBefore = doctorBefore.volumes[0]?.issues.map((issue) => issue.code) ?? [];
+    const issueCodesAfter = doctorAfter.volumes[0]?.issues.map((issue) => issue.code) ?? [];
+
+    expect(result).toMatchObject({
+      volumeId: volume.id,
+      volumeName: 'Compaction Drill',
+      revision: 3,
+      schemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
+      databasePath: getVolumeDatabasePath(runtime.config.dataDir, volume.id),
+    });
+    expect(result.bytesBefore).toBe(bytesBefore);
+    expect(result.bytesAfter).toBe(bytesAfter);
+    expect(result.bytesAfter).toBeLessThan(bytesBefore);
+    expect(result.reclaimedBytes).toBe(bytesBefore - bytesAfter);
+    expect(issueCodesBefore).toContain('COMPACTION_RECOMMENDED');
+    expect(doctorBefore.volumes[0]?.maintenance).toMatchObject({
+      compactionRecommended: true,
+    });
+    expect(issueCodesAfter).not.toContain('COMPACTION_RECOMMENDED');
+    expect(doctorAfter.volumes[0]?.maintenance).toMatchObject({
+      compactionRecommended: false,
+    });
+    expect(rootSnapshot.entries).toHaveLength(0);
+  });
+
+  it('compacts all recommended volumes in batch and leaves clean volumes untouched', async () => {
+    const runtime = await createIsolatedRuntime();
+    const churnedVolume = await runtime.volumeService.createVolume({ name: 'Churned' });
+    const cleanVolume = await runtime.volumeService.createVolume({ name: 'Clean' });
+    const largePayload = 'y'.repeat(2 * 1024 * 1024);
+
+    await runtime.volumeService.writeTextFile(churnedVolume.id, '/large.txt', largePayload);
+    await runtime.volumeService.deleteEntry(churnedVolume.id, '/large.txt');
+    await runtime.volumeService.writeTextFile(cleanVolume.id, '/steady.txt', 'steady');
+
+    const dryRun = await runtime.volumeService.compactRecommendedVolumes({ dryRun: true });
+    const dryRunItem = dryRun.volumes.find((item) => item.volumeId === churnedVolume.id);
+
+    expect(dryRun.checkedVolumes).toBe(2);
+    expect(dryRun.recommendedVolumes).toBe(1);
+    expect(dryRun.eligibleReclaimableBytes).toBeGreaterThan(0);
+    expect(dryRun.plannedReclaimableBytes).toBeGreaterThan(0);
+    expect(dryRun.skippedVolumes).toBe(1);
+    expect(dryRun.compactedVolumes).toBe(0);
+    expect(dryRun.failedVolumes).toBe(0);
+    expect(dryRunItem).toMatchObject({
+      volumeId: churnedVolume.id,
+      status: 'planned',
+    });
+
+    const batchResult = await runtime.volumeService.compactRecommendedVolumes();
+    const compactedItem = batchResult.volumes.find(
+      (item) => item.volumeId === churnedVolume.id,
+    );
+    const followUpDoctor = await runtime.volumeService.runDoctor();
+    const churnedDoctor = followUpDoctor.volumes.find(
+      (volumeReport) => volumeReport.volumeId === churnedVolume.id,
+    );
+    const cleanDoctor = followUpDoctor.volumes.find(
+      (volumeReport) => volumeReport.volumeId === cleanVolume.id,
+    );
+
+    expect(batchResult.checkedVolumes).toBe(2);
+    expect(batchResult.recommendedVolumes).toBe(1);
+    expect(batchResult.eligibleReclaimableBytes).toBeGreaterThan(0);
+    expect(batchResult.plannedReclaimableBytes).toBeGreaterThan(0);
+    expect(batchResult.compactedVolumes).toBe(1);
+    expect(batchResult.failedVolumes).toBe(0);
+    expect(batchResult.totalReclaimedBytes).toBeGreaterThan(0);
+    expect(compactedItem?.status).toBe('compacted');
+    expect(compactedItem?.compaction?.reclaimedBytes).toBeGreaterThan(0);
+    expect(
+      churnedDoctor?.issues.some((issue) => issue.code === 'COMPACTION_RECOMMENDED'),
+    ).toBe(false);
+    expect(churnedDoctor?.maintenance?.compactionRecommended).toBe(false);
+    expect(cleanDoctor?.maintenance?.compactionRecommended).toBe(false);
+    expect(cleanDoctor?.issues).toEqual([]);
+  });
+
+  it('limits recommended batch compaction to the most fragmented volumes first', async () => {
+    const runtime = await createIsolatedRuntime();
+    const largestVolume = await runtime.volumeService.createVolume({ name: 'Largest churn' });
+    const smallerVolume = await runtime.volumeService.createVolume({ name: 'Smaller churn' });
+    const cleanVolume = await runtime.volumeService.createVolume({ name: 'Stable' });
+
+    await runtime.volumeService.writeTextFile(
+      largestVolume.id,
+      '/large.txt',
+      'a'.repeat(2 * 1024 * 1024),
+    );
+    await runtime.volumeService.deleteEntry(largestVolume.id, '/large.txt');
+    await runtime.volumeService.writeTextFile(
+      smallerVolume.id,
+      '/small.txt',
+      'b'.repeat(Math.floor(1.25 * 1024 * 1024)),
+    );
+    await runtime.volumeService.deleteEntry(smallerVolume.id, '/small.txt');
+    await runtime.volumeService.writeTextFile(cleanVolume.id, '/stable.txt', 'steady');
+
+    const dryRun = await runtime.volumeService.compactRecommendedVolumes({
+      dryRun: true,
+      limit: 1,
+    });
+    const batchResult = await runtime.volumeService.compactRecommendedVolumes({
+      limit: 1,
+    });
+    const followUpDoctor = await runtime.volumeService.runDoctor();
+    const largestDoctor = followUpDoctor.volumes.find(
+      (volumeReport) => volumeReport.volumeId === largestVolume.id,
+    );
+    const smallerDoctor = followUpDoctor.volumes.find(
+      (volumeReport) => volumeReport.volumeId === smallerVolume.id,
+    );
+
+    expect(dryRun.recommendedVolumes).toBe(2);
+    expect(dryRun.plannedVolumes).toBe(1);
+    expect(dryRun.deferredVolumes).toBe(1);
+    expect(dryRun.plannedReclaimableBytes).toBeGreaterThan(0);
+    expect(dryRun.deferredReclaimableBytes).toBeGreaterThan(0);
+    expect(dryRun.volumes).toHaveLength(2);
+    expect(dryRun.volumes.find((item) => item.status === 'planned')?.volumeId).toBe(
+      largestVolume.id,
+    );
+    expect(dryRun.volumes.find((item) => item.status === 'deferred')?.volumeId).toBe(
+      smallerVolume.id,
+    );
+    expect(batchResult.recommendedVolumes).toBe(2);
+    expect(batchResult.plannedVolumes).toBe(1);
+    expect(batchResult.compactedVolumes).toBe(1);
+    expect(batchResult.deferredVolumes).toBe(1);
+    expect(batchResult.plannedReclaimableBytes).toBeGreaterThan(0);
+    expect(batchResult.deferredReclaimableBytes).toBeGreaterThan(0);
+    expect(batchResult.volumes).toHaveLength(2);
+    expect(batchResult.volumes.find((item) => item.status === 'compacted')?.volumeId).toBe(
+      largestVolume.id,
+    );
+    expect(batchResult.volumes.find((item) => item.status === 'deferred')?.volumeId).toBe(
+      smallerVolume.id,
+    );
+    expect(
+      largestDoctor?.issues.some((issue) => issue.code === 'COMPACTION_RECOMMENDED'),
+    ).toBe(false);
+    expect(
+      smallerDoctor?.issues.some((issue) => issue.code === 'COMPACTION_RECOMMENDED'),
+    ).toBe(true);
+  });
+
+  it('caps recommended batch compaction by reclaimable-byte budget', async () => {
+    const runtime = await createIsolatedRuntime();
+    const largestVolume = await runtime.volumeService.createVolume({ name: 'Largest churn' });
+    const smallerVolume = await runtime.volumeService.createVolume({ name: 'Smaller churn' });
+
+    await runtime.volumeService.writeTextFile(
+      largestVolume.id,
+      '/large.txt',
+      'a'.repeat(2 * 1024 * 1024),
+    );
+    await runtime.volumeService.deleteEntry(largestVolume.id, '/large.txt');
+    await runtime.volumeService.writeTextFile(
+      smallerVolume.id,
+      '/small.txt',
+      'b'.repeat(Math.floor(1.25 * 1024 * 1024)),
+    );
+    await runtime.volumeService.deleteEntry(smallerVolume.id, '/small.txt');
+
+    const doctorReport = await runtime.volumeService.runDoctor();
+    const largestMaintenance = doctorReport.volumes.find(
+      (volumeReport) => volumeReport.volumeId === largestVolume.id,
+    )?.maintenance;
+    const smallerMaintenance = doctorReport.volumes.find(
+      (volumeReport) => volumeReport.volumeId === smallerVolume.id,
+    )?.maintenance;
+
+    expect(largestMaintenance?.compactionRecommended).toBe(true);
+    expect(smallerMaintenance?.compactionRecommended).toBe(true);
+
+    const maxReclaimableBytes = largestMaintenance?.freeBytes ?? 0;
+    const dryRun = await runtime.volumeService.compactRecommendedVolumes({
+      dryRun: true,
+      maxReclaimableBytes,
+    });
+    const batchResult = await runtime.volumeService.compactRecommendedVolumes({
+      maxReclaimableBytes,
+    });
+    const followUpDoctor = await runtime.volumeService.runDoctor();
+    const largestDoctor = followUpDoctor.volumes.find(
+      (volumeReport) => volumeReport.volumeId === largestVolume.id,
+    );
+    const smallerDoctor = followUpDoctor.volumes.find(
+      (volumeReport) => volumeReport.volumeId === smallerVolume.id,
+    );
+
+    expect(dryRun.maximumReclaimableBytes).toBe(maxReclaimableBytes);
+    expect(dryRun.recommendedVolumes).toBe(2);
+    expect(dryRun.plannedVolumes).toBe(1);
+    expect(dryRun.deferredVolumes).toBe(1);
+    expect(dryRun.plannedReclaimableBytes).toBe(maxReclaimableBytes);
+    expect(dryRun.deferredReclaimableBytes).toBe(smallerMaintenance?.freeBytes);
+    expect(dryRun.volumes.find((item) => item.status === 'planned')?.volumeId).toBe(
+      largestVolume.id,
+    );
+    expect(dryRun.volumes.find((item) => item.status === 'deferred')?.volumeId).toBe(
+      smallerVolume.id,
+    );
+    expect(
+      dryRun.volumes.find((item) => item.status === 'deferred')?.reason,
+    ).toContain('--max-reclaimable-bytes');
+
+    expect(batchResult.maximumReclaimableBytes).toBe(maxReclaimableBytes);
+    expect(batchResult.plannedVolumes).toBe(1);
+    expect(batchResult.compactedVolumes).toBe(1);
+    expect(batchResult.deferredVolumes).toBe(1);
+    expect(batchResult.plannedReclaimableBytes).toBe(maxReclaimableBytes);
+    expect(batchResult.volumes.find((item) => item.status === 'compacted')?.volumeId).toBe(
+      largestVolume.id,
+    );
+    expect(batchResult.volumes.find((item) => item.status === 'deferred')?.volumeId).toBe(
+      smallerVolume.id,
+    );
+    expect(
+      largestDoctor?.issues.some((issue) => issue.code === 'COMPACTION_RECOMMENDED'),
+    ).toBe(false);
+    expect(
+      smallerDoctor?.issues.some((issue) => issue.code === 'COMPACTION_RECOMMENDED'),
+    ).toBe(true);
+  });
+
+  it('summarizes top compaction candidates in doctor maintenance posture', async () => {
+    const runtime = await createIsolatedRuntime();
+    const largestVolume = await runtime.volumeService.createVolume({ name: 'Largest churn' });
+    const smallerVolume = await runtime.volumeService.createVolume({ name: 'Smaller churn' });
+    const cleanVolume = await runtime.volumeService.createVolume({ name: 'Stable' });
+
+    await runtime.volumeService.writeTextFile(
+      largestVolume.id,
+      '/large.txt',
+      'a'.repeat(2 * 1024 * 1024),
+    );
+    await runtime.volumeService.deleteEntry(largestVolume.id, '/large.txt');
+    await runtime.volumeService.writeTextFile(
+      smallerVolume.id,
+      '/small.txt',
+      'b'.repeat(Math.floor(1.25 * 1024 * 1024)),
+    );
+    await runtime.volumeService.deleteEntry(smallerVolume.id, '/small.txt');
+    await runtime.volumeService.writeTextFile(cleanVolume.id, '/stable.txt', 'steady');
+
+    const doctorReport = await runtime.volumeService.runDoctor();
+
+    expect(doctorReport.maintenanceSummary.recommendedCompactions).toBe(2);
+    expect(doctorReport.maintenanceSummary.topCompactionCandidates).toHaveLength(2);
+    expect(doctorReport.maintenanceSummary.topCompactionCandidates[0]).toMatchObject({
+      volumeId: largestVolume.id,
+      volumeName: 'Largest churn',
+    });
+    expect(doctorReport.maintenanceSummary.topCompactionCandidates[1]).toMatchObject({
+      volumeId: smallerVolume.id,
+      volumeName: 'Smaller churn',
+    });
+    expect(
+      doctorReport.maintenanceSummary.topCompactionCandidates[0]?.freeBytes,
+    ).toBeGreaterThan(
+      doctorReport.maintenanceSummary.topCompactionCandidates[1]?.freeBytes ?? 0,
+    );
+  });
+
+  it('filters recommended batch compaction by requested free-byte and free-ratio thresholds', async () => {
+    const runtime = await createIsolatedRuntime();
+    const highestRatioVolume = await runtime.volumeService.createVolume({ name: 'High ratio' });
+    const lowerRatioVolume = await runtime.volumeService.createVolume({ name: 'Lower ratio' });
+
+    await runtime.volumeService.writeTextFile(
+      highestRatioVolume.id,
+      '/deleted.txt',
+      'a'.repeat(2 * 1024 * 1024),
+    );
+    await runtime.volumeService.deleteEntry(highestRatioVolume.id, '/deleted.txt');
+
+    await runtime.volumeService.writeTextFile(
+      lowerRatioVolume.id,
+      '/deleted.txt',
+      'b'.repeat(Math.floor(1.5 * 1024 * 1024)),
+    );
+    await runtime.volumeService.writeTextFile(
+      lowerRatioVolume.id,
+      '/retained.txt',
+      'c'.repeat(1024 * 1024),
+    );
+    await runtime.volumeService.deleteEntry(lowerRatioVolume.id, '/deleted.txt');
+
+    const doctorReport = await runtime.volumeService.runDoctor();
+    const highestMaintenance = doctorReport.volumes.find(
+      (volumeReport) => volumeReport.volumeId === highestRatioVolume.id,
+    )?.maintenance;
+    const lowerMaintenance = doctorReport.volumes.find(
+      (volumeReport) => volumeReport.volumeId === lowerRatioVolume.id,
+    )?.maintenance;
+
+    expect(highestMaintenance?.compactionRecommended).toBe(true);
+    expect(lowerMaintenance?.compactionRecommended).toBe(true);
+    expect((highestMaintenance?.freeBytes ?? 0)).toBeGreaterThan(lowerMaintenance?.freeBytes ?? 0);
+    expect((highestMaintenance?.freeRatio ?? 0)).toBeGreaterThan(lowerMaintenance?.freeRatio ?? 0);
+
+    const minFreeBytes = Math.floor(
+      ((highestMaintenance?.freeBytes ?? 0) + (lowerMaintenance?.freeBytes ?? 0)) / 2,
+    );
+    const minFreeRatio =
+      ((highestMaintenance?.freeRatio ?? 0) + (lowerMaintenance?.freeRatio ?? 0)) / 2;
+
+    const dryRun = await runtime.volumeService.compactRecommendedVolumes({
+      dryRun: true,
+      minFreeBytes,
+      minFreeRatio,
+    });
+
+    expect(dryRun.recommendedVolumes).toBe(2);
+    expect(dryRun.eligibleVolumes).toBe(1);
+    expect(dryRun.filteredVolumes).toBe(1);
+    expect(dryRun.plannedVolumes).toBe(1);
+    expect(dryRun.eligibleReclaimableBytes).toBeGreaterThan(0);
+    expect(dryRun.filteredReclaimableBytes).toBeGreaterThan(0);
+    expect(dryRun.plannedReclaimableBytes).toBeGreaterThan(0);
+    expect(dryRun.minimumFreeBytes).toBe(minFreeBytes);
+    expect(dryRun.minimumFreeRatio).toBe(minFreeRatio);
+    expect(dryRun.volumes).toHaveLength(2);
+    expect(dryRun.volumes.find((item) => item.status === 'planned')?.volumeId).toBe(
+      highestRatioVolume.id,
+    );
+    expect(dryRun.volumes.find((item) => item.status === 'filtered')?.volumeId).toBe(
+      lowerRatioVolume.id,
+    );
+  });
+
+  it('reports filtered and deferred recommended volumes explicitly in the batch plan', async () => {
+    const runtime = await createIsolatedRuntime();
+    const filteredVolume = await runtime.volumeService.createVolume({ name: 'Filtered' });
+    const plannedVolume = await runtime.volumeService.createVolume({ name: 'Planned' });
+    const deferredVolume = await runtime.volumeService.createVolume({ name: 'Deferred' });
+
+    await runtime.volumeService.writeTextFile(
+      filteredVolume.id,
+      '/deleted.txt',
+      'f'.repeat(Math.floor(1.5 * 1024 * 1024)),
+    );
+    await runtime.volumeService.writeTextFile(
+      filteredVolume.id,
+      '/retained.txt',
+      'r'.repeat(1024 * 1024),
+    );
+    await runtime.volumeService.deleteEntry(filteredVolume.id, '/deleted.txt');
+
+    await runtime.volumeService.writeTextFile(
+      plannedVolume.id,
+      '/deleted.txt',
+      'p'.repeat(2 * 1024 * 1024),
+    );
+    await runtime.volumeService.deleteEntry(plannedVolume.id, '/deleted.txt');
+
+    await runtime.volumeService.writeTextFile(
+      deferredVolume.id,
+      '/deleted.txt',
+      'd'.repeat(Math.floor(1.75 * 1024 * 1024)),
+    );
+    await runtime.volumeService.deleteEntry(deferredVolume.id, '/deleted.txt');
+
+    const doctorReport = await runtime.volumeService.runDoctor();
+    const filteredMaintenance = doctorReport.volumes.find(
+      (volumeReport) => volumeReport.volumeId === filteredVolume.id,
+    )?.maintenance;
+    const plannedMaintenance = doctorReport.volumes.find(
+      (volumeReport) => volumeReport.volumeId === plannedVolume.id,
+    )?.maintenance;
+    const deferredMaintenance = doctorReport.volumes.find(
+      (volumeReport) => volumeReport.volumeId === deferredVolume.id,
+    )?.maintenance;
+
+    expect(filteredMaintenance?.compactionRecommended).toBe(true);
+    expect(plannedMaintenance?.compactionRecommended).toBe(true);
+    expect(deferredMaintenance?.compactionRecommended).toBe(true);
+
+    const minFreeRatio = ((filteredMaintenance?.freeRatio ?? 0) + (plannedMaintenance?.freeRatio ?? 0)) / 2;
+    const dryRun = await runtime.volumeService.compactRecommendedVolumes({
+      dryRun: true,
+      limit: 1,
+      minFreeRatio,
+    });
+
+    const filteredItem = dryRun.volumes.find((item) => item.volumeId === filteredVolume.id);
+    const plannedItem = dryRun.volumes.find((item) => item.volumeId === plannedVolume.id);
+    const deferredItem = dryRun.volumes.find((item) => item.volumeId === deferredVolume.id);
+
+    expect(dryRun.recommendedVolumes).toBe(3);
+    expect(dryRun.eligibleVolumes).toBe(2);
+    expect(dryRun.filteredVolumes).toBe(1);
+    expect(dryRun.deferredVolumes).toBe(1);
+    expect(dryRun.filteredReclaimableBytes).toBeGreaterThan(0);
+    expect(dryRun.deferredReclaimableBytes).toBeGreaterThan(0);
+    expect(dryRun.plannedReclaimableBytes).toBeGreaterThan(0);
+    expect(filteredItem).toMatchObject({
+      status: 'filtered',
+    });
+    expect(filteredItem?.reason).toContain('--min-free-ratio');
+    expect(plannedItem).toMatchObject({
+      status: 'planned',
+    });
+    expect(deferredItem).toMatchObject({
+      status: 'deferred',
+    });
+    expect(deferredItem?.reason).toContain('--limit 1');
+  });
+
+  it('blocks unsafe recommended batch compaction by default unless includeUnsafe is enabled', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Unsafe churn' });
+    const repository = new VolumeRepository(
+      runtime.config,
+      runtime.logger.child({ scope: 'unsafe-compaction-repository' }),
+    );
+
+    await runtime.volumeService.writeTextFile(
+      volume.id,
+      '/deleted.txt',
+      'z'.repeat(2 * 1024 * 1024),
+    );
+    await runtime.volumeService.deleteEntry(volume.id, '/deleted.txt');
+    await runtime.volumeService.writeTextFile(volume.id, '/broken.txt', 'broken payload');
+
+    const record = await repository.loadVolume(volume.id);
+    const brokenEntry = Object.values(record.state.entries).find(
+      (entry) => entry.kind === 'file' && entry.name === 'broken.txt',
+    );
+
+    expect(brokenEntry?.kind).toBe('file');
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, volume.id), async (database) => {
+      await database.exec('PRAGMA foreign_keys = OFF');
+      await database.run(
+        'DELETE FROM blob_chunks WHERE content_ref = ?',
+        brokenEntry?.kind === 'file' ? brokenEntry.contentRef : '',
+      );
+      await database.run(
+        'DELETE FROM blobs WHERE content_ref = ?',
+        brokenEntry?.kind === 'file' ? brokenEntry.contentRef : '',
+      );
+      await database.exec('PRAGMA foreign_keys = ON');
+    });
+
+    const doctorBefore = await runtime.volumeService.runDoctor(volume.id);
+    const blockedDryRun = await runtime.volumeService.compactRecommendedVolumes({
+      dryRun: true,
+    });
+    const unsafeBatch = await runtime.volumeService.compactRecommendedVolumes({
+      includeUnsafe: true,
+    });
+    const doctorAfter = await runtime.volumeService.runDoctor(volume.id);
+    const issueCodesAfter = doctorAfter.volumes[0]?.issues.map((issue) => issue.code) ?? [];
+
+    expect(
+      doctorBefore.volumes[0]?.issues.some((issue) => issue.code === 'COMPACTION_RECOMMENDED'),
+    ).toBe(true);
+    expect(
+      doctorBefore.volumes[0]?.issues.some((issue) => issue.code === 'MISSING_BLOB'),
+    ).toBe(true);
+    expect(blockedDryRun.recommendedVolumes).toBe(1);
+    expect(blockedDryRun.eligibleVolumes).toBe(1);
+    expect(blockedDryRun.blockedVolumes).toBe(1);
+    expect(blockedDryRun.plannedVolumes).toBe(0);
+    expect(blockedDryRun.blockedReclaimableBytes).toBeGreaterThan(0);
+    expect(blockedDryRun.plannedReclaimableBytes).toBe(0);
+    expect(blockedDryRun.volumes[0]).toMatchObject({
+      volumeId: volume.id,
+      status: 'blocked',
+    });
+    expect(blockedDryRun.volumes[0]?.blockingIssueCodes).toEqual(
+      expect.arrayContaining(['MISSING_BLOB']),
+    );
+    expect(unsafeBatch.includeUnsafe).toBe(true);
+    expect(unsafeBatch.blockedVolumes).toBe(0);
+    expect(unsafeBatch.plannedVolumes).toBe(1);
+    expect(unsafeBatch.compactedVolumes).toBe(1);
+    expect(unsafeBatch.volumes[0]?.status).toBe('compacted');
+    expect(issueCodesAfter).toContain('MISSING_BLOB');
+    expect(issueCodesAfter).not.toContain('COMPACTION_RECOMMENDED');
+  });
+
+  it('plans and executes safe batch repairs while blocking mixed unsafe volumes', async () => {
+    const runtime = await createIsolatedRuntime();
+    const alphaVolume = await runtime.volumeService.createVolume({ name: 'Alpha safe' });
+    const betaVolume = await runtime.volumeService.createVolume({ name: 'Beta safe' });
+    const blockedVolume = await runtime.volumeService.createVolume({ name: 'Blocked mix' });
+    const cleanVolume = await runtime.volumeService.createVolume({ name: 'Clean' });
+
+    await runtime.volumeService.writeTextFile(alphaVolume.id, '/alpha.txt', 'alpha payload');
+    await runtime.volumeService.writeTextFile(
+      betaVolume.id,
+      '/beta.txt',
+      'b'.repeat(600_000),
+    );
+    await runtime.volumeService.writeTextFile(
+      blockedVolume.id,
+      '/blocked.txt',
+      'blocked stable payload',
+    );
+    await runtime.volumeService.writeTextFile(cleanVolume.id, '/steady.txt', 'steady');
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, alphaVolume.id), async (database) => {
+      const fileRow = await database.get<{ content_ref: string }>(
+        `SELECT content_ref
+           FROM entries
+          WHERE name = 'alpha.txt'
+          LIMIT 1`,
+      );
+
+      await database.run(
+        `UPDATE blobs
+            SET size = size + 7
+          WHERE content_ref = ?`,
+        fileRow?.content_ref ?? '',
+      );
+    });
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, betaVolume.id), async (database) => {
+      const fileRow = await database.get<{ content_ref: string; chunk_count: number }>(
+        `SELECT entries.content_ref AS content_ref,
+                blobs.chunk_count AS chunk_count
+           FROM entries
+           JOIN blobs
+             ON blobs.content_ref = entries.content_ref
+          WHERE entries.name = 'beta.txt'
+          LIMIT 1`,
+      );
+
+      expect(fileRow?.chunk_count).toBeGreaterThan(1);
+
+      await database.run(
+        `UPDATE blobs
+            SET chunk_count = 1
+          WHERE content_ref = ?`,
+        fileRow?.content_ref ?? '',
+      );
+    });
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, blockedVolume.id), async (database) => {
+      const fileRow = await database.get<{ content_ref: string }>(
+        `SELECT content_ref
+           FROM entries
+          WHERE name = 'blocked.txt'
+          LIMIT 1`,
+      );
+
+      await database.run(
+        `UPDATE blobs
+            SET size = size + 7
+          WHERE content_ref = ?`,
+        fileRow?.content_ref ?? '',
+      );
+      await database.run(
+        `UPDATE blob_chunks
+            SET content = ?
+          WHERE content_ref = ?
+            AND chunk_index = 0`,
+        Buffer.from('tamper data!'),
+        fileRow?.content_ref ?? '',
+      );
+    });
+
+    const doctorBefore = await runtime.volumeService.runDoctor(undefined, {
+      verifyBlobPayloads: true,
+    });
+    const dryRun = await runtime.volumeService.repairSafeVolumes({
+      dryRun: true,
+      limit: 1,
+      verifyBlobPayloads: true,
+    });
+    const alphaPlan = dryRun.volumes.find((item) => item.volumeId === alphaVolume.id);
+    const betaPlan = dryRun.volumes.find((item) => item.volumeId === betaVolume.id);
+    const blockedPlan = dryRun.volumes.find((item) => item.volumeId === blockedVolume.id);
+    const topRepairCandidate = doctorBefore.repairSummary.topRepairCandidates[0];
+
+    expect(doctorBefore.repairSummary.repairableVolumes).toBe(3);
+    expect(doctorBefore.repairSummary.readyBatchRepairVolumes).toBe(2);
+    expect(doctorBefore.repairSummary.blockedBatchRepairVolumes).toBe(1);
+    expect(doctorBefore.repairSummary.totalRepairableIssues).toBe(4);
+    expect(topRepairCandidate).toMatchObject({
+      volumeId: alphaVolume.id,
+      readyForBatchRepair: true,
+      repairableIssueCount: 1,
+    });
+    const blockedRepairCandidate = doctorBefore.repairSummary.topRepairCandidates.find(
+      (candidate) => candidate.volumeId === blockedVolume.id,
+    );
+
+    expect(blockedRepairCandidate?.readyForBatchRepair).toBe(false);
+    expect(blockedRepairCandidate?.blockingIssueCodes).toContain(
+      'BLOB_CONTENT_REF_MISMATCH',
+    );
+    expect(dryRun.integrityDepth).toBe('deep');
+    expect(dryRun.checkedVolumes).toBe(4);
+    expect(dryRun.repairableVolumes).toBe(3);
+    expect(dryRun.plannedVolumes).toBe(1);
+    expect(dryRun.blockedVolumes).toBe(1);
+    expect(dryRun.deferredVolumes).toBe(1);
+    expect(dryRun.skippedVolumes).toBe(1);
+    expect(alphaPlan?.status).toBe('planned');
+    expect(betaPlan?.status).toBe('deferred');
+    expect(betaPlan?.reason).toContain('--limit 1');
+    expect(blockedPlan?.status).toBe('blocked');
+    expect(blockedPlan?.blockingIssueCodes).toEqual(
+      expect.arrayContaining(['BLOB_CONTENT_REF_MISMATCH']),
+    );
+
+    const batchResult = await runtime.volumeService.repairSafeVolumes({
+      limit: 1,
+      verifyBlobPayloads: true,
+    });
+    const alphaRepair = batchResult.volumes.find((item) => item.volumeId === alphaVolume.id);
+    const betaRepair = batchResult.volumes.find((item) => item.volumeId === betaVolume.id);
+    const blockedRepair = batchResult.volumes.find(
+      (item) => item.volumeId === blockedVolume.id,
+    );
+    const followUpDoctor = await runtime.volumeService.runDoctor(undefined, {
+      verifyBlobPayloads: true,
+    });
+    const alphaIssues =
+      followUpDoctor.volumes.find((volumeReport) => volumeReport.volumeId === alphaVolume.id)
+        ?.issues ?? [];
+    const betaIssues =
+      followUpDoctor.volumes.find((volumeReport) => volumeReport.volumeId === betaVolume.id)
+        ?.issues ?? [];
+    const blockedIssues =
+      followUpDoctor.volumes.find((volumeReport) => volumeReport.volumeId === blockedVolume.id)
+        ?.issues ?? [];
+    const cleanIssues =
+      followUpDoctor.volumes.find((volumeReport) => volumeReport.volumeId === cleanVolume.id)
+        ?.issues ?? [];
+
+    expect(followUpDoctor.repairSummary.repairableVolumes).toBe(2);
+    expect(followUpDoctor.repairSummary.readyBatchRepairVolumes).toBe(1);
+    expect(followUpDoctor.repairSummary.blockedBatchRepairVolumes).toBe(1);
+    expect(batchResult.integrityDepth).toBe('deep');
+    expect(batchResult.repairableVolumes).toBe(3);
+    expect(batchResult.plannedVolumes).toBe(1);
+    expect(batchResult.blockedVolumes).toBe(1);
+    expect(batchResult.deferredVolumes).toBe(1);
+    expect(batchResult.repairedVolumes).toBe(1);
+    expect(batchResult.failedVolumes).toBe(0);
+    expect(batchResult.actionsApplied).toBeGreaterThan(0);
+    expect(alphaRepair?.status).toBe('repaired');
+    expect(
+      alphaRepair?.repair?.actions.some(
+        (action) => action.code === 'SYNC_BLOB_LAYOUT_METADATA',
+      ),
+    ).toBe(true);
+    expect(betaRepair?.status).toBe('deferred');
+    expect(blockedRepair?.status).toBe('blocked');
+    expect(
+      alphaIssues.some((issue) => issue.code === 'BLOB_SIZE_MISMATCH'),
+    ).toBe(false);
+    expect(
+      betaIssues.some((issue) => issue.code === 'BLOB_CHUNK_COUNT_MISMATCH'),
+    ).toBe(true);
+    expect(
+      blockedIssues.some((issue) => issue.code === 'BLOB_SIZE_MISMATCH'),
+    ).toBe(true);
+    expect(
+      blockedIssues.some((issue) => issue.code === 'BLOB_CONTENT_REF_MISMATCH'),
+    ).toBe(true);
+    expect(cleanIssues).toEqual([]);
+  });
+
+  it('rejects restore when the backup manifest checksum does not match the artifact', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Tamper Detection' });
+    const backupRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-tamper-backup-'));
+    sandboxes.push(backupRoot);
+    const backupPath = path.join(backupRoot, 'tamper-detection.sqlite');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/report.txt', 'tamper detection');
+
+    const backupResult = await runtime.volumeService.backupVolume(volume.id, backupPath);
+    const backupManifest = JSON.parse(
+      await fs.readFile(backupResult.manifestPath, 'utf8'),
+    ) as VolumeBackupManifest;
+    backupManifest.checksumSha256 = '0'.repeat(64);
+    await fs.writeFile(
+      backupResult.manifestPath,
+      JSON.stringify(backupManifest, null, 2),
+      'utf8',
+    );
+
+    await runtime.volumeService.deleteVolume(volume.id);
+
+    await expect(runtime.volumeService.restoreVolumeBackup(backupPath)).rejects.toMatchObject({
+      code: 'INVALID_OPERATION',
+      details: {
+        backupPath: path.resolve(backupPath),
+        manifestPath: backupResult.manifestPath,
+        mismatches: ['checksumSha256'],
+      },
+    });
+
+    await expect(runtime.volumeService.getExplorerSnapshot(volume.id, '/')).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+  });
+
+  it('rejects inspection and restore when the backup was created by a newer CLI major version', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Version Guard' });
+    const backupRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-version-guard-'));
+    sandboxes.push(backupRoot);
+    const backupPath = path.join(backupRoot, 'version-guard.sqlite');
+    const currentMajorVersion = Number.parseInt(APP_VERSION.split('.')[0] ?? '0', 10);
+    const newerMajorVersion = `${Number.isNaN(currentMajorVersion) ? 999 : currentMajorVersion + 1}.0.0`;
+
+    await runtime.volumeService.writeTextFile(volume.id, '/report.txt', 'version guard');
+
+    const backupResult = await runtime.volumeService.backupVolume(volume.id, backupPath);
+    const backupManifest = JSON.parse(
+      await fs.readFile(backupResult.manifestPath, 'utf8'),
+    ) as VolumeBackupManifest;
+    backupManifest.createdWithVersion = newerMajorVersion;
+    await fs.writeFile(
+      backupResult.manifestPath,
+      JSON.stringify(backupManifest, null, 2),
+      'utf8',
+    );
+
+    await expect(runtime.volumeService.inspectVolumeBackup(backupPath)).rejects.toMatchObject({
+      code: 'INVALID_OPERATION',
+      details: {
+        backupPath: path.resolve(backupPath),
+        manifestPath: backupResult.manifestPath,
+        backupCreatedWithVersion: newerMajorVersion,
+        currentRuntimeVersion: APP_VERSION,
+      },
+    });
+
+    await runtime.volumeService.deleteVolume(volume.id);
+
+    await expect(runtime.volumeService.restoreVolumeBackup(backupPath)).rejects.toMatchObject({
+      code: 'INVALID_OPERATION',
+      details: {
+        backupPath: path.resolve(backupPath),
+        manifestPath: backupResult.manifestPath,
+        backupCreatedWithVersion: newerMajorVersion,
+        currentRuntimeVersion: APP_VERSION,
+      },
+    });
+  });
+
+  it('rejects inspection and restore when the backup sqlite schema is newer than the runtime supports', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Schema Guard' });
+    const backupRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-schema-guard-'));
+    sandboxes.push(backupRoot);
+    const backupPath = path.join(backupRoot, 'schema-guard.sqlite');
+    const futureSchemaVersion = SUPPORTED_VOLUME_SCHEMA_VERSION + 1;
+
+    await runtime.volumeService.writeTextFile(volume.id, '/report.txt', 'schema guard');
+
+    const backupResult = await runtime.volumeService.backupVolume(volume.id, backupPath);
+    const rawDatabase = await open({
+      filename: backupPath,
+      driver: sqlite3.Database,
+    });
+
+    try {
+      await rawDatabase.run(
+        `UPDATE schema_metadata
+            SET value = ?
+          WHERE key = 'schema_version'`,
+        String(futureSchemaVersion),
+      );
+    } finally {
+      await rawDatabase.close();
+    }
+
+    await expect(runtime.volumeService.inspectVolumeBackup(backupPath)).rejects.toMatchObject({
+      code: 'INVALID_OPERATION',
+      details: {
+        currentSchemaVersion: futureSchemaVersion,
+        supportedSchemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
+      },
+    });
+
+    await runtime.volumeService.deleteVolume(volume.id);
+
+    await expect(runtime.volumeService.restoreVolumeBackup(backupPath)).rejects.toMatchObject({
+      code: 'INVALID_OPERATION',
+      details: {
+        currentSchemaVersion: futureSchemaVersion,
+        supportedSchemaVersion: SUPPORTED_VOLUME_SCHEMA_VERSION,
+      },
+    });
+
+    await expect(runtime.volumeService.getExplorerSnapshot(volume.id, '/')).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    await expect(fs.access(backupResult.backupPath)).resolves.toBeUndefined();
+  });
+
+  it('requires overwrite to restore over an existing volume and rolls live changes back to the backup state', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Rollback Drill' });
+    const backupRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-rollback-'));
+    sandboxes.push(backupRoot);
+    const backupPath = path.join(backupRoot, 'rollback-drill.sqlite');
+
+    await runtime.volumeService.writeTextFile(volume.id, '/baseline.txt', 'before restore');
+    await runtime.volumeService.backupVolume(volume.id, backupPath);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/baseline.txt', 'after restore point');
+    await runtime.volumeService.writeTextFile(volume.id, '/extra.txt', 'extra file');
+
+    await expect(runtime.volumeService.restoreVolumeBackup(backupPath)).rejects.toMatchObject({
+      code: 'ALREADY_EXISTS',
+    });
+
+    const restoreResult = await runtime.volumeService.restoreVolumeBackup(backupPath, {
+      overwrite: true,
+    });
+    const rootSnapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+    const preview = await runtime.volumeService.previewFile(volume.id, '/baseline.txt');
+
+    expect(restoreResult).toMatchObject({
+      volumeId: volume.id,
+      volumeName: 'Rollback Drill',
+      backupPath: path.resolve(backupPath),
+      revision: 2,
+    });
+    expect(rootSnapshot.entries.map((entry) => entry.name)).toEqual(['baseline.txt']);
+    expect(preview.content).toContain('before restore');
+    await expect(runtime.volumeService.previewFile(volume.id, '/extra.txt')).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+  });
+
+  it('rolls back to the live target volume when overwrite restore swap fails mid-flight', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Rollback Safety' });
+    const backupRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-restore-failure-'));
+    sandboxes.push(backupRoot);
+    const backupPath = path.join(backupRoot, 'rollback-safety.sqlite');
+    const targetDatabasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+    const realRename = fs.rename.bind(fs);
+    let targetRenameAttempts = 0;
+
+    await runtime.volumeService.writeTextFile(volume.id, '/baseline.txt', 'backup state');
+    await runtime.volumeService.backupVolume(volume.id, backupPath);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/baseline.txt', 'live state');
+    await runtime.volumeService.writeTextFile(volume.id, '/extra.txt', 'must survive');
+
+    const renameSpy = vi
+      .spyOn(fs, 'rename')
+      .mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+        const [, destinationPath] = args;
+        const destinationPathText =
+          typeof destinationPath === 'string'
+            ? destinationPath
+            : destinationPath.toString();
+        if (
+          path.resolve(destinationPathText) === path.resolve(targetDatabasePath) &&
+          targetRenameAttempts === 0
+        ) {
+          targetRenameAttempts += 1;
+          throw new Error('Simulated restore swap failure.');
+        }
+
+        return realRename(...args);
+      });
+
+    await expect(
+      runtime.volumeService.restoreVolumeBackup(backupPath, { overwrite: true }),
+    ).rejects.toThrow('Simulated restore swap failure.');
+
+    renameSpy.mockRestore();
+
+    const rootSnapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+    const preview = await runtime.volumeService.previewFile(volume.id, '/baseline.txt');
+
+    expect(rootSnapshot.entries.map((entry) => entry.name)).toEqual([
+      'baseline.txt',
+      'extra.txt',
+    ]);
+    expect(preview.content).toContain('live state');
+    await expect(runtime.volumeService.previewFile(volume.id, '/extra.txt')).resolves.toMatchObject({
+      kind: 'text',
+      content: 'must survive',
+    });
+  });
+
+  it('reports missing and orphaned blobs through storage doctor diagnostics', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Doctor' });
+    const repository = new VolumeRepository(
+      runtime.config,
+      runtime.logger.child({ scope: 'doctor-repository' }),
+    );
+    const blobStore = new BlobStore(
+      getVolumeDatabasePath(runtime.config.dataDir, volume.id),
+      runtime.logger.child({ scope: 'doctor-blob-store' }),
+    );
+
+    await repository.initialize();
+    await runtime.volumeService.writeTextFile(volume.id, '/tracked.txt', 'tracked content');
+
+    const record = await repository.loadVolume(volume.id);
+    const trackedEntry = Object.values(record.state.entries).find(
+      (entry) => entry.kind === 'file' && entry.name === 'tracked.txt',
+    );
+
+    expect(trackedEntry?.kind).toBe('file');
+
+    const orphanBlob = await blobStore.putBuffer(Buffer.from('orphan blob', 'utf8'));
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, volume.id), async (database) => {
+      await database.exec('PRAGMA foreign_keys = OFF');
+      await database.run(
+        'DELETE FROM blob_chunks WHERE content_ref = ?',
+        trackedEntry?.kind === 'file' ? trackedEntry.contentRef : '',
+      );
+      await database.run(
+        'DELETE FROM blobs WHERE content_ref = ?',
+        trackedEntry?.kind === 'file' ? trackedEntry.contentRef : '',
+      );
+      await database.exec('PRAGMA foreign_keys = ON');
+    });
+
+    const report = await runtime.volumeService.runDoctor(volume.id);
+    const issueCodes = report.volumes[0]?.issues.map((issue) => issue.code) ?? [];
+
+    expect(report.healthy).toBe(false);
+    expect(report.issueCount).toBeGreaterThanOrEqual(2);
+    expect(issueCodes).toContain('MISSING_BLOB');
+    expect(issueCodes).toContain('ORPHAN_BLOB');
+    expect(
+      report.volumes[0]?.issues.some(
+        (issue) => issue.code === 'ORPHAN_BLOB' && issue.contentRef === orphanBlob.contentRef,
+      ),
+    ).toBe(true);
+  });
+
+  it('reports pending mutation journals and clears them during repair', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({
+      name: 'Mutation Journal Doctor',
+    });
+    const currentRevision = await getPersistedVolumeRevision(
+      runtime.config.dataDir,
+      volume.id,
+    );
+
+    await seedPendingMutationJournal(
+      runtime.config.dataDir,
+      volume.id,
+      'entry.file.write',
+      currentRevision,
+    );
+
+    const doctorBefore = await runtime.volumeService.runDoctor(volume.id);
+    const journalIssue = doctorBefore.volumes[0]?.issues.find(
+      (issue) => issue.code === 'PENDING_MUTATION_JOURNAL',
+    );
+
+    expect(doctorBefore.healthy).toBe(false);
+    expect(journalIssue?.severity).toBe('warn');
+    expect(journalIssue?.message).toContain('entry.file.write');
+    expect(journalIssue?.message).toContain(`current revision ${currentRevision}`);
+    await expect(
+      hasPendingMutationJournal(runtime.config.dataDir, volume.id),
+    ).resolves.toBe(true);
+
+    const repairReport = await runtime.volumeService.runRepair(volume.id);
+    const repairedVolume = repairReport.volumes[0];
+
+    expect(
+      repairedVolume?.actions.some(
+        (action) => action.code === 'CLEAR_MUTATION_JOURNAL',
+      ),
+    ).toBe(true);
+    expect(repairedVolume?.issueCountAfter).toBe(0);
+    await expect(
+      hasPendingMutationJournal(runtime.config.dataDir, volume.id),
+    ).resolves.toBe(false);
+
+    const doctorAfter = await runtime.volumeService.runDoctor(volume.id);
+    expect(doctorAfter.healthy).toBe(true);
+    expect(
+      doctorAfter.volumes[0]?.issues.some(
+        (issue) => issue.code === 'PENDING_MUTATION_JOURNAL',
+      ),
+    ).toBe(false);
+  });
+
+  it('reports and repairs blob reference-count mismatches safely', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Blob Refcount Repair' });
+    const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/tracked.txt', 'tracked content');
+
+    const beforeReport = await runtime.volumeService.runDoctor(volume.id);
+    const trackedBlobRef = beforeReport.volumes[0]?.issues.find(
+      (issue) => issue.code === 'MISSING_BLOB',
+    )?.contentRef;
+
+    expect(beforeReport.healthy).toBe(true);
+    expect(trackedBlobRef).toBeUndefined();
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      const trackedEntry = await database.get<{ content_ref: string }>(
+        `SELECT content_ref
+           FROM entries
+          WHERE kind = 'file'
+            AND name = 'tracked.txt'
+          LIMIT 1`,
+      );
+
+      await database.run(
+        `UPDATE blobs
+            SET reference_count = 0
+          WHERE content_ref = ?`,
+        trackedEntry?.content_ref ?? '',
+      );
+    });
+
+    const mismatchReport = await runtime.volumeService.runDoctor(volume.id);
+    const mismatchIssue = mismatchReport.volumes[0]?.issues.find(
+      (issue) => issue.code === 'BLOB_REFERENCE_COUNT_MISMATCH',
+    );
+
+    expect(mismatchReport.healthy).toBe(false);
+    expect(mismatchIssue?.message).toContain('reference_count=0');
+
+    const repairReport = await runtime.volumeService.runRepair(volume.id);
+    const repairedVolume = repairReport.volumes[0];
+
+    expect(repairReport.healthy).toBe(true);
+    expect(
+      repairedVolume?.actions.some(
+        (action) => action.code === 'SYNC_BLOB_REFERENCE_COUNTS',
+      ),
+    ).toBe(true);
+    expect(repairedVolume?.issueCountAfter).toBe(0);
+
+    const finalReport = await runtime.volumeService.runDoctor(volume.id);
+    expect(finalReport.healthy).toBe(true);
+  });
+
+  it('reports sqlite foreign key violations alongside logical storage issues', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'SQLite FK Doctor' });
+    const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+    const timestamp = new Date().toISOString();
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      await database.exec('PRAGMA foreign_keys = OFF');
+
+      try {
+        await database.run(
+          `INSERT INTO entries (
+             id,
+             kind,
+             name,
+             parent_id,
+             created_at,
+             updated_at,
+             size,
+             content_ref,
+             imported_from_host_path
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+          'file_fk_violation',
+          'file',
+          'ghost.txt',
+          'missing_parent',
+          timestamp,
+          timestamp,
+          12,
+          'missing_blob_ref',
+        );
+      } finally {
+        await database.exec('PRAGMA foreign_keys = ON');
+      }
+    });
+
+    const report = await runtime.volumeService.runDoctor(volume.id);
+    const issueCodes = report.volumes[0]?.issues.map((issue) => issue.code) ?? [];
+
+    expect(report.healthy).toBe(false);
+    expect(issueCodes).toContain('SQLITE_FOREIGN_KEY_VIOLATION');
+    expect(issueCodes).toContain('MISSING_PARENT');
+    expect(issueCodes).toContain('MISSING_BLOB');
+  });
+
+  it('reports unreadable sqlite volume files instead of silently skipping them', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Healthy Volume' });
+    const unreadableVolumeId = 'vol_brokenfile';
+    const unreadableDatabasePath = getVolumeDatabasePath(runtime.config.dataDir, unreadableVolumeId);
+
+    await fs.mkdir(path.dirname(unreadableDatabasePath), { recursive: true });
+    await fs.writeFile(unreadableDatabasePath, 'not a sqlite database', 'utf8');
+
+    const report = await runtime.volumeService.runDoctor();
+    const brokenVolumeReport = report.volumes.find(
+      (volumeReport) => volumeReport.volumeId === unreadableVolumeId,
+    );
+    const healthyVolumeReport = report.volumes.find(
+      (volumeReport) => volumeReport.volumeId === volume.id,
+    );
+
+    expect(report.checkedVolumes).toBe(2);
+    expect(report.healthy).toBe(false);
+    expect(healthyVolumeReport?.healthy).toBe(true);
+    expect(brokenVolumeReport?.healthy).toBe(false);
+    expect(brokenVolumeReport?.issues).toHaveLength(1);
+    expect(brokenVolumeReport?.issues[0]?.code).toBe('DATABASE_OPEN_FAILED');
+    expect(brokenVolumeReport?.issues[0]?.severity).toBe('error');
+    expect(brokenVolumeReport?.issues[0]?.message).toContain(
+      `Volume ${unreadableVolumeId} could not be inspected`,
+    );
+  });
+
+  it('repairs orphan blobs and manifest counter mismatches safely', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Repair' });
+    const blobStore = new BlobStore(
+      getVolumeDatabasePath(runtime.config.dataDir, volume.id),
+      runtime.logger.child({ scope: 'repair-blob-store' }),
+    );
+
+    await runtime.volumeService.writeTextFile(volume.id, '/tracked.txt', 'tracked content');
+    const orphanBlob = await blobStore.putBuffer(Buffer.from('orphan blob', 'utf8'));
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, volume.id), async (database) => {
+      await database.run(
+        `UPDATE manifest
+            SET logical_used_bytes = 0,
+                entry_count = 999`,
+      );
+    });
+
+    const repairReport = await runtime.volumeService.runRepair(volume.id);
+    const repairedVolume = repairReport.volumes[0];
+
+    expect(repairReport.healthy).toBe(true);
+    expect(repairReport.actionsApplied).toBeGreaterThanOrEqual(2);
+    expect(repairedVolume?.actions.some((action) => action.code === 'DELETE_ORPHAN_BLOB')).toBe(
+      true,
+    );
+    expect(repairedVolume?.actions.some((action) => action.code === 'REBUILD_MANIFEST')).toBe(
+      true,
+    );
+    expect(repairedVolume?.issueCountBefore).toBeGreaterThanOrEqual(2);
+    expect(repairedVolume?.issueCountAfter).toBe(0);
+
+    const finalDoctorReport = await runtime.volumeService.runDoctor(volume.id);
+    expect(finalDoctorReport.healthy).toBe(true);
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, volume.id), async (database) => {
+      const orphanBlobRow = await database.get<{ content_ref: string }>(
+        'SELECT content_ref FROM blobs WHERE content_ref = ?',
+        orphanBlob.contentRef,
+      );
+      const manifestRow = await database.get<{
+        logical_used_bytes: number;
+        entry_count: number;
+      }>(
+        'SELECT logical_used_bytes, entry_count FROM manifest LIMIT 1',
+      );
+
+      expect(orphanBlobRow).toBeUndefined();
+      expect(manifestRow?.logical_used_bytes).toBe(Buffer.byteLength('tracked content', 'utf8'));
+      expect(manifestRow?.entry_count).toBe(2);
+    });
+  });
+
+  it('enforces sibling uniqueness at the SQLite level', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Unique Siblings' });
+    const timestamp = new Date().toISOString();
+
+    await runtime.volumeService.createDirectory(volume.id, '/', 'docs');
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, volume.id), async (database) => {
+      await database.exec('BEGIN IMMEDIATE TRANSACTION');
+
+      try {
+        await expect(
+          database.run(
+            `INSERT INTO entries (
+               id,
+               kind,
+               name,
+               parent_id,
+               created_at,
+               updated_at,
+               size,
+               content_ref,
+               imported_from_host_path
+             ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL)`,
+            'dir_duplicate_docs',
+            'directory',
+            'docs',
+            'root',
+            timestamp,
+            timestamp,
+          ),
+        ).rejects.toMatchObject({
+          code: 'SQLITE_CONSTRAINT',
+        });
+      } finally {
+        await database.exec('ROLLBACK').catch(() => undefined);
+      }
+    });
+  });
+
+  it('enforces relational foreign keys for file blobs at the SQLite level', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Relational Constraints' });
+    const timestamp = new Date().toISOString();
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, volume.id), async (database) => {
+      const entryForeignKeys = await database.all<{ table: string; from: string }[]>(
+        'PRAGMA foreign_key_list(entries)',
+      );
+      const blobChunkForeignKeys = await database.all<{ table: string; from: string }[]>(
+        'PRAGMA foreign_key_list(blob_chunks)',
+      );
+
+      expect(
+        entryForeignKeys.some((row) => row.table === 'entries' && row.from === 'parent_id'),
+      ).toBe(true);
+      expect(
+        entryForeignKeys.some((row) => row.table === 'blobs' && row.from === 'content_ref'),
+      ).toBe(true);
+      expect(
+        blobChunkForeignKeys.some(
+          (row) => row.table === 'blobs' && row.from === 'content_ref',
+        ),
+      ).toBe(true);
+
+      await database.exec('BEGIN IMMEDIATE TRANSACTION');
+
+      try {
+        await database.run(
+          `INSERT INTO entries (
+             id,
+             kind,
+             name,
+             parent_id,
+             created_at,
+             updated_at,
+             size,
+             content_ref,
+             imported_from_host_path
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+          'file_missing_blob',
+          'file',
+          'ghost.txt',
+          'root',
+          timestamp,
+          timestamp,
+          5,
+          'missing_blob_ref',
+        );
+
+        await expect(database.exec('COMMIT')).rejects.toMatchObject({
+          code: 'SQLITE_CONSTRAINT',
+        });
+      } finally {
+        await database.exec('ROLLBACK').catch(() => undefined);
+      }
+    });
+  });
+
+  it('tracks blob reference counts at the SQLite level', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Blob Reference Counts' });
+
+    await runtime.volumeService.writeTextFile(volume.id, '/a.txt', 'shared payload');
+    await runtime.volumeService.writeTextFile(volume.id, '/b.txt', 'shared payload');
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, volume.id), async (database) => {
+      const blobColumns = await database.all<{ name: string }[]>(
+        'PRAGMA table_info(blobs)',
+      );
+      const blobRow = await database.get<{ reference_count: number }>(
+        `SELECT reference_count
+           FROM blobs
+          LIMIT 1`,
+      );
+
+      expect(blobColumns.some((column) => column.name === 'reference_count')).toBe(true);
+      expect(blobRow?.reference_count).toBe(2);
+    });
+  });
+
+  it('maintains blob reference counts through direct SQLite entry mutations', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Blob Trigger Counts' });
+
+    await runtime.volumeService.writeTextFile(volume.id, '/a.txt', 'alpha payload');
+    await runtime.volumeService.writeTextFile(volume.id, '/b.txt', 'bravo payload');
+
+    await withVolumeDatabase(getVolumeDatabasePath(runtime.config.dataDir, volume.id), async (database) => {
+      const triggerRows = await database.all<{ name: string }[]>(
+        `SELECT name
+           FROM sqlite_master
+          WHERE type = 'trigger'
+            AND name LIKE 'trg_entries_file_%_blob_refcount'
+          ORDER BY name`,
+      );
+      const rootEntry = await database.get<{ id: string }>(
+        `SELECT id
+           FROM entries
+          WHERE parent_id IS NULL
+          LIMIT 1`,
+      );
+      const entryRows = await database.all<
+        { name: string; content_ref: string; size: number; created_at: string; updated_at: string }[]
+      >(
+        `SELECT name, content_ref, size, created_at, updated_at
+           FROM entries
+          WHERE name IN ('a.txt', 'b.txt')
+          ORDER BY name`,
+      );
+      const aEntry = entryRows[0];
+      const bEntry = entryRows[1];
+
+      expect(triggerRows.map((row) => row.name)).toEqual([
+        'trg_entries_file_delete_blob_refcount',
+        'trg_entries_file_insert_blob_refcount',
+        'trg_entries_file_update_blob_refcount',
+      ]);
+      expect(rootEntry?.id).toBeTruthy();
+      expect(aEntry?.content_ref).toBeTruthy();
+      expect(bEntry?.content_ref).toBeTruthy();
+      expect(aEntry?.content_ref).not.toBe(bEntry?.content_ref);
+
+      await database.run(
+        `INSERT INTO entries (
+           id,
+           kind,
+           name,
+           parent_id,
+           created_at,
+           updated_at,
+           size,
+           content_ref,
+           imported_from_host_path
+         ) VALUES (?, 'file', 'c.txt', ?, ?, ?, ?, ?, NULL)`,
+        'manual-c-entry',
+        rootEntry?.id ?? '',
+        aEntry?.created_at ?? '',
+        aEntry?.updated_at ?? '',
+        aEntry?.size ?? 0,
+        aEntry?.content_ref ?? '',
+      );
+
+      let blobCounts = await database.all<{ content_ref: string; reference_count: number }[]>(
+        `SELECT content_ref, reference_count
+           FROM blobs
+          WHERE content_ref IN (?, ?)
+          ORDER BY content_ref`,
+        aEntry?.content_ref ?? '',
+        bEntry?.content_ref ?? '',
+      );
+
+      expect(
+        Object.fromEntries(blobCounts.map((row) => [row.content_ref, row.reference_count])),
+      ).toEqual({
+        [aEntry?.content_ref ?? '']: 2,
+        [bEntry?.content_ref ?? '']: 1,
+      });
+
+      await database.run(
+        `UPDATE entries
+            SET content_ref = ?,
+                size = ?
+          WHERE id = 'manual-c-entry'`,
+        bEntry?.content_ref ?? '',
+        bEntry?.size ?? 0,
+      );
+
+      blobCounts = await database.all<{ content_ref: string; reference_count: number }[]>(
+        `SELECT content_ref, reference_count
+           FROM blobs
+          WHERE content_ref IN (?, ?)
+          ORDER BY content_ref`,
+        aEntry?.content_ref ?? '',
+        bEntry?.content_ref ?? '',
+      );
+
+      expect(
+        Object.fromEntries(blobCounts.map((row) => [row.content_ref, row.reference_count])),
+      ).toEqual({
+        [aEntry?.content_ref ?? '']: 1,
+        [bEntry?.content_ref ?? '']: 2,
+      });
+
+      await database.run(`DELETE FROM entries WHERE id = 'manual-c-entry'`);
+
+      blobCounts = await database.all<{ content_ref: string; reference_count: number }[]>(
+        `SELECT content_ref, reference_count
+           FROM blobs
+          WHERE content_ref IN (?, ?)
+          ORDER BY content_ref`,
+        aEntry?.content_ref ?? '',
+        bEntry?.content_ref ?? '',
+      );
+
+      expect(
+        Object.fromEntries(blobCounts.map((row) => [row.content_ref, row.reference_count])),
+      ).toEqual({
+        [aEntry?.content_ref ?? '']: 1,
+        [bEntry?.content_ref ?? '']: 1,
+      });
+    });
+  });
+
+  it('maintains blob reference counts through normal incremental service mutations', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({
+      name: 'Incremental Refcount Mutations',
+    });
+    const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/a.txt', 'shared payload');
+    await runtime.volumeService.writeTextFile(volume.id, '/b.txt', 'shared payload');
+
+    let initialRefs: { aRef: string; bRef: string } | null = null;
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      const entryRows = await database.all<{ name: string; content_ref: string }[]>(
+        `SELECT name, content_ref
+           FROM entries
+          WHERE name IN ('a.txt', 'b.txt')
+          ORDER BY name`,
+      );
+      const blobCounts = await database.all<{ content_ref: string; reference_count: number }[]>(
+        `SELECT content_ref, reference_count
+           FROM blobs
+          ORDER BY content_ref`,
+      );
+      const aRef = entryRows.find((row) => row.name === 'a.txt')?.content_ref ?? '';
+      const bRef = entryRows.find((row) => row.name === 'b.txt')?.content_ref ?? '';
+      initialRefs = { aRef, bRef };
+
+      expect(aRef).toBe(bRef);
+      expect(
+        Object.fromEntries(blobCounts.map((row) => [row.content_ref, row.reference_count])),
+      ).toEqual({
+        [aRef]: 2,
+      });
+    });
+
+    await runtime.volumeService.writeTextFile(volume.id, '/a.txt', 'alpha only');
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      const entryRows = await database.all<{ name: string; content_ref: string }[]>(
+        `SELECT name, content_ref
+           FROM entries
+          WHERE name IN ('a.txt', 'b.txt')
+          ORDER BY name`,
+      );
+      const blobCounts = await database.all<{ content_ref: string; reference_count: number }[]>(
+        `SELECT content_ref, reference_count
+           FROM blobs
+          ORDER BY content_ref`,
+      );
+      const aRef = entryRows.find((row) => row.name === 'a.txt')?.content_ref ?? '';
+      const bRef = entryRows.find((row) => row.name === 'b.txt')?.content_ref ?? '';
+
+      expect(aRef).not.toBe(bRef);
+      expect(
+        Object.fromEntries(blobCounts.map((row) => [row.content_ref, row.reference_count])),
+      ).toEqual({
+        [aRef]: 1,
+        [bRef]: 1,
+      });
+      expect(bRef).toBe(initialRefs?.bRef ?? '');
+    });
+
+    const doctorReport = await runtime.volumeService.runDoctor(volume.id);
+    expect(doctorReport.healthy).toBe(true);
+  });
+
+  it('repairs safe blob chunk-count drift from the SQLite payload layout', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Blob Chunk Drift' });
+    const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+    const largePayload = 'x'.repeat(600_000);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/large.txt', largePayload);
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      const fileRow = await database.get<{ content_ref: string; chunk_count: number }>(
+        `SELECT entries.content_ref AS content_ref,
+                blobs.chunk_count AS chunk_count
+           FROM entries
+           JOIN blobs
+             ON blobs.content_ref = entries.content_ref
+          WHERE entries.name = 'large.txt'
+          LIMIT 1`,
+      );
+
+      expect(fileRow?.chunk_count).toBeGreaterThan(1);
+
+      await database.run(
+        `UPDATE blobs
+            SET chunk_count = 1
+          WHERE content_ref = ?`,
+        fileRow?.content_ref ?? '',
+      );
+    });
+
+    const doctorReport = await runtime.volumeService.runDoctor(volume.id);
+    const driftIssue = doctorReport.volumes[0]?.issues.find(
+      (issue) => issue.code === 'BLOB_CHUNK_COUNT_MISMATCH',
+    );
+
+    expect(doctorReport.healthy).toBe(false);
+    expect(driftIssue?.message).toContain('chunk_count=1');
+    expect(driftIssue?.message).toContain('blob chunk row(s) were found');
+
+    const repairReport = await runtime.volumeService.runRepair(volume.id);
+    const repairedVolume = repairReport.volumes[0];
+
+    expect(repairReport.healthy).toBe(true);
+    expect(repairedVolume?.repaired).toBe(true);
+    expect(
+      repairedVolume?.actions.some(
+        (action) => action.code === 'SYNC_BLOB_LAYOUT_METADATA',
+      ),
+    ).toBe(true);
+    expect(repairedVolume?.issueCountAfter).toBe(0);
+    expect(
+      repairedVolume?.remainingIssues.some(
+        (issue) => issue.code === 'BLOB_CHUNK_COUNT_MISMATCH',
+      ),
+    ).toBe(false);
+  });
+
+  it('repairs safe blob size drift from the SQLite payload layout', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Blob Size Drift' });
+    const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/size.txt', 'sized payload');
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      const fileRow = await database.get<{ content_ref: string; size: number }>(
+        `SELECT entries.content_ref AS content_ref,
+                blobs.size AS size
+           FROM entries
+           JOIN blobs
+             ON blobs.content_ref = entries.content_ref
+          WHERE entries.name = 'size.txt'
+          LIMIT 1`,
+      );
+
+      expect(fileRow?.size).toBeGreaterThan(0);
+
+      await database.run(
+        `UPDATE blobs
+            SET size = size + 7
+          WHERE content_ref = ?`,
+        fileRow?.content_ref ?? '',
+      );
+    });
+
+    const doctorReport = await runtime.volumeService.runDoctor(volume.id);
+    const driftIssue = doctorReport.volumes[0]?.issues.find(
+      (issue) => issue.code === 'BLOB_SIZE_MISMATCH',
+    );
+
+    expect(doctorReport.healthy).toBe(false);
+    expect(driftIssue?.message).toContain('stores size=');
+    expect(driftIssue?.message).toContain('currently readable from its SQLite payload layout');
+
+    const repairReport = await runtime.volumeService.runRepair(volume.id);
+    const repairedVolume = repairReport.volumes[0];
+
+    expect(repairReport.healthy).toBe(true);
+    expect(repairedVolume?.repaired).toBe(true);
+    expect(
+      repairedVolume?.actions.some(
+        (action) => action.code === 'SYNC_BLOB_LAYOUT_METADATA',
+      ),
+    ).toBe(true);
+    expect(repairedVolume?.issueCountAfter).toBe(0);
+    expect(
+      repairedVolume?.remainingIssues.some(
+        (issue) => issue.code === 'BLOB_SIZE_MISMATCH',
+      ),
+    ).toBe(false);
+  });
+
+  it('reports and repairs file entry size drift against the referenced blob payload', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Entry Size Drift' });
+    const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/size.txt', 'sized payload');
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      await database.run(
+        `UPDATE entries
+            SET size = size + 11
+          WHERE name = 'size.txt'
+            AND kind = 'file'`,
+      );
+    });
+
+    const doctorReport = await runtime.volumeService.runDoctor(volume.id);
+    const driftIssue = doctorReport.volumes[0]?.issues.find(
+      (issue) => issue.code === 'ENTRY_SIZE_MISMATCH',
+    );
+
+    expect(doctorReport.healthy).toBe(false);
+    expect(driftIssue?.message).toContain('stores size=');
+    expect(driftIssue?.message).toContain('currently exposes');
+
+    const repairReport = await runtime.volumeService.runRepair(volume.id);
+    const repairedVolume = repairReport.volumes[0];
+
+    expect(repairReport.healthy).toBe(true);
+    expect(repairedVolume?.repaired).toBe(true);
+    expect(
+      repairedVolume?.actions.some((action) => action.code === 'SYNC_ENTRY_FILE_SIZE'),
+    ).toBe(true);
+    expect(repairedVolume?.issueCountAfter).toBe(0);
+    expect(
+      repairedVolume?.remainingIssues.some(
+        (issue) => issue.code === 'ENTRY_SIZE_MISMATCH',
+      ),
+    ).toBe(false);
+
+    const snapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+    expect(snapshot.entries[0]?.name).toBe('size.txt');
+    expect(snapshot.entries[0]?.size).toBe(Buffer.byteLength('sized payload', 'utf8'));
+  });
+
+  it('repairs file entries that still reference temporary staged blobs', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({
+      name: 'Temporary Blob Reference',
+    });
+    const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/temp.txt', 'temporary payload');
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      const fileRow = await database.get<{ content_ref: string }>(
+        `SELECT content_ref
+           FROM entries
+          WHERE name = 'temp.txt'
+          LIMIT 1`,
+      );
+      const originalContentRef = fileRow?.content_ref ?? '';
+      const temporaryContentRef = 'tmp_manual_repair_target';
+
+      await database.exec('PRAGMA foreign_keys = OFF');
+
+      try {
+        await database.run(
+          `UPDATE blobs
+              SET content_ref = ?
+            WHERE content_ref = ?`,
+          temporaryContentRef,
+          originalContentRef,
+        );
+        await database.run(
+          `UPDATE blob_chunks
+              SET content_ref = ?
+            WHERE content_ref = ?`,
+          temporaryContentRef,
+          originalContentRef,
+        );
+        await database.run(
+          `UPDATE entries
+              SET content_ref = ?
+            WHERE id = (
+              SELECT id
+                FROM entries
+               WHERE name = 'temp.txt'
+               LIMIT 1
+            )`,
+          temporaryContentRef,
+        );
+      } finally {
+        await database.exec('PRAGMA foreign_keys = ON');
+      }
+    });
+
+    const doctorReport = await runtime.volumeService.runDoctor(volume.id);
+    const temporaryIssue = doctorReport.volumes[0]?.issues.find(
+      (issue) => issue.code === 'TEMPORARY_BLOB_REFERENCE',
+    );
+
+    expect(doctorReport.healthy).toBe(false);
+    expect(temporaryIssue?.message).toContain('temporary staged blob');
+
+    const repairReport = await runtime.volumeService.runRepair(volume.id);
+    const repairedVolume = repairReport.volumes[0];
+
+    expect(repairReport.healthy).toBe(true);
+    expect(
+      repairedVolume?.actions.some(
+        (action) => action.code === 'PROMOTE_TEMPORARY_BLOB_REFERENCE',
+      ),
+    ).toBe(true);
+    expect(repairedVolume?.issueCountAfter).toBe(0);
+
+    const preview = await runtime.volumeService.previewFile(volume.id, '/temp.txt');
+    expect(preview.content).toContain('temporary payload');
+
+    const doctorAfter = await runtime.volumeService.runDoctor(volume.id);
+    expect(
+      doctorAfter.volumes[0]?.issues.some(
+        (issue) => issue.code === 'TEMPORARY_BLOB_REFERENCE',
+      ),
+    ).toBe(false);
+  });
+
+  it('repairs non-contiguous blob chunk indexes when payload order is still sane', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Blob Chunk Index Drift' });
+    const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+    const largePayload = 'y'.repeat(600_000);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/chunked.txt', largePayload);
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      const fileRow = await database.get<{ content_ref: string; chunk_count: number }>(
+        `SELECT entries.content_ref AS content_ref,
+                blobs.chunk_count AS chunk_count
+           FROM entries
+           JOIN blobs
+             ON blobs.content_ref = entries.content_ref
+          WHERE entries.name = 'chunked.txt'
+          LIMIT 1`,
+      );
+
+      expect(fileRow?.chunk_count).toBeGreaterThan(1);
+
+      await database.run(
+        `UPDATE blob_chunks
+            SET chunk_index = chunk_index + 100
+          WHERE content_ref = ?`,
+        fileRow?.content_ref ?? '',
+      );
+    });
+
+    const doctorReport = await runtime.volumeService.runDoctor(volume.id);
+    const driftIssue = doctorReport.volumes[0]?.issues.find(
+      (issue) => issue.code === 'BLOB_CHUNK_INDEX_GAP',
+    );
+
+    expect(doctorReport.healthy).toBe(false);
+    expect(driftIssue?.message).toContain('non-contiguous chunk_index values');
+
+    const repairReport = await runtime.volumeService.runRepair(volume.id);
+    const repairedVolume = repairReport.volumes[0];
+
+    expect(repairReport.healthy).toBe(true);
+    expect(repairedVolume?.repaired).toBe(true);
+    expect(
+      repairedVolume?.actions.some(
+        (action) => action.code === 'SYNC_BLOB_LAYOUT_METADATA',
+      ),
+    ).toBe(true);
+    expect(repairedVolume?.issueCountAfter).toBe(0);
+
+    const preview = await runtime.volumeService.previewFile(volume.id, '/chunked.txt');
+    expect(preview.content.startsWith('y')).toBe(true);
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      const chunkIndexes = await database.all<{ chunk_index: number }[]>(
+        `SELECT chunk_index
+           FROM blob_chunks
+          WHERE content_ref = (
+            SELECT content_ref
+              FROM entries
+             WHERE name = 'chunked.txt'
+             LIMIT 1
+          )
+       ORDER BY chunk_index`,
+      );
+
+      expect(chunkIndexes.map((row) => row.chunk_index)).toEqual(
+        Array.from({ length: chunkIndexes.length }, (_, index) => index),
+      );
+    });
+  });
+
+  it('verifies blob payload hashes only when deep doctor verification is requested', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Blob Payload Verification' });
+    const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/payload.txt', 'stable bytes');
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      const fileRow = await database.get<{ content_ref: string }>(
+        `SELECT content_ref
+           FROM entries
+          WHERE name = 'payload.txt'
+          LIMIT 1`,
+      );
+
+      await database.run(
+        `UPDATE blob_chunks
+            SET content = ?
+          WHERE content_ref = ?
+            AND chunk_index = 0`,
+        Buffer.from('tamper data!'),
+        fileRow?.content_ref ?? '',
+      );
+    });
+
+    const metadataDoctor = await runtime.volumeService.runDoctor(volume.id);
+    expect(metadataDoctor.integrityDepth).toBe('metadata');
+    expect(
+      metadataDoctor.volumes[0]?.issues.some(
+        (issue) => issue.code === 'BLOB_CONTENT_REF_MISMATCH',
+      ),
+    ).toBe(false);
+
+    const deepDoctor = await runtime.volumeService.runDoctor(volume.id, {
+      verifyBlobPayloads: true,
+    });
+    const driftIssue = deepDoctor.volumes[0]?.issues.find(
+      (issue) => issue.code === 'BLOB_CONTENT_REF_MISMATCH',
+    );
+
+    expect(deepDoctor.integrityDepth).toBe('deep');
+    expect(deepDoctor.healthy).toBe(false);
+    expect(driftIssue?.message).toContain('hashes to');
+  });
+
+  it('verifies blob payload hashes during deep repair runs', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Blob Payload Repair Verification' });
+    const databasePath = getVolumeDatabasePath(runtime.config.dataDir, volume.id);
+
+    await runtime.volumeService.writeTextFile(volume.id, '/payload.txt', 'stable bytes');
+
+    await withVolumeDatabase(databasePath, async (database) => {
+      const fileRow = await database.get<{ content_ref: string }>(
+        `SELECT content_ref
+           FROM entries
+          WHERE name = 'payload.txt'
+          LIMIT 1`,
+      );
+
+      await database.run(
+        `UPDATE blob_chunks
+            SET content = ?
+          WHERE content_ref = ?
+            AND chunk_index = 0`,
+        Buffer.from('tamper data!'),
+        fileRow?.content_ref ?? '',
+      );
+    });
+
+    const metadataRepair = await runtime.volumeService.runRepair(volume.id);
+    expect(metadataRepair.integrityDepth).toBe('metadata');
+    expect(metadataRepair.healthy).toBe(true);
+    expect(metadataRepair.repairedVolumes).toBe(0);
+
+    const deepRepair = await runtime.volumeService.runRepair(volume.id, {
+      verifyBlobPayloads: true,
+    });
+    const remainingIssue = deepRepair.volumes[0]?.remainingIssues.find(
+      (issue) => issue.code === 'BLOB_CONTENT_REF_MISMATCH',
+    );
+
+    expect(deepRepair.integrityDepth).toBe('deep');
+    expect(deepRepair.healthy).toBe(false);
+    expect(deepRepair.repairedVolumes).toBe(0);
+    expect(remainingIssue?.message).toContain('hashes to');
+  });
+
+  it('deletes directory subtrees recursively', async () => {
+    const runtime = await createIsolatedRuntime();
+    const volume = await runtime.volumeService.createVolume({ name: 'Cleanup' });
+
+    await runtime.volumeService.createDirectory(volume.id, '/', 'docs');
+    await runtime.volumeService.writeTextFile(
+      volume.id,
+      '/docs/readme.txt',
+      'documentation',
+    );
+
+    const deletedCount = await runtime.volumeService.deleteEntry(volume.id, '/docs');
+    const snapshot = await runtime.volumeService.getExplorerSnapshot(volume.id, '/');
+
+    expect(deletedCount).toBe(2);
+    expect(snapshot.entries).toHaveLength(0);
+  });
+});

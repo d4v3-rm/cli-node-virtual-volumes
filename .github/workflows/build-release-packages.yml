@@ -1,0 +1,248 @@
+name: build-release-packages
+
+on:
+  push:
+    branches:
+      - main
+      - "release/**"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      HUSKY: "0"
+      CI: "true"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify project
+        run: npm run verify
+
+      - name: Build npm package
+        run: npm run pack:local
+
+      - name: Prepare package artifact directory
+        shell: bash
+        run: |
+          mkdir -p dist/package
+          mv ./*.tgz dist/package/
+
+      - name: Generate package checksums
+        shell: bash
+        run: |
+          cd dist/package
+          sha256sum ./*.tgz > SHA256SUMS.txt
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: virtual-volumes-package
+          path: |
+            dist/package/*.tgz
+            dist/package/SHA256SUMS.txt
+          if-no-files-found: error
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: build
+    env:
+      HUSKY: "0"
+      CI: "true"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Download package artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: virtual-volumes-package
+          path: dist
+
+      - name: Prepare source archive
+        run: |
+          mkdir -p dist
+          git archive --format=zip --output dist/source.zip HEAD
+        shell: bash
+
+      - name: Resolve version and release channel
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")
+          RELEASE_TAG="v${VERSION}"
+          RELEASE_NAME="CLI Node Virtual Volumes v${VERSION}"
+          PRERELEASE="false"
+
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "RELEASE_NAME=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
+          echo "PRERELEASE=$PRERELEASE" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve release range
+        id: release-range
+        shell: bash
+        run: |
+          git fetch --tags --prune
+          LAST_TAG=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)
+
+          if [ -z "$LAST_TAG" ]; then
+            BASE_SHA=$(git rev-list --max-parents=0 HEAD | tail -n 1)
+          else
+            BASE_SHA=$LAST_TAG
+          fi
+          echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Build release notes by category
+        id: notes
+        shell: bash
+        run: |
+          BASE_SHA="${{ steps.release-range.outputs.base_sha }}"
+          CHANGELOG=""
+          TOTAL_COMMITS=0
+          REPO_URL="https://github.com/${GITHUB_REPOSITORY}"
+
+          declare -A buckets
+          declare -A counts
+          while IFS='|' read -r sha subject; do
+            [ -z "$subject" ] && continue
+            type=$(printf '%s' "$subject" | awk -F': ' '{print $1}')
+            type=${type%%(*}
+            type=$(printf '%s' "$type" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+            case "$type" in
+              feat|feature)
+                key="features"
+                ;;
+              fix|bugfix|hotfix)
+                key="fixes"
+                ;;
+              perf|performance)
+                key="performance"
+                ;;
+              refactor|refactoring)
+                key="refactor"
+                ;;
+              docs|doc)
+                key="docs"
+                ;;
+              test|tests)
+                key="tests"
+                ;;
+              chore|ci|build|builds)
+                key="chore"
+                ;;
+              revert)
+                key="reverts"
+                ;;
+              *)
+                key="other"
+                ;;
+            esac
+
+            display_subject="$subject"
+            if [[ "$subject" == *": "* ]]; then
+              prefix="${subject%%:*}"
+              message="${subject#*: }"
+              scope=""
+              if [[ "$prefix" == *"("*")" ]]; then
+                scope="${prefix#*(}"
+                scope="${scope%)}"
+              fi
+              if [ -n "$scope" ]; then
+                display_subject="[$scope] $message"
+              else
+                display_subject="$message"
+              fi
+            fi
+
+            buckets["$key"]+="- ${display_subject} ([${sha:0:7}](${REPO_URL}/commit/$sha))"$'\n'
+            counts["$key"]=$(( ${counts["$key"]:-0} + 1 ))
+            TOTAL_COMMITS=$((TOTAL_COMMITS + 1))
+          done < <(git log --no-merges --pretty=format:"%H|%s" "$BASE_SHA"..HEAD)
+
+          add_section() {
+            local title="$1"
+            local key="$2"
+            local entries="${buckets[$key]}"
+            local count="${counts[$key]:-0}"
+            if [ "$count" -gt 0 ]; then
+              CHANGELOG+="### ${title} (${count})"$'\n'$'\n'
+              CHANGELOG+="${entries}"$'\n'
+            fi
+          }
+
+          add_section "Features" "features"
+          add_section "Fixes" "fixes"
+          add_section "Refactor" "refactor"
+          add_section "Performance" "performance"
+          add_section "Documentation" "docs"
+          add_section "Test" "tests"
+          add_section "CI / Maintenance" "chore"
+          add_section "Revert" "reverts"
+          add_section "Other" "other"
+
+          if [ "$TOTAL_COMMITS" -eq 0 ]; then
+            CHANGELOG="No relevant commits were detected for this release."$'\n'
+          fi
+
+          RELEASE_BODY=""
+          RELEASE_BODY+="## Changes"$'\n'$'\n'
+          if [ "$TOTAL_COMMITS" -gt 0 ]; then
+            RELEASE_BODY+="- Included commits: ${TOTAL_COMMITS}"$'\n'
+            RELEASE_BODY+="- Range: \`${BASE_SHA:0:7}..${GITHUB_SHA:0:7}\`"$'\n'$'\n'
+          fi
+          RELEASE_BODY+="${CHANGELOG}"$'\n'
+          RELEASE_BODY+="## Artifacts"$'\n'
+          RELEASE_BODY+="- Self-contained npm package (.tgz)"$'\n'
+          RELEASE_BODY+="- SHA256 checksums"$'\n'
+          RELEASE_BODY+="- Source zip"
+          printf 'RELEASE_BODY<<EOF\n%s\nEOF\n' "$RELEASE_BODY" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if tag already exists
+        id: tag-guard
+        shell: bash
+        run: |
+          if git rev-parse "${{ steps.version.outputs.RELEASE_TAG }}" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish GitHub release
+        if: steps.tag-guard.outputs.skip == 'false'
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.version.outputs.RELEASE_TAG }}
+          name: ${{ steps.version.outputs.RELEASE_NAME }}
+          draft: false
+          prerelease: ${{ steps.version.outputs.PRERELEASE == 'true' }}
+          body: ${{ steps.notes.outputs.RELEASE_BODY }}
+          files: |
+            dist/**/*.tgz
+            dist/**/SHA256SUMS.txt
+            dist/source.zip

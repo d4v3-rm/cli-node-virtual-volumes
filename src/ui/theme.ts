@@ -1,0 +1,67 @@
+export interface ThemePalette {
+  background: string;
+  headerDashboard: string;
+  headerExplorer: string;
+  panelNavigation: string;
+  panelInspector: string;
+  panelShortcuts: string;
+  panelOverlay: string;
+  panelOverlayAlt: string;
+  borderNavigation: string;
+  borderInspector: string;
+  borderShortcuts: string;
+  borderOverlay: string;
+  borderOverlayAlt: string;
+  borderStatus: string;
+  accent: string;
+  accentSecondary: string;
+  accentWarm: string;
+  accentMuted: string;
+  text: string;
+  muted: string;
+  info: string;
+  infoBg: string;
+  success: string;
+  successBg: string;
+  warning: string;
+  warningBg: string;
+  danger: string;
+  dangerBg: string;
+  statusIdleBg: string;
+  statusBusyBg: string;
+  input: string;
+}
+
+export const THEME: ThemePalette = {
+  background: 'black',
+  headerDashboard: 'black',
+  headerExplorer: 'black',
+  panelNavigation: 'black',
+  panelInspector: 'black',
+  panelShortcuts: 'black',
+  panelOverlay: 'black',
+  panelOverlayAlt: 'black',
+  borderNavigation: '#3b82f6',
+  borderInspector: '#2dd4bf',
+  borderShortcuts: '#f59e0b',
+  borderOverlay: '#60a5fa',
+  borderOverlayAlt: '#34d399',
+  borderStatus: '#64748b',
+  accent: '#2dd4bf',
+  accentSecondary: '#60a5fa',
+  accentWarm: '#f59e0b',
+  accentMuted: '#14b8a6',
+  text: '#f3f4f6',
+  muted: '#94a3b8',
+  info: '#38bdf8',
+  infoBg: 'black',
+  success: '#34d399',
+  successBg: 'black',
+  warning: '#fbbf24',
+  warningBg: 'black',
+  danger: '#fb7185',
+  dangerBg: 'black',
+  statusIdleBg: 'black',
+  statusBusyBg: 'black',
+  input: 'black',
+};

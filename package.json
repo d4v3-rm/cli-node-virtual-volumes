@@ -1,0 +1,102 @@
+{
+  "name": "cli-node-virtual-volumes",
+  "version": "2.1.3",
+  "description": "Node.js virtual volumes with a custom filesystem and a rich terminal UI.",
+  "type": "module",
+  "packageManager": "npm@11.12.1",
+  "preferGlobal": true,
+  "bin": {
+    "virtual-volumes": "./dist/index.js"
+  },
+  "main": "./dist/lib.js",
+  "types": "./dist/lib.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/lib.d.ts",
+      "import": "./dist/lib.js"
+    },
+    "./cli": "./dist/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    ".env.example"
+  ],
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsup",
+    "start": "node dist/index.js",
+    "clean": "rimraf coverage dist",
+    "clean:package-artifacts": "node ./scripts/clean-package-artifacts.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run --coverage",
+    "test:watch": "vitest",
+    "smoke:ops": "node ./scripts/ops-smoke.mjs",
+    "smoke:package": "node ./scripts/package-smoke.mjs",
+    "check": "npm run lint && npm run typecheck && npm run test",
+    "verify": "npm run check && npm run build && npm run smoke:ops",
+    "pack:local": "npm run clean:package-artifacts && npm pack",
+    "set:version": "node ./scripts/set-version.mjs",
+    "prepack": "npm run build"
+  },
+  "keywords": [
+    "cli",
+    "custom-filesystem",
+    "data-volume",
+    "filesystem",
+    "file-manager",
+    "node",
+    "nodejs",
+    "storage",
+    "terminal-ui",
+    "tui",
+    "typescript",
+    "virtual-filesystem",
+    "virtual-volume",
+    "volume"
+  ],
+  "author": "d4v3-rm",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@emnapi/core": "^1.9.2",
+    "@emnapi/runtime": "^1.9.2",
+    "@eslint/js": "^10.0.1",
+    "@types/blessed": "^0.1.27",
+    "@types/node": "^25.6.0",
+    "@typescript-eslint/eslint-plugin": "^8.58.2",
+    "@typescript-eslint/parser": "^8.58.2",
+    "@vitest/coverage-v8": "^4.1.4",
+    "conventional-commits-parser": "^6.4.0",
+    "eslint": "^10.2.0",
+    "eslint-config-prettier": "^10.1.8",
+    "fast-glob": "^3.3.3",
+    "fs-extra": "^11.3.4",
+    "globals": "^17.5.0",
+    "prettier": "^3.8.3",
+    "rimraf": "^6.1.3",
+    "semver": "^7.7.4",
+    "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.4"
+  },
+  "dependencies": {
+    "blessed": "^0.1.81",
+    "chalk": "^5.6.2",
+    "commander": "^14.0.3",
+    "dotenv": "^17.4.2",
+    "nanoid": "^5.1.9",
+    "neo-blessed": "^0.2.0",
+    "pino": "^10.3.1",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^6.0.1",
+    "zod": "^4.3.6"
+  }
+}

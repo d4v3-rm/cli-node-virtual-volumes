@@ -1,0 +1,133 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
+import { afterEach, describe, expect, it } from 'vitest';
+
+import { APP_VERSION } from '../src/config/app-metadata.js';
+import {
+  buildCliArtifactHandlingProfile,
+  renderCliResult,
+  writeCliJsonArtifact,
+} from '../src/cli/output.js';
+
+const sandboxes: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    sandboxes.splice(0, sandboxes.length).map((sandboxRoot) =>
+      fs.rm(sandboxRoot, { recursive: true, force: true }),
+    ),
+  );
+});
+
+describe('cli output helpers', () => {
+  it('writes structured JSON artifacts atomically and returns an absolute path', async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-cli-output-'));
+    sandboxes.push(sandboxRoot);
+    const outputPath = path.join(sandboxRoot, 'reports', 'doctor.json');
+    const correlationId = 'corr_test-artifact';
+    const payload = {
+      healthy: true,
+      checkedVolumes: 1,
+    };
+
+    const artifactPath = await writeCliJsonArtifact('doctor', payload, outputPath, {
+      correlationId,
+    });
+    const artifactContent = JSON.parse(await fs.readFile(artifactPath, 'utf8')) as {
+      cliVersion: string;
+      command: string;
+      correlationId: string;
+      generatedAt: string;
+      handling: {
+        redacted: boolean;
+        sensitivity: 'sanitized' | 'restricted';
+        sharingRecommendation: 'external-shareable' | 'internal-only';
+        recommendedRetentionDays: number;
+        notes: string[];
+      };
+      payload: {
+        healthy: boolean;
+        checkedVolumes: number;
+      };
+    };
+
+    expect(artifactPath).toBe(path.resolve(outputPath));
+    expect(artifactContent.command).toBe('doctor');
+    expect(artifactContent.cliVersion).toBe(APP_VERSION);
+    expect(artifactContent.correlationId).toBe(correlationId);
+    expect(Date.parse(artifactContent.generatedAt)).not.toBeNaN();
+    expect(artifactContent.handling).toEqual(buildCliArtifactHandlingProfile(false));
+    expect(artifactContent.payload).toEqual(payload);
+  });
+
+  it('marks redacted artifacts as sanitized and externally shareable', async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'virtual-cli-output-'));
+    sandboxes.push(sandboxRoot);
+    const outputPath = path.join(sandboxRoot, 'reports', 'doctor-redacted.json');
+
+    const artifactPath = await writeCliJsonArtifact(
+      'doctor',
+      { healthy: true },
+      outputPath,
+      {
+        redactSensitiveDetails: true,
+      },
+    );
+    const artifactContent = JSON.parse(await fs.readFile(artifactPath, 'utf8')) as {
+      handling: {
+        redacted: boolean;
+        sensitivity: 'sanitized' | 'restricted';
+        sharingRecommendation: 'external-shareable' | 'internal-only';
+        recommendedRetentionDays: number;
+      };
+    };
+
+    expect(artifactContent.handling).toMatchObject({
+      redacted: true,
+      sensitivity: 'sanitized',
+      sharingRecommendation: 'external-shareable',
+      recommendedRetentionDays: 30,
+    });
+  });
+
+  it('appends the correlation id and artifact path to human-readable output', () => {
+    const payload = {
+      healthy: true,
+    };
+    const rendered = renderCliResult(
+      payload,
+      () => 'Storage doctor: HEALTHY',
+      {
+        artifactPath: 'C:\\reports\\doctor.json',
+        correlationId: 'corr_test-render',
+      },
+    );
+
+    expect(rendered).toBe(
+      [
+        'Storage doctor: HEALTHY',
+        'Correlation ID: corr_test-render',
+        'Artifact path: C:\\reports\\doctor.json',
+      ].join('\n'),
+    );
+  });
+
+  it('keeps JSON stdout pure when an artifact path is also requested', () => {
+    const payload = {
+      healthy: true,
+      checkedVolumes: 1,
+    };
+    const rendered = renderCliResult(
+      payload,
+      () => 'ignored',
+      {
+        artifactPath: 'C:\\reports\\doctor.json',
+        json: true,
+      },
+    );
+
+    expect(rendered).toBe(JSON.stringify(payload, null, 2));
+  });
+});
