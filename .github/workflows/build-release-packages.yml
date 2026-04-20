@@ -77,7 +77,7 @@ jobs:
           node-version: 20
 
       - name: Download package artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: virtual-volumes-package
           path: dist
